@@ -118,7 +118,10 @@ class EventCfg:
 
 @configclass
 class RewardsCfg:
-    """Dense, staged reward - reach, lift, track goal, small action penalties, success bonus."""
+    """Dense, staged reward: reach, lift, coarse + fine-grained goal tracking, and small
+    action penalties. There is no separate sparse success-bonus term - success is signaled
+    via the `cube_reached_goal` termination combined with the fine-grained goal-tracking
+    reward, which increasingly rewards precise placement as the cube nears the target."""
 
     reaching_cube = RewTerm(
         func=mdp.object_ee_distance,

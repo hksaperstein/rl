@@ -48,8 +48,10 @@ VIDEO_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file_
 def main() -> None:
     env_cfg = Ar4PickPlaceEnvCfg()
     env_cfg.scene.num_envs = 1
+    env_cfg.sim.device = args_cli.device
 
     agent_cfg = Ar4PickPlacePPORunnerCfg()
+    agent_cfg.device = args_cli.device
 
     env = ManagerBasedRLEnv(cfg=env_cfg, render_mode="rgb_array")
     # step_trigger, not episode_trigger: RslRlVecEnvWrapper resets the env exactly
@@ -65,7 +67,7 @@ def main() -> None:
         name_prefix="ar4_pickplace",
         disable_logger=True,
     )
-    env = RslRlVecEnvWrapper(env, clip_actions=None)
+    env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
 
     runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
     runner.load(args_cli.checkpoint)

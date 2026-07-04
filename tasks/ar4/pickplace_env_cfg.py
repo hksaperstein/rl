@@ -27,9 +27,10 @@ from isaaclab_tasks.manager_based.manipulation.lift import mdp
 
 from .env_cfg import ActionsCfg, Ar4SceneCfg
 
-# Empirically-tuned offset (m) from the ee_link frame to the gripper's jaw
-# pinch point along ee_link's local +Z axis - same value used for the
-# scripted IK reach in grasp_demo.py.
+# Empirically-tuned offset (m) from the link_6 frame to the gripper's jaw
+# pinch point along link_6's local +Z axis (ee_link sits at this same frame
+# with an identity transform, but isn't itself a rigid body, so link_6 is
+# used directly) - same value used for the scripted IK reach in grasp_demo.py.
 _EE_OFFSET = (0.0, 0.0, 0.09)
 
 

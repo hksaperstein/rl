@@ -52,6 +52,11 @@ def main() -> None:
     agent_cfg = Ar4PickPlacePPORunnerCfg()
 
     env = ManagerBasedRLEnv(cfg=env_cfg, render_mode="rgb_array")
+    # step_trigger, not episode_trigger: RslRlVecEnvWrapper resets the env exactly
+    # once at construction and never again, so episode_trigger's episode_id never
+    # advances and silently merges every episode into one video. 250 = one episode's
+    # worth of steps (episode_length_s=5.0 / step_dt=decimation*sim.dt=2*0.01=0.02s),
+    # from Ar4PickPlaceEnvCfg - update this if that config changes.
     env = gym.wrappers.RecordVideo(
         env,
         video_folder=VIDEO_DIR,

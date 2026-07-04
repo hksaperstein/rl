@@ -74,7 +74,7 @@ class Ar4PickPlaceSceneCfg(Ar4SceneCfg):
         debug_vis=False,
         target_frames=[
             FrameTransformerCfg.FrameCfg(
-                prim_path="{ENV_REGEX_NS}/Robot/root_joint/ee_link",
+                prim_path="{ENV_REGEX_NS}/Robot/root_joint/link_6",
                 name="end_effector",
                 offset=OffsetCfg(pos=_EE_OFFSET),
             ),
@@ -95,7 +95,7 @@ class CommandsCfg:
 
     object_pose = mdp.UniformPoseCommandCfg(
         asset_name="robot",
-        body_name="ee_link",
+        body_name="link_6",
         resampling_time_range=(5.0, 5.0),
         debug_vis=False,
         ranges=mdp.UniformPoseCommandCfg.Ranges(
@@ -261,11 +261,25 @@ cd /home/saps/projects/6DoF && /home/saps/IsaacLab/isaaclab.sh -p /tmp/smoke_pic
 
 Expected: no `Traceback`, and the output includes `SMOKE_TEST_OK` along with `obs shape: torch.Size([4, N])` (some `N` — the exact policy observation width; don't hardcode an expected value, just confirm it's a real 2D tensor with batch size 4) and `reward shape: torch.Size([4])`.
 
-If it fails with an error resolving `{ENV_REGEX_NS}/Robot/root_joint/base_link` or `.../ee_link` (e.g. "did not find a match" from the `FrameTransformer`), open the built asset and confirm the actual prim names:
+The asset is a binary `.usdc` file, so `grep` cannot check prim paths in it — if the `FrameTransformer` fails to resolve a prim path (e.g. "No matching prims were found"), inspect the actual stage directly instead of guessing:
 
 ```bash
-grep -c "root_joint/base_link\|root_joint/ee_link" rl/assets/ar4_mk5/ar4_mk5.usd 2>/dev/null || echo "binary file, use pxr to inspect instead"
+cat > /tmp/inspect_ee.py << 'EOF'
+import os
+from isaacsim import SimulationApp
+simulation_app = SimulationApp({"headless": True})
+from pxr import Usd
+stage = Usd.Stage.Open('/home/saps/projects/6DoF/rl/assets/ar4_mk5/ar4_mk5.usd')
+for prim in stage.Traverse():
+    print("PRIM:", prim.GetPath(), prim.GetTypeName(), flush=True)
+print("DONE_INSPECT", flush=True)
+os._exit(0)
+EOF
+timeout 120 /home/saps/IsaacLab/isaaclab.sh -p /tmp/inspect_ee.py 2>&1 | grep -E "PRIM:|DONE_INSPECT"
+rm /tmp/inspect_ee.py
 ```
+
+Update `pickplace_env_cfg.py`'s prim paths to whatever the traversal actually shows. As of this plan's final revision (verified by direct USD/PhysX inspection during Task 1's implementation): `ee_link` is nested at `{ENV_REGEX_NS}/Robot/root_joint/link_6/ee_link`, but it is a non-rigid-body Xform, not a PhysX rigid body — `FrameTransformer` requires a rigid body, so the target frame must point at `{ENV_REGEX_NS}/Robot/root_joint/link_6` instead (`ee_link`'s local transform relative to `link_6` is identity, so no offset change was needed). The plan's code above already reflects this.
 
 (this is the exact same empirically-confirmed prim path used by `grasp_demo.py`'s logs earlier in the project — see `project_ar4_scene_config_lessons` memory — so a mismatch here would indicate the asset was rebuilt with different settings, not a typo in this file).
 

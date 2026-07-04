@@ -2,9 +2,10 @@
 
 .. code-block:: bash
 
-    ./isaaclab.sh -p rl/scripts/train.py --num_envs 512
+    cd /home/saps/projects/6DoF
+    /home/saps/IsaacLab/isaaclab.sh -p rl/scripts/train.py --num_envs 4096
     # smoke test (fast, verifies the loop runs end-to-end and writes a checkpoint):
-    ./isaaclab.sh -p rl/scripts/train.py --num_envs 16 --max_iterations 2 --headless
+    /home/saps/IsaacLab/isaaclab.sh -p rl/scripts/train.py --num_envs 16 --max_iterations 2 --headless
 """
 
 import argparse
@@ -12,7 +13,7 @@ import argparse
 from isaaclab.app import AppLauncher
 
 parser = argparse.ArgumentParser(description="Train the AR4 pick-and-place policy with PPO (rsl_rl).")
-parser.add_argument("--num_envs", type=int, default=512, help="Number of parallel environments.")
+parser.add_argument("--num_envs", type=int, default=4096, help="Number of parallel environments.")
 parser.add_argument("--max_iterations", type=int, default=None, help="Override the agent config's max_iterations.")
 parser.add_argument("--video", action="store_true", default=False, help="Record videos periodically during training.")
 parser.add_argument("--video_length", type=int, default=200, help="Length of each recorded video (steps).")

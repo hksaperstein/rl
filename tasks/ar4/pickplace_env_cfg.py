@@ -176,7 +176,7 @@ class TerminationsCfg:
 class Ar4PickPlaceEnvCfg(ManagerBasedRLEnvCfg):
     """AR4 pick-and-place task: pick up the cube, place it near the sphere/wedge."""
 
-    scene: Ar4PickPlaceSceneCfg = Ar4PickPlaceSceneCfg(num_envs=512, env_spacing=2.5)
+    scene: Ar4PickPlaceSceneCfg = Ar4PickPlaceSceneCfg(num_envs=4096, env_spacing=2.5)
     observations: ObservationsCfg = ObservationsCfg()
     actions: ActionsCfg = ActionsCfg()
     commands: CommandsCfg = CommandsCfg()

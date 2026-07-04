@@ -4,7 +4,8 @@ recording each one as an mp4 to rl/logs/videos/.
 
 .. code-block:: bash
 
-    ./isaaclab.sh -p rl/scripts/eval_loop.py --checkpoint rl/logs/train/<run>/model_1500.pt --episodes 10
+    cd /home/saps/projects/6DoF
+    /home/saps/IsaacLab/isaaclab.sh -p rl/scripts/eval_loop.py --checkpoint rl/logs/train/<run>/model_1500.pt --episodes 10
 """
 
 import argparse

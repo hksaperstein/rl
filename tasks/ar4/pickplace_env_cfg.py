@@ -19,7 +19,7 @@ from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
-from isaaclab.sensors import FrameTransformerCfg
+from isaaclab.sensors import CameraCfg, FrameTransformerCfg
 from isaaclab.sensors.frame_transformer.frame_transformer_cfg import OffsetCfg
 from isaaclab.utils.configclass import configclass
 
@@ -192,3 +192,53 @@ class Ar4PickPlaceEnvCfg(ManagerBasedRLEnvCfg):
         self.sim.physics_material = sim_utils.RigidBodyMaterialCfg(static_friction=1.0, dynamic_friction=1.0)
         self.viewer.eye = (1.5, 1.5, 1.2)
         self.viewer.lookat = (0.0, 0.0, 0.4)
+
+
+# World-frame constants shared by perception-consuming entry points
+# (eval_loop.py --perception, interactive_demo.py, perception_calibration.py).
+# Ground plane is world Z=0 (Ar4SceneCfg's GroundPlaneCfg has no pose override).
+GROUND_Z = 0.0
+
+# A generous box around the objects' known spawn region (x:[-0.2,0.2], y:[0.28,0.34]
+# in objects_cfg.py) - wide enough for the interactive demo to tolerate the cube
+# being dragged well outside its training-time randomization range, while still
+# rejecting positions the policy was never trained anywhere near.
+WORKSPACE_BOUNDS = {"x": (-0.30, 0.30), "y": (0.10, 0.45), "z": (0.0, 0.05)}
+
+# Mounted above the workspace center (x=0, y=0.31 - the midpoint of the object
+# layout), 0.55m above the ground plane, looking straight down. Under CameraCfg's
+# "world" offset convention (forward +X, up +Z), a +90deg rotation about Y maps
+# local forward (+X) to world -Z (straight down): quat (cos45, 0, sin45, 0).
+# Verified empirically by Task 7 Step 2's smoke test, not just derived on paper.
+_PERCEPTION_CAMERA_POS = (0.0, 0.31, 0.55)
+_PERCEPTION_CAMERA_QUAT_WORLD = (0.70710678, 0.0, 0.70710678, 0.0)
+
+
+@configclass
+class Ar4PickPlacePerceptionSceneCfg(Ar4PickPlaceSceneCfg):
+    """Pick-and-place scene plus a static top-down RGB-D perception camera.
+
+    Only used by eval/demo entry points - never by train.py, since camera
+    rendering isn't free even when unused and training stays on privileged
+    simulation state (see docs/superpowers/specs/2026-07-04-ar4-perception-integration-design.md).
+    """
+
+    perception_camera: CameraCfg = CameraCfg(
+        prim_path="{ENV_REGEX_NS}/PerceptionCamera",
+        update_period=0.0,
+        height=480,
+        width=640,
+        data_types=["rgb", "distance_to_image_plane"],
+        spawn=sim_utils.PinholeCameraCfg(
+            focal_length=24.0, focus_distance=400.0, horizontal_aperture=40.0, clipping_range=(0.2, 1.0)
+        ),
+        offset=CameraCfg.OffsetCfg(pos=_PERCEPTION_CAMERA_POS, rot=_PERCEPTION_CAMERA_QUAT_WORLD, convention="world"),
+    )
+
+
+@configclass
+class Ar4PickPlacePerceptionEnvCfg(Ar4PickPlaceEnvCfg):
+    """Ar4PickPlaceEnvCfg with the perception camera enabled, num_envs=1
+    (eval/demo run one environment at a time in the GUI)."""
+
+    scene: Ar4PickPlacePerceptionSceneCfg = Ar4PickPlacePerceptionSceneCfg(num_envs=1, env_spacing=2.5)

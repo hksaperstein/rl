@@ -12,7 +12,7 @@ import numpy as np
 from scipy.spatial import ConvexHull, QhullError
 
 # Thresholds tuned and verified against this project's actual object sizes
-# (rl/tasks/ar4/objects_cfg.py): cube 18mm, rectangular prism 16x16x30mm,
+# (tasks/ar4/objects_cfg.py): cube 18mm, rectangular prism 16x16x30mm,
 # sphere 9mm radius. See the design doc's "Approaches considered" section -
 # revisit these if real camera noise proves them too tight/loose.
 HEIGHT_THRESHOLD = 0.024  # m, midpoint between the cube (0.018m) and prism (0.030m) heights

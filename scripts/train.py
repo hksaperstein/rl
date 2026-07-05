@@ -2,10 +2,10 @@
 
 .. code-block:: bash
 
-    cd /home/saps/projects/6DoF
-    /home/saps/IsaacLab/isaaclab.sh -p rl/scripts/train.py --num_envs 4096
+    cd ~/projects/rl
+    /home/saps/IsaacLab/isaaclab.sh -p scripts/train.py --num_envs 4096
     # smoke test (fast, verifies the loop runs end-to-end and writes a checkpoint):
-    /home/saps/IsaacLab/isaaclab.sh -p rl/scripts/train.py --num_envs 16 --max_iterations 2 --headless
+    /home/saps/IsaacLab/isaaclab.sh -p scripts/train.py --num_envs 16 --max_iterations 2 --headless
 """
 
 import argparse

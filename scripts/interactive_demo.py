@@ -1,4 +1,4 @@
-# rl/scripts/interactive_demo.py
+# scripts/interactive_demo.py
 """Interactive AR4 pick-and-place demo: drag the cube anywhere in the Isaac Sim
 GUI viewport (native drag gizmo), and once it settles the trained policy picks
 it up and places it in the fixed target region on the other side - using the
@@ -17,8 +17,8 @@ tolerance) - i.e. real evidence of a fresh human drag.
 
 .. code-block:: bash
 
-    cd /home/saps/projects/6DoF
-    /home/saps/IsaacLab/isaaclab.sh -p rl/scripts/interactive_demo.py --checkpoint rl/logs/train/<run>/model_1500.pt
+    cd ~/projects/rl
+    /home/saps/IsaacLab/isaaclab.sh -p scripts/interactive_demo.py --checkpoint logs/train/<run>/model_1500.pt
 """
 
 import argparse

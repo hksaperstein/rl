@@ -30,7 +30,7 @@ def _check_wedge_usd_exists() -> str:
     if not os.path.isfile(_WEDGE_USD_PATH):
         sys.exit(
             f"Wedge USD asset not found (missing {_WEDGE_USD_PATH}).\n"
-            "Run rl/scripts/build_asset.py first."
+            "Run scripts/build_asset.py first."
         )
     return _WEDGE_USD_PATH
 

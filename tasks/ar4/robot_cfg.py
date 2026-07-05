@@ -1,6 +1,6 @@
 """ArticulationCfg for the AR4 mk5 arm, including the parallel-jaw gripper.
 
-Points at the USD asset produced by rl/scripts/build_asset.py. Import this
+Points at the USD asset produced by scripts/build_asset.py. Import this
 module only after an Isaac Sim/Isaac Lab AppLauncher has been created.
 """
 
@@ -24,12 +24,12 @@ def _resolve_usd_path() -> str:
     if not os.path.isfile(_USD_MANIFEST):
         sys.exit(
             f"AR4 USD asset not found (missing {_USD_MANIFEST}).\n"
-            "Run rl/scripts/build_asset.py first."
+            "Run scripts/build_asset.py first."
         )
     with open(_USD_MANIFEST) as f:
         usd_path = f.read().strip()
     if not os.path.isfile(usd_path):
-        sys.exit(f"AR4 USD asset manifest points at a missing file: {usd_path}\nRun rl/scripts/build_asset.py again.")
+        sys.exit(f"AR4 USD asset manifest points at a missing file: {usd_path}\nRun scripts/build_asset.py again.")
     return usd_path
 
 

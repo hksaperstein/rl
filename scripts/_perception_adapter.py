@@ -1,4 +1,4 @@
-# rl/scripts/_perception_adapter.py
+# scripts/_perception_adapter.py
 """Shared helper for eval_loop.py --perception and interactive_demo.py: builds
 the trained policy's cube-position observation slot from the real perception
 pipeline instead of privileged simulation state.

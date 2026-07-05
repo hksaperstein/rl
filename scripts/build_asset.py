@@ -8,9 +8,9 @@ AR4_DESCRIPTION_PATH environment variable to point at the annin_ar4_description
 package (the directory containing urdf/ and meshes/), e.g.:
 
     export AR4_DESCRIPTION_PATH=/home/saps/projects/annin_ws/src/ar4_ros_driver/annin_ar4_description
-    ./isaaclab.sh -p rl/scripts/build_asset.py
+    ./isaaclab.sh -p scripts/build_asset.py
 
-Output is written to rl/assets/ar4_mk5/ar4_mk5.usd and rl/assets/shapes/wedge.usd
+Output is written to assets/ar4_mk5/ar4_mk5.usd and assets/shapes/wedge.usd
 (gitignored).
 """
 

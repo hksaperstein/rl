@@ -3,7 +3,7 @@ gripper on it, lift it, hold, then release.
 
 The joint waypoints below are hardcoded (not solved live) - computed offline
 via the AR4Kinematics IK solver (src/robot/src/ar4_mk5_kinematics.py) against
-the cube's known fixed position from rl/tasks/ar4/objects_cfg.py
+the cube's known fixed position from tasks/ar4/objects_cfg.py
 (0.20, 0.28, 0.009), targeting a straight-down gripper approach with an
 estimated ~0.09m offset from the ee_link frame to the jaw pinch point. That
 offset is a rough estimate (the AR4 gripper's exact TCP length wasn't
@@ -20,7 +20,7 @@ Requires the USD assets to already exist (run build_asset.py first).
 
 .. code-block:: bash
 
-    ./isaaclab.sh -p rl/scripts/grasp_demo.py
+    ./isaaclab.sh -p scripts/grasp_demo.py
 """
 
 import argparse

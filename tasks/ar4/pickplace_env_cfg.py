@@ -1,4 +1,4 @@
-# rl/tasks/ar4/pickplace_env_cfg.py
+# tasks/ar4/pickplace_env_cfg.py
 """Pick-and-place RL task for the AR4 mk5 arm: pick up the cube and place it
 near the sphere/wedge on the other side of the workspace.
 

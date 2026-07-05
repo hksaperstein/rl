@@ -1,4 +1,4 @@
-# rl/scripts/perception_calibration.py
+# scripts/perception_calibration.py
 """Sanity-check the perception pipeline before trusting it in eval/demo scripts:
 slides the cube across the perception camera's field of view for a few seconds
 and writes an mp4 with the detected mask/bbox/shape-label burned into each frame.
@@ -11,8 +11,8 @@ provides a well-tested one) - only the cube moves.
 
 .. code-block:: bash
 
-    cd /home/saps/projects/6DoF
-    /home/saps/IsaacLab/isaaclab.sh -p rl/scripts/perception_calibration.py --headless
+    cd ~/projects/rl
+    /home/saps/IsaacLab/isaaclab.sh -p scripts/perception_calibration.py --headless
 """
 
 import argparse

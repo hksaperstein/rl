@@ -1,18 +1,18 @@
-# rl/ - AR4 Pick-and-Place RL
+# rl - AR4 Pick-and-Place RL
 
 Everything here runs through Isaac Lab's launcher, not plain `python`. `isaaclab.sh`
 lives in the separate IsaacLab install, not this repo - always run from this
 repo's root and reference it by absolute path:
 
 ```bash
-cd /home/saps/projects/6DoF
-/home/saps/IsaacLab/isaaclab.sh -p rl/scripts/<script>.py [args]
+cd ~/projects/rl
+/home/saps/IsaacLab/isaaclab.sh -p scripts/<script>.py [args]
 ```
 
 ## 1. Build the robot/scene assets (one-time)
 
 ```bash
-/home/saps/IsaacLab/isaaclab.sh -p rl/scripts/build_asset.py
+/home/saps/IsaacLab/isaaclab.sh -p scripts/build_asset.py
 ```
 
 ## 2. Sanity-check perception before trusting it anywhere else
@@ -21,10 +21,10 @@ Slides the cube across the camera's view for a few seconds and writes a labeled
 mp4 - watch it before running anything else that depends on perception:
 
 ```bash
-/home/saps/IsaacLab/isaaclab.sh -p rl/scripts/perception_calibration.py --headless
+/home/saps/IsaacLab/isaaclab.sh -p scripts/perception_calibration.py --headless
 ```
 
-Check `rl/logs/videos/perception_calibration.mp4`: the sliding cube should be
+Check `logs/videos/perception_calibration.mp4`: the sliding cube should be
 labeled `"cube"` throughout, and the three static objects (sphere, rectangular
 prism, wedge) should be labeled correctly and consistently, without flickering
 between shapes frame to frame.
@@ -35,24 +35,24 @@ The perception math itself (ground-plane removal, shape classification,
 tracking) has its own fast unit test suite, independent of Isaac Sim:
 
 ```bash
-python3 -m pytest rl/perception/tests/ -v
+python3 -m pytest perception/tests/ -v
 ```
 
 ## 3. Train
 
 ```bash
 # Quick smoke test first (~seconds, confirms the loop runs and writes a checkpoint):
-/home/saps/IsaacLab/isaaclab.sh -p rl/scripts/train.py --num_envs 16 --max_iterations 2 --headless
+/home/saps/IsaacLab/isaaclab.sh -p scripts/train.py --num_envs 16 --max_iterations 2 --headless
 
 # Full training run:
-/home/saps/IsaacLab/isaaclab.sh -p rl/scripts/train.py --num_envs 4096 --headless
+/home/saps/IsaacLab/isaaclab.sh -p scripts/train.py --num_envs 4096 --headless
 ```
 
-Checkpoints and TensorBoard logs are written to `rl/logs/train/<timestamp>/`.
+Checkpoints and TensorBoard logs are written to `logs/train/<timestamp>/`.
 Watch training with:
 
 ```bash
-tensorboard --logdir rl/logs/train
+tensorboard --logdir logs/train
 ```
 
 What to look at:
@@ -79,13 +79,13 @@ running to a predetermined number of iterations.
 
 ```bash
 # Privileged simulation state (fast, matches how training worked):
-/home/saps/IsaacLab/isaaclab.sh -p rl/scripts/eval_loop.py --checkpoint rl/logs/train/<run>/model_<iter>.pt --episodes 10
+/home/saps/IsaacLab/isaaclab.sh -p scripts/eval_loop.py --checkpoint logs/train/<run>/model_<iter>.pt --episodes 10
 
 # Real camera-based perception instead:
-/home/saps/IsaacLab/isaaclab.sh -p rl/scripts/eval_loop.py --checkpoint rl/logs/train/<run>/model_<iter>.pt --episodes 10 --perception
+/home/saps/IsaacLab/isaaclab.sh -p scripts/eval_loop.py --checkpoint logs/train/<run>/model_<iter>.pt --episodes 10 --perception
 ```
 
-Videos are written to `rl/logs/videos/` (`ar4_pickplace-*.mp4` for the default
+Videos are written to `logs/videos/` (`ar4_pickplace-*.mp4` for the default
 path, `ar4_pickplace_perception.mp4` for `--perception`, with the detection
 overlay burned in for the latter). A healthy result: the cube is reliably
 picked up and placed near the target region in most episodes.
@@ -93,7 +93,7 @@ picked up and placed near the target region in most episodes.
 ## 5. Interactive demo
 
 ```bash
-/home/saps/IsaacLab/isaaclab.sh -p rl/scripts/interactive_demo.py --checkpoint rl/logs/train/<run>/model_<iter>.pt
+/home/saps/IsaacLab/isaaclab.sh -p scripts/interactive_demo.py --checkpoint logs/train/<run>/model_<iter>.pt
 ```
 
 With the GUI open: drag the cube anywhere in the workspace using the
@@ -105,6 +105,6 @@ view of the cube mid-grasp (the tracker holds its last-known position through
 that). Drag the cube outside the workspace or camera's view and the arm stays
 idle rather than reacting to it.
 
-The session records to `rl/logs/videos/ar4_interactive_demo.mp4` with the
+The session records to `logs/videos/ar4_interactive_demo.mp4` with the
 detection overlay burned in, and keeps running (watching for the next drag)
 until you close the window.

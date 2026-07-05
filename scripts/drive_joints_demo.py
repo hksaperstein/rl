@@ -5,7 +5,7 @@ Requires the USD asset to already exist (run build_asset.py first).
 
 .. code-block:: bash
 
-    ./isaaclab.sh -p rl/scripts/drive_joints_demo.py
+    ./isaaclab.sh -p scripts/drive_joints_demo.py
 """
 
 import argparse

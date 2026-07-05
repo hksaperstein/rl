@@ -1,11 +1,11 @@
-# rl/scripts/eval_loop.py
+# scripts/eval_loop.py
 """Run a trained AR4 pick-and-place PPO policy for a fixed number of episodes,
-recording each one as an mp4 to rl/logs/videos/.
+recording each one as an mp4 to logs/videos/.
 
 .. code-block:: bash
 
-    cd /home/saps/projects/6DoF
-    /home/saps/IsaacLab/isaaclab.sh -p rl/scripts/eval_loop.py --checkpoint rl/logs/train/<run>/model_1500.pt --episodes 10
+    cd ~/projects/rl
+    /home/saps/IsaacLab/isaaclab.sh -p scripts/eval_loop.py --checkpoint logs/train/<run>/model_1500.pt --episodes 10
 """
 
 import argparse

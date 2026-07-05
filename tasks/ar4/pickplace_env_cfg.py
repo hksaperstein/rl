@@ -135,7 +135,7 @@ class RewardsCfg:
     )
 
     lifting_sphere = RewTerm(
-        func=mdp.object_is_lifted, params={"minimal_height": 0.03, "object_cfg": SceneEntityCfg("sphere")}, weight=15.0
+        func=mdp.object_is_lifted, params={"minimal_height": 0.03, "object_cfg": SceneEntityCfg("sphere")}, weight=25.0
     )
 
     sphere_goal_tracking = RewTerm(

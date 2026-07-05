@@ -1,11 +1,12 @@
 # tasks/ar4/pickplace_env_cfg.py
-"""Pick-and-place RL task for the AR4 mk5 arm: pick up the cube and place it
-near the sphere/wedge on the other side of the workspace.
+"""Pick-and-place RL task for the AR4 mk5 arm: pick up the sphere and place it
+near the cube/rect_prism on the other side of the workspace.
 
 Reward, observation, and termination logic is reused directly from Isaac
 Lab's built-in Franka lift-task mdp module (generic, parametrized by
 SceneEntityCfg - not Franka-specific despite the import path) rather than
-reimplemented here. See docs/superpowers/specs/2026-07-04-ar4-pickplace-rl-design.md.
+reimplemented here. See docs/superpowers/specs/2026-07-04-ar4-pickplace-rl-design.md
+and docs/superpowers/specs/2026-07-05-ar4-sphere-pickplace-design.md.
 
 Import this module only after an Isaac Sim/Isaac Lab AppLauncher has been
 created.
@@ -53,13 +54,17 @@ class Ar4PickPlaceSceneCfg(Ar4SceneCfg):
 
 @configclass
 class CommandsCfg:
-    """The cube's randomized target placement, in the robot's root frame.
+    """The sphere's randomized target placement, in the robot's root frame.
 
     The robot base is rotated 180 deg about world Z (see robot_cfg.py), so
-    a world-frame target near the sphere/wedge row (world x=-0.20,
-    y in [0.28, 0.34]) becomes (x=+0.20, y in [-0.34, -0.28]) in the
-    robot's own root frame (negate x and y - see grasp_demo.py's docstring
-    for the same transform).
+    a world-frame target near the cube/rect_prism row (world x=+0.20,
+    y in [0.28, 0.34]) becomes (x=-0.22, x=-0.18, y in [-0.34, -0.28]) in
+    the robot's own root frame (negate x and y - see grasp_demo.py's
+    docstring for the same transform). This mirrors the original cube
+    task's target region (which used the sphere/wedge row) onto the
+    opposite side: the sphere itself now starts on the sphere/wedge side,
+    so reusing that row as the target would only require a near-zero
+    displacement to "succeed" rather than a real pick-and-carry.
     """
 
     object_pose = mdp.UniformPoseCommandCfg(
@@ -68,7 +73,7 @@ class CommandsCfg:
         resampling_time_range=(5.0, 5.0),
         debug_vis=False,
         ranges=mdp.UniformPoseCommandCfg.Ranges(
-            pos_x=(0.18, 0.22),
+            pos_x=(-0.22, -0.18),
             pos_y=(-0.34, -0.28),
             pos_z=(0.0, 0.02),
             roll=(0.0, 0.0),
@@ -86,8 +91,8 @@ class ObservationsCfg:
     class PolicyCfg(ObsGroup):
         joint_pos = ObsTerm(func=mdp.joint_pos_rel)
         joint_vel = ObsTerm(func=mdp.joint_vel_rel)
-        cube_position = ObsTerm(
-            func=mdp.object_position_in_robot_root_frame, params={"object_cfg": SceneEntityCfg("cube")}
+        sphere_position = ObsTerm(
+            func=mdp.object_position_in_robot_root_frame, params={"object_cfg": SceneEntityCfg("sphere")}
         )
         target_object_position = ObsTerm(func=mdp.generated_commands, params={"command_name": "object_pose"})
         actions = ObsTerm(func=mdp.last_action)
@@ -101,17 +106,17 @@ class ObservationsCfg:
 
 @configclass
 class EventCfg:
-    """Reset events: put the whole scene back to default, then jitter the cube's start pose."""
+    """Reset events: put the whole scene back to default, then jitter the sphere's start pose."""
 
     reset_all = EventTerm(func=mdp.reset_scene_to_default, mode="reset")
 
-    reset_cube_position = EventTerm(
+    reset_sphere_position = EventTerm(
         func=mdp.reset_root_state_uniform,
         mode="reset",
         params={
             "pose_range": {"x": (-0.02, 0.02), "y": (-0.02, 0.02), "z": (0.0, 0.0)},
             "velocity_range": {},
-            "asset_cfg": SceneEntityCfg("cube"),
+            "asset_cfg": SceneEntityCfg("sphere"),
         },
     )
 
@@ -120,37 +125,37 @@ class EventCfg:
 class RewardsCfg:
     """Dense, staged reward: reach, lift, coarse + fine-grained goal tracking, and small
     action penalties. There is no separate sparse success-bonus term - success is signaled
-    via the `cube_reached_goal` termination combined with the fine-grained goal-tracking
-    reward, which increasingly rewards precise placement as the cube nears the target."""
+    via the `sphere_reached_goal` termination combined with the fine-grained goal-tracking
+    reward, which increasingly rewards precise placement as the sphere nears the target."""
 
-    reaching_cube = RewTerm(
+    reaching_sphere = RewTerm(
         func=mdp.object_ee_distance,
-        params={"std": 0.1, "object_cfg": SceneEntityCfg("cube"), "ee_frame_cfg": SceneEntityCfg("ee_frame")},
+        params={"std": 0.1, "object_cfg": SceneEntityCfg("sphere"), "ee_frame_cfg": SceneEntityCfg("ee_frame")},
         weight=1.0,
     )
 
-    lifting_cube = RewTerm(
-        func=mdp.object_is_lifted, params={"minimal_height": 0.03, "object_cfg": SceneEntityCfg("cube")}, weight=15.0
+    lifting_sphere = RewTerm(
+        func=mdp.object_is_lifted, params={"minimal_height": 0.03, "object_cfg": SceneEntityCfg("sphere")}, weight=15.0
     )
 
-    cube_goal_tracking = RewTerm(
+    sphere_goal_tracking = RewTerm(
         func=mdp.object_goal_distance,
         params={
             "std": 0.3,
             "minimal_height": 0.03,
             "command_name": "object_pose",
-            "object_cfg": SceneEntityCfg("cube"),
+            "object_cfg": SceneEntityCfg("sphere"),
         },
         weight=16.0,
     )
 
-    cube_goal_tracking_fine_grained = RewTerm(
+    sphere_goal_tracking_fine_grained = RewTerm(
         func=mdp.object_goal_distance,
         params={
             "std": 0.05,
             "minimal_height": 0.03,
             "command_name": "object_pose",
-            "object_cfg": SceneEntityCfg("cube"),
+            "object_cfg": SceneEntityCfg("sphere"),
         },
         weight=5.0,
     )
@@ -162,19 +167,19 @@ class RewardsCfg:
 
 @configclass
 class TerminationsCfg:
-    """Success (cube at target) ends the episode early; otherwise a fixed timeout."""
+    """Success (sphere at target) ends the episode early; otherwise a fixed timeout."""
 
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
 
-    cube_reached_goal = DoneTerm(
+    sphere_reached_goal = DoneTerm(
         func=mdp.object_reached_goal,
-        params={"command_name": "object_pose", "threshold": 0.02, "object_cfg": SceneEntityCfg("cube")},
+        params={"command_name": "object_pose", "threshold": 0.02, "object_cfg": SceneEntityCfg("sphere")},
     )
 
 
 @configclass
 class Ar4PickPlaceEnvCfg(ManagerBasedRLEnvCfg):
-    """AR4 pick-and-place task: pick up the cube, place it near the sphere/wedge."""
+    """AR4 pick-and-place task: pick up the sphere, place it near the cube/rect_prism."""
 
     scene: Ar4PickPlaceSceneCfg = Ar4PickPlaceSceneCfg(num_envs=4096, env_spacing=2.5)
     observations: ObservationsCfg = ObservationsCfg()

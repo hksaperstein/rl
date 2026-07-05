@@ -242,3 +242,24 @@ class Ar4PickPlacePerceptionEnvCfg(Ar4PickPlaceEnvCfg):
     (eval/demo run one environment at a time in the GUI)."""
 
     scene: Ar4PickPlacePerceptionSceneCfg = Ar4PickPlacePerceptionSceneCfg(num_envs=1, env_spacing=2.5)
+
+
+@configclass
+class DemoEventCfg:
+    """Only resets the robot's joints on episode end - the cube (and other
+    objects) are left exactly where they physically are, since the interactive
+    demo relies on the user placing the cube by hand rather than training-time
+    randomization."""
+
+    reset_robot_joints = EventTerm(
+        func=mdp.reset_joints_by_offset,
+        mode="reset",
+        params={"position_range": (0.0, 0.0), "velocity_range": (0.0, 0.0), "asset_cfg": SceneEntityCfg("robot")},
+    )
+
+
+@configclass
+class Ar4PickPlaceDemoEnvCfg(Ar4PickPlacePerceptionEnvCfg):
+    """Perception-enabled pick-and-place env for the interactive demo."""
+
+    events: DemoEventCfg = DemoEventCfg()

@@ -55,6 +55,7 @@ SLIDE_X_RANGE = (-0.35, 0.35)  # sweeps across the camera's field of view
 
 def main() -> None:
     env_cfg = Ar4PickPlacePerceptionEnvCfg()
+    env_cfg.episode_length_s = args_cli.duration + 5.0  # avoid the training env's 5s timeout firing mid-slide
     env = ManagerBasedRLEnv(cfg=env_cfg)
     camera = env.scene["perception_camera"]
     tracker = ObjectTracker()

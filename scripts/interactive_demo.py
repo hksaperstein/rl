@@ -8,6 +8,13 @@ eval_loop.py --perception does at inference time.
 An out-of-view or out-of-the-workspace cube position never triggers an
 attempt - the arm just keeps watching and waiting.
 
+A single "armed" flag guards each trigger: once a pick-and-place attempt
+fires, the demo disarms itself so the cube sitting still at the goal
+position right after placement can't immediately re-trigger another
+attempt. It only re-arms once the cube is observed to have changed state
+(dragged away, gone stale/out of view, or moved past the stability
+tolerance) - i.e. real evidence of a fresh human drag.
+
 .. code-block:: bash
 
     cd /home/saps/projects/6DoF
@@ -91,6 +98,10 @@ def main() -> None:
     stable_steps_needed = int(args_cli.stable_seconds / env.unwrapped.step_dt)
     last_stable_position = None
     stable_count = 0
+    # Guards against re-triggering on the cube the robot itself just placed: a trigger disarms
+    # itself, and only re-arms once the cube is observed to have changed (dragged, gone stale/
+    # out of view, or moved past the stability tolerance) since the last placement.
+    armed = True
 
     obs = env.get_observations()
     print("[INFO] Watching for the cube to be placed and settled. Drag it in the viewport.")
@@ -101,18 +112,22 @@ def main() -> None:
 
             ready_to_act = False
             if cube is not None and not cube.is_stale and _in_workspace_bounds(cube.position):
-                if (
-                    last_stable_position is not None
-                    and np.linalg.norm(cube.position - last_stable_position) <= args_cli.stable_tolerance
-                ):
+                if last_stable_position is None:
+                    # No baseline yet (e.g. right after a trigger reset the bookkeeping below) -
+                    # this alone is not evidence of a human drag, so leave `armed` untouched.
+                    stable_count = 0
+                elif np.linalg.norm(cube.position - last_stable_position) <= args_cli.stable_tolerance:
                     stable_count += 1
                 else:
+                    # The cube actually moved since we last looked - real evidence of a drag.
                     stable_count = 0
+                    armed = True
                 last_stable_position = cube.position
-                ready_to_act = stable_count >= stable_steps_needed
+                ready_to_act = armed and stable_count >= stable_steps_needed
             else:
                 stable_count = 0
                 last_stable_position = None
+                armed = True
 
             video_writer.append_data(draw_detections(rgb, tracked))
 
@@ -123,6 +138,7 @@ def main() -> None:
                 continue
 
             print("[INFO] Cube settled - picking it up.")
+            armed = False
             stable_count = 0
             last_stable_position = None
             episode_done = False

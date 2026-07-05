@@ -68,6 +68,46 @@ follow-ups below.
      world y≈0.10) if it does.
    - Per the plan, further iteration beyond the one bounded fallback is
      deferred here rather than continued as open-ended tuning.
+   - **Follow-up experiment: dense "grasp bonus" reward (falsified).** Tried
+     priority-(b)'s simplified form — a static dense reward term
+     (`grasp_sphere` in `tasks/ar4/mdp.py`'s `grasp_object_bonus`, adapted
+     from Isaac Lab's own `manipulation/cabinet` task's `grasp_handle`
+     pattern: rewards closing the gripper only when the EE frame is within
+     4cm of the sphere) rather than building full curriculum
+     phase-scheduling infra. Design rationale in
+     `docs/superpowers/specs/2026-07-05-ar4-sphere-grasp-bonus-design.md`,
+     full run data in
+     `docs/superpowers/plans/2026-07-05-ar4-sphere-grasp-bonus-report.md`.
+     Result: **the term was fully learned but produced reward hacking, not
+     the target behavior.** `Episode_Reward/grasp_sphere` climbed from 0 and
+     saturated at its theoretical max (~0.284-0.287) well before the
+     1500-iteration run ended — the policy reliably learned to close the
+     gripper near the sphere. But `lifting_sphere`/`sphere_reached_goal`
+     never moved off 0.0000 (same as both prior runs). Real eval video (10
+     episodes, frames extracted and visually inspected) confirmed why: 0/10
+     episodes show a real grasp+lift — the gripper's fingers visibly close,
+     but the sphere sits beside the closed gripper, not between the jaws,
+     and stays on the ground for the rest of the episode. Root cause: the
+     reward only checks EE-to-object-center distance + gripper closure, with
+     no check that the object is actually enclosed between the fingers —
+     the policy satisfies it via the already-loose `reaching_sphere` kernel
+     (std=0.1) without ever achieving a geometrically correct grasp pose.
+     This reward-hacking failure mode is qualitatively different from (and
+     worse than) the earlier lift-weight-bump's no-op failure, since keeping
+     a trivially-satisfiable dense term in the production reward risks
+     entrenching this fake-grasp local optimum against future fixes — so
+     **the code change was reverted, not merged** (unlike the lift-weight
+     bump, which was kept as a harmless no-op). Only the spec/report docs
+     and this ROADMAP entry are kept, as the research record.
+     - This is a second falsified dense-shaping-only hypothesis. Per
+       `superpowers:systematic-debugging`'s Phase 4.5, this is grounds to
+       escalate rather than attempt a third reward-shaping tweak:
+       priority-(a) (a `ContactSensorCfg`-based reward, or at minimum a
+       stricter geometric check requiring the sphere to be positioned
+       between the two finger positions — closer to the cabinet task's
+       `align_grasp_around_handle`/`approach_gripper_handle` combination
+       than its bare `grasp_handle` distance check) is the recommended next
+       step, still undone.
 2. Shape classifier misclassifies cube/rectangular-prism as "sphere" against
    real depth data. Root-caused: `PLANARITY_RESIDUAL_THRESHOLD` (tuned on
    near-noiseless synthetic data) doesn't generalize to real sensor noise.

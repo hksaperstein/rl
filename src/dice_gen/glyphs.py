@@ -89,6 +89,36 @@ def _weld_cutter_mesh(obj):
     bm.free()
 
 
+def _largest_component_face_count(bm):
+    """
+    Size (in faces) of the largest connected shell in a bmesh. Used to detect
+    when a boolean cut silently failed to engage the die's body at all (see
+    _boolean_diff_apply): a genuine engrave cut always adds at least a few
+    wall/floor faces to whatever it touches, so the largest connected shell's
+    face count must strictly grow after a successful cut.
+    """
+    bm.faces.ensure_lookup_table()
+    visited = set()
+    best = 0
+    for f in bm.faces:
+        if f.index in visited:
+            continue
+        count = 0
+        stack = [f]
+        while stack:
+            cur = stack.pop()
+            if cur.index in visited:
+                continue
+            visited.add(cur.index)
+            count += 1
+            for e in cur.edges:
+                for lf in e.link_faces:
+                    if lf.index not in visited:
+                        stack.append(lf)
+        best = max(best, count)
+    return best
+
+
 def _boolean_diff_apply(die_obj, cutter_obj):
     """
     Even after _weld_cutter_mesh, some glyphs still tessellate to a cutter
@@ -104,10 +134,24 @@ def _boolean_diff_apply(die_obj, cutter_obj):
     970.13) on the identical cut, but EXACT remains preferred generally (it's
     what the other 9 well-behaved cuts on this same die use without issue),
     so we only fall back to FLOAT when EXACT's result looks like a collapse.
+
+    A second, distinct failure mode was found on asset_00026 (d20,
+    arabic_numerals, size_mm=19.73093050365471): EXACT silently no-op'd on
+    every single one of its 20 numeral cuts -- the die's own body came out of
+    each modifier_apply byte-for-byte untouched, with the cutter's mesh
+    merely appended alongside it as an inert, un-subtracted floating solid.
+    Because nothing was actually subtracted, the die's volume barely changed
+    per cut, so this never tripped the volume-collapse check above; the die
+    just silently ended up completely unengraved. This is instead caught by
+    tracking the largest connected shell's face count: a real cut always
+    grows the body it touches by at least a few wall/floor faces, so if the
+    largest shell's face count fails to increase at all, EXACT has produced
+    a no-op and we fall back to FLOAT exactly as in the collapse case.
     """
     bm_before = bmesh.new()
     bm_before.from_mesh(die_obj.data)
     volume_before = bm_before.calc_volume()
+    largest_component_before = _largest_component_face_count(bm_before)
 
     mod = die_obj.modifiers.new(name="Engrave", type='BOOLEAN')
     mod.operation = 'DIFFERENCE'
@@ -119,10 +163,17 @@ def _boolean_diff_apply(die_obj, cutter_obj):
     bm_after = bmesh.new()
     bm_after.from_mesh(die_obj.data)
     volume_after = bm_after.calc_volume()
+    largest_component_after = _largest_component_face_count(bm_after)
     bm_after.free()
 
-    if volume_before > 0 and volume_after < volume_before * 0.5:
-        # EXACT produced a degenerate/collapsed result -- restore the die's
+    needs_retry = (
+        (volume_before > 0 and volume_after < volume_before * 0.5)
+        or (largest_component_after <= largest_component_before)
+    )
+
+    if needs_retry:
+        # EXACT produced a degenerate/collapsed result, or silently no-op'd
+        # without engaging the die's body at all -- restore the die's
         # pre-cut mesh from the snapshot and retry the identical cut with the
         # more tolerant FLOAT solver instead.
         bm_before.to_mesh(die_obj.data)

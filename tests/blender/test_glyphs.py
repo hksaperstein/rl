@@ -417,6 +417,94 @@ def test_engraved_greek_numerals_d10_does_not_collapse_from_exact_solver_on_alph
     bpy.data.objects.remove(obj, do_unlink=True)
 
 
+def test_engraved_arabic_numerals_d20_does_not_silently_noop_from_exact_solver():
+    """
+    Regression test for asset_00026 (d20, arabic_numerals, seed=68,
+    size_mm=19.73093050365471): this asset passed every check from the two
+    prior fixes (validate_dice_assets.py, bbox-diagonal/size_mm ratio, and
+    the afb1af5 volume-collapse safety net) yet was completely unengraved.
+    Direct reproduction showed that for every single one of the 20 numeral
+    cuts, the EXACT boolean solver produced a complete no-op on the die's
+    actual body: the pristine 20-face icosahedron survived byte-for-byte
+    untouched through the entire cut loop, with each cutter's mesh merely
+    appended into the die object's data as an inert, un-subtracted floating
+    solid instead of being differenced in. The exported asset ended up as one
+    correct-looking 62-face beveled-but-unengraved die body plus 31 leftover
+    disconnected "debris" shells (one or two per digit).
+
+    This silent no-op never tripped the afb1af5 volume-collapse check,
+    because nothing was actually being subtracted -- the total volume barely
+    changed per cut, so there was no collapse to detect. The fix adds a
+    second, complementary check based on connected-component face count: a
+    genuine engrave cut always adds at least a few wall/floor faces to
+    whatever it touches, so if the largest connected shell's face count fails
+    to grow after an EXACT apply, that's a no-op, and the cut is retried with
+    the more tolerant FLOAT solver.
+
+    This test reproduces the exact failing die/style/size and asserts the
+    die was actually engraved: the largest connected component's face count
+    must land far above the pristine 20-face count (a real 20-cut
+    arabic-numeral engrave on a d20 empirically lands around 5617 faces per
+    the senior's reproduction), not stuck near the tiny beveled-but-untouched
+    base size that the original bug produced.
+    """
+    import bpy
+    import bmesh
+    from dice_gen import geometry, numbering, glyphs
+
+    die_type = "d20"
+    size_mm = 19.73093050365471  # matches asset_00026 (seed=68) exactly
+
+    obj = geometry.build_die_base_mesh(die_type, size_mm=size_mm)
+    pairs = geometry.compute_opposite_face_pairs(obj)
+    assignment = numbering.assign_values_to_opposite_pairs(die_type, pairs)
+    assert len(assignment) == 20, "d20 should have 20 faces assigned"
+
+    bm = bmesh.new()
+    bm.from_mesh(obj.data)
+    faces_before = len(bm.faces)
+    pristine_verts = sorted(
+        (round(v.co.x, 5), round(v.co.y, 5), round(v.co.z, 5)) for v in bm.verts
+    )
+    bm.free()
+    assert faces_before == 20, "pristine d20 should have 20 faces"
+
+    glyphs.apply_engraved_glyphs(
+        obj, die_type, assignment,
+        glyph_style="arabic_numerals", glyph_fill="blank",
+        font_id="font_sans_bold", size_mm=size_mm,
+    )
+
+    bm2 = bmesh.new()
+    bm2.from_mesh(obj.data)
+    largest_component_after = glyphs._largest_component_face_count(bm2)
+    post_verts = sorted(
+        (round(v.co.x, 5), round(v.co.y, 5), round(v.co.z, 5)) for v in bm2.verts
+    )
+    bm2.free()
+
+    # The original bug left the pristine vertex set completely untouched
+    # (byte-for-byte, up to float rounding) as an isolated component, with
+    # cutter debris merely appended alongside it. A correctly engraved die
+    # must NOT still contain that exact untouched vertex set.
+    assert post_verts != pristine_verts, (
+        "die's vertex set is identical to the pristine pre-engrave mesh -- "
+        "this is exactly the silent no-op failure mode from asset_00026, "
+        "where EXACT left the body completely untouched on every cut"
+    )
+
+    assert largest_component_after > 500, (
+        f"largest connected component has only {largest_component_after} "
+        f"faces after engraving (pristine was {faces_before}); a correctly "
+        f"engraved d20 with 20 arabic-numeral cuts should land in the "
+        f"thousands (~5617 empirically), not stay near the tiny "
+        f"beveled-but-unengraved base size produced by the original "
+        f"silent-no-op bug"
+    )
+
+    bpy.data.objects.remove(obj, do_unlink=True)
+
+
 def run():
     test_glyph_label_formats()
     test_engraved_glyphs_reduce_solid_volume()
@@ -425,6 +513,7 @@ def run():
     test_engraved_glyphs_use_pristine_face_orientations_not_reindexed_mid_loop()
     test_engraved_greek_numerals_d12_does_not_collapse_from_unwelded_cutter()
     test_engraved_greek_numerals_d10_does_not_collapse_from_exact_solver_on_alpha_cut()
+    test_engraved_arabic_numerals_d20_does_not_silently_noop_from_exact_solver()
 
 
 run_and_report(run)

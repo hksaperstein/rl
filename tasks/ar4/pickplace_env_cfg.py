@@ -58,8 +58,8 @@ class CommandsCfg:
 
     The robot base is rotated 180 deg about world Z (see robot_cfg.py), so
     a world-frame target near the cube/rect_prism row (world x=+0.20,
-    y in [0.28, 0.34]) becomes (x=-0.22, x=-0.18, y in [-0.34, -0.28]) in
-    the robot's own root frame (negate x and y - see grasp_demo.py's
+    y in [0.28, 0.34]) becomes (x in [-0.22, -0.18], y in [-0.34, -0.28])
+    in the robot's own root frame (negate x and y - see grasp_demo.py's
     docstring for the same transform). This mirrors the original cube
     task's target region (which used the sphere/wedge row) onto the
     opposite side: the sphere itself now starts on the sphere/wedge side,

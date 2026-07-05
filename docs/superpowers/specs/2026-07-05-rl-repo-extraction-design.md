@@ -71,21 +71,27 @@ hksaperstein/rl (private, new)
 
 ## Post-extraction fixes (in the new `~/projects/rl` repo)
 
-- **Path-depth fix**: every script/module that derives its repo root via
-  chained `os.path.dirname(os.path.dirname(...))` calls needs exactly one
-  `dirname()` call removed, since the tree is now one level shallower.
-  Affected files: `build_asset.py`, `train.py`, `eval_loop.py`,
-  `interactive_demo.py`, `perception_calibration.py`, `drive_joints_demo.py`,
-  `grasp_demo.py`, `tasks/ar4/robot_cfg.py`, `tasks/ar4/objects_cfg.py`,
-  `perception/tests/conftest.py`.
+- **No path-depth fix needed**: every script/module that derives its repo
+  root via chained `os.path.dirname(...)` calls is self-referential — it
+  counts levels up from its own file to reach the root of the subtree it
+  was already in. Since flattening moves the entire `rl/` subtree up by
+  exactly one level as a whole (dropping the `rl/` segment, preserving
+  every file's position *relative to its neighbors*), the same dirname
+  count still lands on the new repo root. Verified directly: 2 dirnames
+  from `.../6DoF/rl/scripts/build_asset.py` gives `.../6DoF/rl`; 2 dirnames
+  from `.../rl/scripts/build_asset.py` (new layout) gives `.../rl` — the
+  new repo root either way. Same result confirmed for the 3-dirname case
+  (`tasks/ar4/robot_cfg.py`'s `_RL_ROOT`).
 - **Docstring/README path updates**: launch-command examples currently say
   `cd /home/saps/projects/6DoF` then `isaaclab.sh -p rl/scripts/...`; update
-  to `cd ~/projects/rl` then `isaaclab.sh -p scripts/...`. The
+  to `cd ~/projects/rl` then `isaaclab.sh -p scripts/...`. Affected files:
+  `README.md`, `scripts/train.py`, `scripts/eval_loop.py`,
+  `scripts/interactive_demo.py`, `scripts/perception_calibration.py`. The
   `AR4_DESCRIPTION_PATH` example (pointing at `annin_ws/src/ar4_ros_driver`)
   is unaffected and stays as-is.
 - Verify each moved script still runs (smoke test via `isaaclab.sh -p
   <script>.py`, matching how prior work in this project was verified) after
-  the path fixes, since a silent path bug here would only surface at
+  the docstring fixes, since a silent path bug would only surface at
   runtime.
 
 ## 6DoF-side cleanup

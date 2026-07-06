@@ -362,25 +362,36 @@ git commit -m "Add contact-sensor-based grasp_contact reward term for AR4 sphere
 - Produces: a printed calibration report (no code interface — this is a
   one-off verification script, not imported elsewhere).
 
-This script reuses `scripts/grasp_demo.py`'s already-solved IK joint
-waypoints (computed for the cube's fixed position `(0.20, 0.28, 0.009)`)
-by relocating the *sphere* onto that same position for this calibration run
-only — the arm's IK solution doesn't care which object sits there. This
-avoids re-deriving IK for the sphere's own default (mirrored) position just
-to get one calibration data point.
+**Revised approach (the plan's original design — reusing `grasp_demo.py`'s
+IK waypoints — was tried for real and found broken; see
+`docs/superpowers/specs/2026-07-05-ar4-sphere-contact-sensor-design.md`'s
+"Calibration method correction" section for the full diagnosis):** skip
+IK/reach entirely. Hold the arm motionless at its default zero pose, read
+the gripper's real jaw pinch-point position from the `ee_frame` sensor, and
+teleport the sphere directly there via `RigidObject.write_root_pose_to_sim`
+— a pattern already used in this repo
+(`scripts/perception_calibration.py:74`,
+`scripts/measure_planarity_residual.py:85`). This gets one genuine
+jaws-around-sphere contact event without depending on IK reach accuracy,
+which is a separate, unrelated question this experiment doesn't need to
+answer.
 
 - [ ] **Step 1: Create `scripts/calibrate_gripper_contact.py`**
 
 ```python
 """Calibrate the AR4 gripper's ContactSensor-based grasp reward
-(tasks/ar4/mdp.py's contact_grasp_bonus) against a real scripted grasp,
+(tasks/ar4/mdp.py's contact_grasp_bonus) against a real closed grasp,
 before spending a full training run on an untested force_threshold.
 
-Reuses scripts/grasp_demo.py's already-solved IK waypoints verbatim - those
-were computed for the cube's fixed position (0.20, 0.28, 0.009); this script
-relocates the sphere to that exact position (and disables its usual random
-reset jitter) so the same waypoints land on it, rather than re-deriving IK
-for the sphere's own default (mirrored) spawn position.
+Holds the arm motionless at its default (all-zero-joint) pose and
+teleports the sphere directly to the gripper's real jaw pinch-point
+position (read live from the ee_frame sensor), then closes the gripper on
+it - avoiding any dependency on scripts/grasp_demo.py's IK reach waypoints,
+which a real run showed do not reliably bring the end-effector near the
+object in this scene (see
+docs/superpowers/specs/2026-07-05-ar4-sphere-contact-sensor-design.md's
+"Calibration method correction" section). Teleport pattern precedented in
+scripts/perception_calibration.py and scripts/measure_planarity_residual.py.
 
 .. code-block:: bash
 
@@ -413,22 +424,14 @@ from tasks.ar4.mdp import contact_grasp_bonus  # noqa: E402
 from tasks.ar4.pickplace_env_cfg import Ar4PickPlaceEnvCfg  # noqa: E402
 from tasks.ar4.robot_cfg import ARM_JOINT_NAMES  # noqa: E402
 
-# Verbatim from scripts/grasp_demo.py.
-HOME_Q = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-PRE_GRASP_Q = [-2.1910457777674273, 0.786924864790331, 2.2832205904522227, 0.0, -1.499346402975541, -2.1910459031084772]
-GRASP_Q = [-2.1910458128255588, 0.4814822358369837, 2.1198409433682897, 0.0, -1.0305259069738246, -2.191045812824039]
-
 GRIPPER_OPEN = 1.0
 GRIPPER_CLOSE = -1.0
 
-# (duration_steps, arm_target, gripper_command, label)
+# (duration_steps, gripper_command, label)
 PHASES = [
-    (60, HOME_Q, GRIPPER_OPEN, "home"),
-    (180, PRE_GRASP_Q, GRIPPER_OPEN, "approach"),
-    (90, GRASP_Q, GRIPPER_OPEN, "descend"),
-    (60, GRASP_Q, GRIPPER_CLOSE, "close"),
-    (90, PRE_GRASP_Q, GRIPPER_CLOSE, "lift"),
-    (120, PRE_GRASP_Q, GRIPPER_CLOSE, "hold"),
+    (60, GRIPPER_OPEN, "open"),
+    (60, GRIPPER_CLOSE, "close"),
+    (120, GRIPPER_CLOSE, "hold"),
 ]
 
 # Must match tasks/ar4/pickplace_env_cfg.py's grasp_contact RewTerm params.
@@ -439,39 +442,38 @@ def main() -> None:
     env_cfg = Ar4PickPlaceEnvCfg()
     env_cfg.scene.num_envs = 1
     env_cfg.sim.device = args_cli.device
-    # Relocate the sphere onto the cube's exact, pre-solved grasp position.
-    env_cfg.scene.sphere.init_state.pos = (0.20, 0.28, 0.009)
-    # Disable this task's usual +-2cm reset jitter for the sphere so it lands
-    # exactly where the reused waypoints expect it.
-    env_cfg.events.reset_sphere_position.params["pose_range"] = {
-        "x": (0.0, 0.0),
-        "y": (0.0, 0.0),
-        "z": (0.0, 0.0),
-    }
-    total_steps = sum(duration for duration, _, _, _ in PHASES)
+    total_steps = sum(duration for duration, _, _ in PHASES)
     step_dt = env_cfg.decimation * env_cfg.sim.dt
-    env_cfg.episode_length_s = total_steps * step_dt + 5.0
+    env_cfg.episode_length_s = total_steps * step_dt + 2.0
 
     env = ManagerBasedRLEnv(cfg=env_cfg)
     num_joints = len(ARM_JOINT_NAMES)
     jaw1_cfg = SceneEntityCfg("gripper_jaw1_contact")
     jaw2_cfg = SceneEntityCfg("gripper_jaw2_contact")
 
-    home_forces: list[list[float]] = []
+    open_forces: list[list[float]] = []
     hold_forces: list[list[float]] = []
     hold_rewards: list[float] = []
 
     with torch.inference_mode():
         env.reset()
-        prev_q = HOME_Q
-        for duration, target_q, gripper_cmd, label in PHASES:
-            for i in range(duration):
-                alpha = (i + 1) / duration
-                q = [prev + alpha * (target - prev) for prev, target in zip(prev_q, target_q)]
+        # Read the gripper's real jaw pinch-point position at its resting
+        # (all-zero-joint) pose, straight from the same sensor frame
+        # reaching_sphere's reward already trusts in real training.
+        ee_frame = env.scene["ee_frame"]
+        pinch_point = ee_frame.data.target_pos_w[0, 0].clone()
+        print(f"[info] gripper pinch-point (world frame): {pinch_point.tolist()}")
+        sphere_pose = torch.cat(
+            [pinch_point, torch.tensor([1.0, 0.0, 0.0, 0.0], device=env.device)]
+        ).unsqueeze(0)
+
+        for duration, gripper_cmd, label in PHASES:
+            for _ in range(duration):
+                # Hold the sphere at the pinch point every step - the arm
+                # never moves, so this is the same physical target throughout.
+                env.scene["sphere"].write_root_pose_to_sim(sphere_pose)
 
                 action = torch.zeros(env.num_envs, num_joints + 1, device=env.device)
-                for j in range(num_joints):
-                    action[:, j] = q[j]
                 action[:, num_joints] = gripper_cmd
                 env.step(action)
 
@@ -485,20 +487,19 @@ def main() -> None:
                 if label == "hold":
                     hold_forces.append(force_norm)
                     hold_rewards.append(reward.item())
-                elif label == "home":
-                    home_forces.append(force_norm)
+                elif label == "open":
+                    open_forces.append(force_norm)
 
-            prev_q = target_q
             print(f"[phase done] {label}: last force_norm={force_norm}, reward={reward.item()}")
 
     print("\n=== Calibration summary ===")
-    home_min = min(min(f) for f in home_forces)
-    home_max = max(max(f) for f in home_forces)
+    open_min = min(min(f) for f in open_forces)
+    open_max = max(max(f) for f in open_forces)
     hold_min = min(min(f) for f in hold_forces)
     hold_max = max(max(f) for f in hold_forces)
     hold_success = sum(r == 1.0 for r in hold_rewards)
-    print(f"home (open, far from sphere) force_norm: min={home_min:.4f}, max={home_max:.4f} N (expect ~0.0)")
-    print(f"hold (closed, lifted)        force_norm: min={hold_min:.4f}, max={hold_max:.4f} N")
+    print(f"open (gripper open, sphere at pinch point) force_norm: min={open_min:.4f}, max={open_max:.4f} N (expect ~0.0)")
+    print(f"hold (gripper closed on sphere)             force_norm: min={hold_min:.4f}, max={hold_max:.4f} N")
     print(
         f"hold reward==1.0 fraction: {hold_success}/{len(hold_rewards)} "
         f"(force_threshold={FORCE_THRESHOLD})"
@@ -521,21 +522,32 @@ cd /home/saps/projects/rl
 
 - [ ] **Step 3: Evaluate the calibration output**
 
-Read the printed "Calibration summary". Two outcomes:
+Read the printed "Calibration summary". Three possible outcomes:
 
 - **If `hold reward==1.0 fraction` is at or near `120/120`** (every step of
-  the hold phase reads as a successful grasp) **and** `home` force_norm max
+  the hold phase reads as a successful grasp) **and** `open` force_norm max
   is ~0.0: `force_threshold=0.05` is well-calibrated. Proceed to Task 4
   unchanged.
-- **If the hold fraction is well below 120/120** (the threshold is too high
-  relative to real contact forces during a genuine grasp) **or** `home` max
-  force is non-trivially above 0: adjust `FORCE_THRESHOLD` in this script
-  and the matching `force_threshold` param in `tasks/ar4/pickplace_env_cfg.py`'s
-  `grasp_contact` `RewTerm` to a value between the observed `home` max and
-  `hold` min (e.g., their midpoint), re-run this script, and repeat until
-  the hold fraction is at or near 120/120. Note the final chosen value and
-  why in the Task 3 report — this is real-data-driven recalibration, not a
-  guess, so document the numbers that motivated it.
+- **If the hold fraction is well below 120/120 but nonzero, or `open` max
+  force is non-trivially above 0** (a real force signal exists but the
+  threshold is miscalibrated relative to it): adjust `FORCE_THRESHOLD` in
+  this script and the matching `force_threshold` param in
+  `tasks/ar4/pickplace_env_cfg.py`'s `grasp_contact` `RewTerm` to a value
+  between the observed `open` max and `hold` min (e.g., their midpoint),
+  re-run this script, and repeat until the hold fraction is at or near
+  120/120. Note the final chosen value and why in the Task 3 report — this
+  is real-data-driven recalibration, not a guess, so document the numbers
+  that motivated it.
+- **If `hold` force reads exactly `0.0` throughout (not "below threshold,"
+  genuinely zero, as happened on the first real run of the previous
+  IK-reach-based script)**: this means the sphere and gripper jaws never
+  actually made contact at all — not a threshold problem. Do not pick a
+  threshold from this data (there is nothing real to calibrate against).
+  Report BLOCKED with the full "Calibration summary" output and the
+  `pinch_point` value printed/logged, so the controller can investigate
+  the geometry directly (e.g. whether `_EE_OFFSET` or the sphere's radius
+  puts it just outside the jaws' closed span) rather than guessing at a
+  further script change.
 
 - [ ] **Step 4: Commit**
 

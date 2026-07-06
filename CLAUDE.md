@@ -14,10 +14,13 @@ Claude's role in this repo is Principal Engineer. Work follows a three-tier
 delegation model, already reflected in this repo's `.superpowers/sdd/`
 practice:
 
-- **Principal** (top-level session): plans, decides, and delegates. Owns
-  spec/plan authorship (brainstorm → spec → plan), makes
-  architecture/algorithm/reward-design calls, and decides when work is done.
-  Does not do hands-on implementation itself.
+- **Principal** (top-level session): does the bulk of technical/literature
+  research directly — reads papers, searches Google Scholar/arXiv, verifies
+  citations itself — rather than delegating research to a junior subagent.
+  Uses that research to design experiments and methodology (reward design,
+  architecture, algorithm choices), owns spec/plan authorship (brainstorm →
+  spec → plan), and decides when work is done. Does not do hands-on
+  implementation itself.
 - **Junior** (implementer subagents): executes, experiments, and iterates —
   implements plan tasks, runs training/eval loops, tries variations, iterates
   on results.
@@ -27,8 +30,10 @@ practice:
 
 Domain skills feed into Principal's decisions: `rl-for-manipulators`
 (algorithm/reward/hyperparameter judgment), `isaac-lab-manipulator-research`
-(Isaac Sim/Lab specifics), `delegating-technical-research` (before big
-research/design calls).
+(Isaac Sim/Lab specifics). Research is done by Principal directly, not
+delegated via `delegating-technical-research`'s junior-researcher pattern —
+that skill's default (delegate the research itself) is overridden for this
+repo specifically.
 
 ## Workflow
 

@@ -625,6 +625,53 @@ follow-ups below.
        close-gripper phases instead of one flat policy learning both),
        or examining whether the joint-position action space itself
        (rather than object size) limits precise gripper-closure timing.
+     - **Follow-up experiment: classical-IK-guided path reward (HALTED,
+       not evaluated on the sphere).** Built a live classical-IK
+       path-tracking reward (5 Cartesian waypoints: pre-grasp, grasp,
+       lift, transit, place; `isaaclab.controllers.DifferentialIKController`
+       queried fresh every step against the real physics state) plus a
+       gripper-open/closed timing bonus, per
+       `docs/superpowers/specs/2026-07-06-ar4-ik-guided-path-design.md`.
+       Code review caught and fixed a real bug before training: the IK
+       target used the raw `link_6` body pose instead of the gripper's
+       actual pinch point (3.6cm `_EE_OFFSET`, larger than the
+       `advance_tolerance` used for waypoint progression), corrected by
+       rotating the offset into world frame via `link_6`'s live
+       orientation before commanding IK. Two attempts at the full
+       1500-iteration training run both failed to complete: the first
+       falsely reported success from stale/misleading console text
+       while checkpoints showed it never got past ~2 iterations; the
+       second was deliberately killed by the user mid-run (~iteration
+       114/1500) to redirect all experimentation to a cube instead of a
+       sphere (see below) — **this experiment was never evaluated on
+       the sphere and remains an open, untested hypothesis**, to be
+       re-run on the cube-based scene.
+     - **Repo-wide pivot: switch the graspable object from sphere to
+       cube for all AR4 grasp experiments (user-directed).** All sphere
+       testing halted. Converted `tasks/ar4/pickplace_mirror_env_cfg.py`
+       and `tasks/ar4/pickplace_ik_guided_env_cfg.py` to use the
+       existing, unmodified `CUBE_CFG` (18mm cuboid, `objects_cfg.py`)
+       instead of `SPHERE_CFG` — renamed every scene field, event term,
+       observation term, termination term, and `SceneEntityCfg`
+       reference from "sphere" to "cube" throughout both files, and
+       renamed `tasks/ar4/mdp.py`'s `set_mirrored_goal`/
+       `compute_path_waypoints` `sphere_cfg` parameter to `object_cfg`
+       (pure rename, these functions were already generic).
+       Deliberately dropped the sphere-shrink experiment's 12mm-radius
+       hack rather than applying an analogous shrink to the cube — the
+       cube uses its existing, unmodified 18mm default size, since
+       Experiment 7 already showed object-size shrinking alone doesn't
+       help. `objects_cfg.py` itself untouched (shared, used by
+       `interactive_demo.py`/perception scripts/`grasp_demo.py`).
+       Verified directly (the implementer's own smoke test never
+       actually completed): both configs load, reset, and step
+       correctly with the expected reward-term lists (4 terms for the
+       mirror scene, 6 for the IK-guided scene), and the cube's
+       randomized spawn position was confirmed within workspace bounds.
+       Senior-reviewed and approved — no missed sphere references, no
+       forbidden files touched. All future experiments in this line
+       (starting with re-running the classical-IK-guided path
+       experiment above) use the cube.
 2. Shape classifier misclassifies cube/rectangular-prism as "sphere" against
    real depth data. Root-caused: `PLANARITY_RESIDUAL_THRESHOLD` (tuned on
    near-noiseless synthetic data) doesn't generalize to real sensor noise.

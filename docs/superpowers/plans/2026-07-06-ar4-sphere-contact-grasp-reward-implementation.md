@@ -55,10 +55,11 @@ else in the reward/observation/training setup stays exactly as it is on
 - Modify: `tasks/ar4/pickplace_env_cfg.py:17` (import), `tasks/ar4/pickplace_env_cfg.py:39-53` (`Ar4PickPlaceSceneCfg`)
 
 **Interfaces:**
-- Produces: a scene sensor named `gripper_contact` (`env.scene["gripper_contact"]`,
-  type `ContactSensor`), reporting `.data.net_forces_w` with shape
-  `(num_envs, 2, 3)` (one row per gripper jaw), pre-filtered to only count
-  contact against `{ENV_REGEX_NS}/Sphere`. Task 2 consumes this by name.
+- Produces: two scene sensors, `gripper_jaw1_contact` and
+  `gripper_jaw2_contact` (`env.scene["gripper_jaw1_contact"]` etc., type
+  `ContactSensor`), each reporting `.data.force_matrix_w` with shape
+  `(num_envs, 1, 1, 3)` (one body, one filter target), restricted to
+  contact against `{ENV_REGEX_NS}/Sphere`. Task 2 consumes these by name.
 
 - [ ] **Step 1: Activate the contact-reporter API on the robot's rigid bodies**
 
@@ -147,10 +148,20 @@ class Ar4PickPlaceSceneCfg(Ar4SceneCfg):
     )
     # Ground-truth grasp signal: real contact force between each gripper jaw
     # and the sphere specifically (filter_prim_paths_expr), not just "is
-    # anything touching the fingers". See
+    # anything touching the fingers". Two separate sensors (not one wildcard
+    # sensor covering both jaws) because PhysX requires the filter match
+    # count to equal the sensor body count - a single sensor matching 2
+    # bodies/env can't pair with the sphere's 1-match/env filter. See
     # docs/superpowers/specs/2026-07-05-ar4-sphere-contact-sensor-design.md.
-    gripper_contact: ContactSensorCfg = ContactSensorCfg(
-        prim_path="{ENV_REGEX_NS}/Robot/root_joint/gripper_jaw[12]_link",
+    gripper_jaw1_contact: ContactSensorCfg = ContactSensorCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/root_joint/gripper_jaw1_link",
+        update_period=0.0,
+        history_length=6,
+        debug_vis=False,
+        filter_prim_paths_expr=["{ENV_REGEX_NS}/Sphere"],
+    )
+    gripper_jaw2_contact: ContactSensorCfg = ContactSensorCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/root_joint/gripper_jaw2_link",
         update_period=0.0,
         history_length=6,
         debug_vis=False,
@@ -168,12 +179,15 @@ cd /home/saps/projects/rl
 ```
 
 Expected: exits 0, prints `Training complete. Checkpoints and logs written
-to: ...`, no exception mentioning `gripper_contact`, `gripper_jaw`, or
+to: ...`, no exception mentioning `gripper_jaw_contact`, `gripper_jaw`, or
 `does not exist`. If it does raise a prim-path error, the error message
 names the actual invalid path — compare it against
 `gripper_jaw1_link`/`gripper_jaw2_link` (already confirmed correct against
 the AR4 URDF by the grasp-alignment experiment) and correct the pattern in
-Step 2, then re-run this smoke test.
+Step 3, then re-run this smoke test. If it instead raises a filter-count
+mismatch error (`Filter pattern ... did not match the correct number of
+entries`), that means the two-sensor split above was not applied correctly
+— each sensor's `prim_path` must match exactly one body per env.
 
 - [ ] **Step 5: Commit**
 
@@ -191,10 +205,16 @@ git commit -m "Add gripper-to-sphere ContactSensor to AR4 pick-and-place scene"
 - Modify: `tasks/ar4/pickplace_env_cfg.py` (import + `RewardsCfg`)
 
 **Interfaces:**
-- Consumes: `env.scene["gripper_contact"].data.net_forces_w` (Task 1).
-- Produces: `contact_grasp_bonus(env, force_threshold, contact_sensor_cfg) ->
-  torch.Tensor` of shape `(num_envs,)`, values in `{0.0, 1.0}`. Task 3's
-  calibration script imports this function directly by name.
+- Consumes: `env.scene["gripper_jaw1_contact"].data.force_matrix_w` and
+  `env.scene["gripper_jaw2_contact"].data.force_matrix_w` (Task 1). Use
+  `force_matrix_w`, not `net_forces_w` — `net_forces_w` is not restricted
+  by `filter_prim_paths_expr` (it sums *any* contact on the body, per
+  Isaac Lab's own `ContactSensorData` docstring), so it would defeat the
+  entire point of filtering to the sphere specifically.
+- Produces: `contact_grasp_bonus(env, force_threshold, jaw1_contact_cfg,
+  jaw2_contact_cfg) -> torch.Tensor` of shape `(num_envs,)`, values in
+  `{0.0, 1.0}`. Task 3's calibration script imports this function directly
+  by name.
 
 - [ ] **Step 1: Create `tasks/ar4/mdp.py`**
 
@@ -223,22 +243,29 @@ if TYPE_CHECKING:
 def contact_grasp_bonus(
     env: ManagerBasedRLEnv,
     force_threshold: float,
-    contact_sensor_cfg: SceneEntityCfg,
+    jaw1_contact_cfg: SceneEntityCfg,
+    jaw2_contact_cfg: SceneEntityCfg,
 ) -> torch.Tensor:
     """Dense bonus when both gripper fingers register real contact force
-    against the sphere - a ground-truth grasp signal (ContactSensor),
-    replacing the geometric position/closure proxies every prior experiment
-    in this repo's grasp-reward history used (see ROADMAP.md's "grasp/lift
-    never emerges" entry for why those failed: either reward-hackable via a
-    loose distance check, or too sparse to discover via a tight alignment
-    check). Adapted from isaaclab_tasks' manipulation/place/agibot task's
-    object_grasped pattern (net_forces_w bilateral force-threshold check).
-    See docs/superpowers/specs/2026-07-05-ar4-sphere-contact-sensor-design.md.
+    against the sphere specifically - a ground-truth grasp signal
+    (ContactSensor, filtered via force_matrix_w), replacing the geometric
+    position/closure proxies every prior experiment in this repo's
+    grasp-reward history used (see ROADMAP.md's "grasp/lift never emerges"
+    entry for why those failed: either reward-hackable via a loose distance
+    check, or too sparse to discover via a tight alignment check). Adapted
+    from isaaclab_tasks' manipulation/place/agibot task's object_grasped
+    pattern (bilateral force-threshold check), using one sensor per jaw and
+    the filtered force_matrix_w field rather than the unfiltered
+    net_forces_w the reference used - see
+    docs/superpowers/specs/2026-07-05-ar4-sphere-contact-sensor-design.md
+    for why both corrections were necessary.
     """
-    contact_sensor: ContactSensor = env.scene[contact_sensor_cfg.name]
-    net_forces = contact_sensor.data.net_forces_w  # (num_envs, 2, 3): one row per jaw
-    force_norm = torch.linalg.vector_norm(net_forces, dim=-1)  # (num_envs, 2)
-    both_fingers_contact = torch.all(force_norm > force_threshold, dim=-1)  # (num_envs,)
+    jaw1_sensor: ContactSensor = env.scene[jaw1_contact_cfg.name]
+    jaw2_sensor: ContactSensor = env.scene[jaw2_contact_cfg.name]
+    # force_matrix_w shape: (num_envs, 1 body, 1 filter, 3) for each sensor.
+    jaw1_force = torch.linalg.vector_norm(jaw1_sensor.data.force_matrix_w, dim=-1).view(env.num_envs)
+    jaw2_force = torch.linalg.vector_norm(jaw2_sensor.data.force_matrix_w, dim=-1).view(env.num_envs)
+    both_fingers_contact = (jaw1_force > force_threshold) & (jaw2_force > force_threshold)
     return both_fingers_contact.float()
 ```
 
@@ -276,7 +303,8 @@ to:
         weight=20.0,
         params={
             "force_threshold": 0.05,
-            "contact_sensor_cfg": SceneEntityCfg("gripper_contact"),
+            "jaw1_contact_cfg": SceneEntityCfg("gripper_jaw1_contact"),
+            "jaw2_contact_cfg": SceneEntityCfg("gripper_jaw2_contact"),
         },
     )
 
@@ -328,8 +356,9 @@ git commit -m "Add contact-sensor-based grasp_contact reward term for AR4 sphere
 - Create: `scripts/calibrate_gripper_contact.py`
 
 **Interfaces:**
-- Consumes: `contact_grasp_bonus` (Task 2), `gripper_contact` sensor (Task 1),
-  `Ar4PickPlaceEnvCfg` (`tasks/ar4/pickplace_env_cfg.py`).
+- Consumes: `contact_grasp_bonus` (Task 2), `gripper_jaw1_contact`/
+  `gripper_jaw2_contact` sensors (Task 1), `Ar4PickPlaceEnvCfg`
+  (`tasks/ar4/pickplace_env_cfg.py`).
 - Produces: a printed calibration report (no code interface — this is a
   one-off verification script, not imported elsewhere).
 
@@ -425,7 +454,8 @@ def main() -> None:
 
     env = ManagerBasedRLEnv(cfg=env_cfg)
     num_joints = len(ARM_JOINT_NAMES)
-    contact_cfg = SceneEntityCfg("gripper_contact")
+    jaw1_cfg = SceneEntityCfg("gripper_jaw1_contact")
+    jaw2_cfg = SceneEntityCfg("gripper_jaw2_contact")
 
     home_forces: list[list[float]] = []
     hold_forces: list[list[float]] = []
@@ -445,18 +475,21 @@ def main() -> None:
                 action[:, num_joints] = gripper_cmd
                 env.step(action)
 
-                sensor = env.scene["gripper_contact"]
-                force_norm = torch.linalg.vector_norm(sensor.data.net_forces_w, dim=-1)  # (1, 2)
-                reward = contact_grasp_bonus(env, FORCE_THRESHOLD, contact_cfg)
+                jaw1_sensor = env.scene["gripper_jaw1_contact"]
+                jaw2_sensor = env.scene["gripper_jaw2_contact"]
+                jaw1_norm = torch.linalg.vector_norm(jaw1_sensor.data.force_matrix_w, dim=-1).view(1)
+                jaw2_norm = torch.linalg.vector_norm(jaw2_sensor.data.force_matrix_w, dim=-1).view(1)
+                force_norm = [jaw1_norm.item(), jaw2_norm.item()]
+                reward = contact_grasp_bonus(env, FORCE_THRESHOLD, jaw1_cfg, jaw2_cfg)
 
                 if label == "hold":
-                    hold_forces.append(force_norm[0].tolist())
+                    hold_forces.append(force_norm)
                     hold_rewards.append(reward.item())
                 elif label == "home":
-                    home_forces.append(force_norm[0].tolist())
+                    home_forces.append(force_norm)
 
             prev_q = target_q
-            print(f"[phase done] {label}: last force_norm={force_norm[0].tolist()}, reward={reward.item()}")
+            print(f"[phase done] {label}: last force_norm={force_norm}, reward={reward.item()}")
 
     print("\n=== Calibration summary ===")
     home_min = min(min(f) for f in home_forces)
@@ -745,8 +778,17 @@ git commit -m "Record AR4 sphere ContactSensor grasp-reward experiment outcome i
   never touching the committed `pickplace_env_cfg.py` jitter values used by
   real training), or any PPO hyperparameter.
 - **Type/name consistency:** `contact_grasp_bonus(env, force_threshold,
-  contact_sensor_cfg)` signature is identical across its Task 2 definition,
-  Task 2's `RewardsCfg` registration, and Task 3's calibration script's
-  direct call. Sensor name `gripper_contact` is identical across Task 1's
-  scene field name, Task 2's `SceneEntityCfg("gripper_contact")`, and
-  Task 3's `env.scene["gripper_contact"]`.
+  jaw1_contact_cfg, jaw2_contact_cfg)` signature is identical across its
+  Task 2 definition, Task 2's `RewardsCfg` registration, and Task 3's
+  calibration script's direct call. Sensor names `gripper_jaw1_contact`/
+  `gripper_jaw2_contact` are identical across Task 1's scene field names,
+  Task 2's `SceneEntityCfg(...)` params, and Task 3's `env.scene[...]`
+  lookups — and both sensors read `force_matrix_w`, not `net_forces_w`,
+  consistently everywhere.
+- **Revision note:** this plan was corrected twice during Task 1's real
+  execution (not on paper review) — `activate_contact_sensors` needed to be
+  flipped to `True` in `robot_cfg.py`, and the original single wildcard
+  sensor + `net_forces_w` design was replaced with two per-jaw sensors +
+  `force_matrix_w` after real PhysX errors surfaced both issues. The design
+  spec (`docs/superpowers/specs/2026-07-05-ar4-sphere-contact-sensor-design.md`)
+  documents both corrections with the actual error text.

@@ -19,6 +19,22 @@ contradicting file evidence. **Conclusion: the real full training run
 did not happen.** Re-running properly; see the corrected section below
 once available.
 
+## Second controller correction: Experiment 8 halted, not re-run
+
+The re-dispatched non-headless training run (log dir
+`logs/train/2026-07-06_18-14-51/`) was deliberately killed by the
+controller partway through (~iteration 114/1500, exit code 144 = signal
+termination) per a direct user instruction mid-run: "change all
+experimentation to use a cube instead of a sphere. halt all sphere
+testing." The re-run agent correctly identified this as a real
+termination (3 checkpoints instead of ~30, `model_1499.pt` missing) and
+correctly reported BLOCKED rather than a false success — that diagnosis
+was accurate; the cause was an intentional kill, not an infrastructure
+bug. **Experiment 8 (classical-IK-guided path) is not being completed on
+the sphere** — the codebase is being converted to use a cube instead
+(see ROADMAP.md), and Experiment 8 will be re-run on the cube-based
+scene once that conversion lands.
+
 ## Original (incorrect) summary — kept for record, do not trust
 
 Full 1500-iteration training run completed successfully with `--ik_guided --num_envs 4096 --headless`.

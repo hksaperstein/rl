@@ -455,17 +455,13 @@ follow-ups below.
        architectural options (hierarchical reach-then-grasp-policy
        split).
    - **Follow-up experiment: SA-PPO-style dynamic learning-rate bump
-     (falsified) — a strong null result, not just "no improvement."**
-     Per user instruction to try both remaining literature-backed
-     candidates, this experiment tested the first one in isolation.
-     Reused `model_700.pt` from the always-on-lift run (the identical
-     "grip converged, exploration about to collapse" starting policy)
-     and resumed training via a new `scripts/train_lr_bump.py` with
-     `learning_rate` bumped `1e-4`→`1e-3` and `schedule` switched
-     `"adaptive"`→`"fixed"` (the adaptive schedule would otherwise claw
-     the bump back down given the converged policy's low KL divergence —
-     a real gotcha found and fixed during design, not just an oversight
-     avoided by luck), per
+     (falsified).** Per user instruction to try both remaining
+     literature-backed candidates, this experiment tested the first one
+     in isolation. Reused `model_700.pt` from the always-on-lift run (the
+     identical "grip converged, exploration about to collapse" starting
+     policy) and resumed training via a new `scripts/train_lr_bump.py`
+     with `learning_rate` bumped `1e-4`→`1e-3` and `schedule` switched
+     `"adaptive"`→`"fixed"`, per
      `docs/superpowers/specs/2026-07-06-ar4-sphere-lift-lr-bump-design.md`.
      No reward-function changes — this isolated the learning-rate
      intervention alone against the exact same starting point as the
@@ -473,21 +469,37 @@ follow-ups below.
      `docs/superpowers/plans/2026-07-06-ar4-sphere-lift-lr-bump-implementation.md`,
      full run data in
      `docs/superpowers/plans/2026-07-06-ar4-sphere-lift-lr-bump-report.md`.
+     - **Correction (caught by final whole-plan review): the original
+       write-up of this entry had the adaptive schedule's direction
+       backwards**, claiming it "would claw the bump back down given the
+       converged policy's low KL divergence." Checking the installed
+       `rsl_rl` source directly (`rsl_rl/algorithms/ppo.py:281-284`): low
+       KL divergence actually **increases** the adaptive learning rate
+       (toward a `1e-2` cap), not decreases it — the opposite of what was
+       claimed. This doesn't invalidate the experiment (`schedule="fixed"`
+       is still the right choice for a controlled test — it guarantees
+       the rate stays at exactly the intended value rather than drifting
+       under `"adaptive"`'s own dynamics), only the stated reason for
+       needing it was wrong and is corrected here.
      - **Confirmed the learning rate actually held at `0.001` across the
        entire 1500-iteration continuation** (no decay back toward
        baseline) — the experiment genuinely tested its premise, this
        isn't a null result from the bump failing to hold.
      - **Result: 0/10 real eval episodes show any lift** — same "reach,
-       grip, freeze" signature as every prior experiment. Notably,
-       `lifting_sphere` read *exactly* `0.0` across the **entire**
-       trajectory this time, without even the small noise blips both
-       prior full runs showed — a substantial, sustained, correctly-
-       applied optimizer-level perturbation, injected at precisely the
-       point the literature identified as critical, produced no
-       measurable effect whatsoever on the target behavior. This is a
-       stronger negative result than "didn't help" — it argues against
-       "insufficient exploration pressure at the right moment" being the
-       operative mechanism at all, at least via this specific lever.
+       grip, freeze" signature as every prior experiment.
+       `lifting_sphere`'s 10-point downsampled trajectory reads exactly
+       `0.0` at every sample, with a `max` of `0.0027` over the full run —
+       a blip of the same magnitude as the always-on run's own `0.0027`
+       max (**correction**: an earlier version of this entry claimed this
+       run showed "not even the small noise blips" prior runs did, which
+       the run's own `max` value doesn't support — this is equally null,
+       not more null, than the prior experiments). A substantial,
+       sustained, correctly-held optimizer-level perturbation, injected
+       at precisely the point the literature identified as critical,
+       produced no measurable improvement over the prior experiments —
+       this argues against "insufficient exploration pressure at the
+       right moment" being a sufficient explanation on its own, at least
+       via this specific lever.
      - **This is the fourth real attempt on the reward/optimization axis
        for this sub-problem** (sparse-only, curriculum-gated dense,
        always-on dense, LR-bump). Per the user's "try both" instruction,

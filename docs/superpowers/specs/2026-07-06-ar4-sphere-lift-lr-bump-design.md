@@ -33,22 +33,30 @@ either) actually works.
 
 ## A real, load-bearing detail found while designing this
 
-This repo's current PPO config (`tasks/ar4/agents/rsl_rl_ppo_cfg.py`) uses
-`schedule="adaptive"` with `desired_kl=0.01` — `rsl_rl`'s adaptive
-schedule adjusts the learning rate based on the KL divergence between the
-old and new policy each update, **increasing** LR when actual KL exceeds
-`desired_kl` and **decreasing** it otherwise. Once a policy has converged
-(as ours has, on the static-grip behavior), KL divergence between
-successive updates is naturally low — meaning the *existing* adaptive
-schedule is already actively driving the learning rate down over time as
-the policy stabilizes, the opposite of what's needed to escape a local
-optimum. Simply setting a higher starting `learning_rate` while leaving
-`schedule="adaptive"` would very likely get corrected back down within a
-few updates once the (already fairly stable) post-convergence policy
-shows low KL divergence again, defeating the intervention. **The
-schedule itself must be switched to `"fixed"` for this experiment**, not
-just the learning rate value bumped, or the fix has no chance to persist
-long enough to matter.
+**Correction (caught by the final whole-plan review, not verified at
+design time): the paragraph originally here had the adaptive schedule's
+direction backwards.** Checking the installed `rsl_rl` source directly
+(`rsl_rl/algorithms/ppo.py:281-284`): when `kl_mean < desired_kl / 2`
+(i.e., *low* KL divergence, meaning a converged, stable policy),
+`learning_rate` is **increased** (`* 1.5`, capped at `1e-2`) — not
+decreased. When `kl_mean > desired_kl * 2` (large policy changes), it's
+*decreased* (`/ 1.5`, floored at `1e-5`). This is the opposite of what
+this section originally claimed. So the concern that "adaptive would claw
+the bump back down given the converged policy's low KL divergence" was
+factually wrong — a converged policy's low KL would, if anything, have
+pushed `schedule="adaptive"`'s own learning rate *further up* toward its
+`1e-2` cap on its own, not undone a manual bump.
+
+**This does not invalidate the experiment or its result.** Switching to
+`schedule="fixed"` is still the methodologically correct choice for a
+controlled test: it guarantees the learning rate stays at *exactly* the
+intended value (`1e-3`) for the entire run, rather than drifting upward
+under `"adaptive"` toward wherever the `1e-2` cap and KL dynamics happen
+to take it — a cleaner, more interpretable single-variable manipulation
+either way. The experiment's real, verified result (learning rate held at
+exactly `0.001` throughout, confirmed via `Loss/learning_rate` — see the
+report) stands; only the *justification* for using `"fixed"` in this
+section was wrong, and is corrected here rather than left uncorrected.
 
 ## Design
 

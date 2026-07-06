@@ -38,3 +38,15 @@ it is `0.0` at both iteration 699 and 701, remains `0.0` at the final
 iteration (`last: 0.0`), and its max over the whole run (`0.0026785717345774174`)
 is negligible — the curriculum gate firing did not by itself produce a
 sustained binary lift signal in this run.
+
+## Task 3: Real eval + video inspection (decision gate)
+
+**Eval command:** `/home/saps/IsaacLab/isaaclab.sh -p scripts/eval_loop.py --checkpoint logs/train/2026-07-06_10-52-19/model_1499.pt --episodes 10` — completed successfully, 10 videos written.
+
+**Frame extraction:** `ffmpeg -vf fps=10` on all 10 videos, controller-inspected directly.
+
+**Observation:** The same static "reach, grip, freeze" signature as the prior ContactSensor experiment — the arm reaches down and holds a completely static pose next to the sphere for the rest of the episode, across every sampled episode (0, 250, 500, 750, 1250, 1500, 1750). In two episodes (750, 1250) the sphere briefly appeared to vanish from view in a single sampled frame; checking adjacent frames in the same episode showed the sphere reappearing at the identical ground-level position next to the gripper — a viewing-angle occlusion artifact (the gripper body briefly blocking line-of-sight to the small sphere at that specific camera angle/pose), not a real lift. This is consistent with the quantitative data: `lift_height_progress`'s max value over the entire run (0.0065) corresponds to roughly 0.065mm of real height gain via `tanh`'s small-angle approximation — many orders of magnitude short of the 21mm needed to cross `lifting_sphere`'s threshold, and far too small to produce a real, sustained visual occlusion.
+
+**Decision gate: 0/10 episodes show any real lift.** Same failure signature as the ContactSensor experiment before it — the curriculum-gated dense shaping term did not move the policy off its entrenched static-grip local optimum, despite the curriculum switch itself firing correctly (verified in Task 2).
+
+Per the design doc's own instruction, not attempting a further reward-only tweak unilaterally. The curriculum apparently opened too late and/or too weak a window relative to how deeply the static-grip behavior had already converged by iteration 700 (`grasp_contact` was already at ~17.8/20, essentially its plateau, by that point) — the remaining ~800 iterations were not enough for a newly-introduced weight-15.0 dense term to meaningfully perturb a policy that stable. Remaining candidates: a hierarchical reach-then-grasp-policy split, or questioning whether the gripper's actual closed-jaw force is physically sufficient to support lifting this object at all.

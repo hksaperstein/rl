@@ -547,6 +547,26 @@ follow-ups below.
        opposite-side goal, a corrected *undiscounted* running-max
        milestone bonus (drops the `gamma` decay that caused the bug
        above), and a new grasp-gated stillness penalty.
+     - **A second sign-convention bug found during Task 4's first training
+       run (before eval), fixed before proceeding:** `stillness_penalty`'s
+       own function body already returns the signed value (`-1.0` when
+       triggered, `0.0` otherwise), but its `RewardsCfg` registration used
+       `weight=-2.0`. `RewardManager.compute()` computes
+       `func(...) * weight * dt` (`reward_manager.py:149`) — multiplying
+       two negatives turned the intended *penalty* into a **+2.0*dt
+       reward** for the exact stay-still-after-grasp behavior this term
+       exists to punish. Caught by reading the actual TensorBoard data
+       (`Episode_Reward/stillness_penalty` grew to +1.3 over training,
+       which is impossible for a true penalty term) rather than trusting
+       the design doc's own stated intent. Fixed to `weight=2.0` (commit
+       `e7742b5`); the first training run's data is invalid and was
+       discarded, re-running Task 4 with the corrected weight before any
+       eval/video judgment. Distinguishing convention for future reward
+       terms in this repo: functions like `action_rate_l2`/`joint_vel_l2`
+       return an *unsigned* magnitude and rely on a negative weight to
+       become a penalty; `stillness_penalty` instead returns an
+       *already-signed* value — mixing the two conventions inside one
+       `RewardsCfg` is exactly where this bug slipped in.
 2. Shape classifier misclassifies cube/rectangular-prism as "sphere" against
    real depth data. Root-caused: `PLANARITY_RESIDUAL_THRESHOLD` (tuned on
    near-noiseless synthetic data) doesn't generalize to real sensor noise.

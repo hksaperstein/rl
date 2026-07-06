@@ -36,7 +36,7 @@ def _resolve_usd_path() -> str:
 AR4_MK5_CFG = ArticulationCfg(
     spawn=sim_utils.UsdFileCfg(
         usd_path=_resolve_usd_path(),
-        activate_contact_sensors=False,
+        activate_contact_sensors=True,
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             disable_gravity=False,
             max_depenetration_velocity=5.0,

@@ -20,7 +20,7 @@ from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
-from isaaclab.sensors import CameraCfg, FrameTransformerCfg
+from isaaclab.sensors import CameraCfg, ContactSensorCfg, FrameTransformerCfg
 from isaaclab.sensors.frame_transformer.frame_transformer_cfg import OffsetCfg
 from isaaclab.utils.configclass import configclass
 
@@ -37,7 +37,8 @@ _EE_OFFSET = (0.0, 0.0, 0.09)
 
 @configclass
 class Ar4PickPlaceSceneCfg(Ar4SceneCfg):
-    """AR4 gripper+objects scene, plus an end-effector FrameTransformer sensor."""
+    """AR4 gripper+objects scene, plus an end-effector FrameTransformer sensor
+    and a gripper-to-sphere ContactSensor."""
 
     ee_frame: FrameTransformerCfg = FrameTransformerCfg(
         prim_path="{ENV_REGEX_NS}/Robot/root_joint/base_link",
@@ -49,6 +50,27 @@ class Ar4PickPlaceSceneCfg(Ar4SceneCfg):
                 offset=OffsetCfg(pos=_EE_OFFSET),
             ),
         ],
+    )
+    # Ground-truth grasp signal: real contact force between each gripper jaw
+    # and the sphere specifically (filter_prim_paths_expr), not just "is
+    # anything touching the fingers". Two separate sensors (not one wildcard
+    # sensor covering both jaws) because PhysX requires the filter match
+    # count to equal the sensor body count - a single sensor matching 2
+    # bodies/env can't pair with the sphere's 1-match/env filter. See
+    # docs/superpowers/specs/2026-07-05-ar4-sphere-contact-sensor-design.md.
+    gripper_jaw1_contact: ContactSensorCfg = ContactSensorCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/root_joint/gripper_jaw1_link",
+        update_period=0.0,
+        history_length=6,
+        debug_vis=False,
+        filter_prim_paths_expr=["{ENV_REGEX_NS}/Sphere"],
+    )
+    gripper_jaw2_contact: ContactSensorCfg = ContactSensorCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/root_joint/gripper_jaw2_link",
+        update_period=0.0,
+        history_length=6,
+        debug_vis=False,
+        filter_prim_paths_expr=["{ENV_REGEX_NS}/Sphere"],
     )
 
 

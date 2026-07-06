@@ -325,22 +325,29 @@ found by direct measurement (not guessing):
    explicitly to the user as a significant, unplanned finding rather than
    silently folded in.
 
-**Final calibration result (corrected offset + live-tracking script):**
+**Final calibration result (committed script, `scripts/calibrate_gripper_contact.py`,
+after one more round of review-driven fixes — see below):**
 
 ```
-open (gripper open, sphere pinned at pinch point) force_norm: min=27.34, max=30.17 N
-hold (gripper closed on sphere)                   force_norm: min=27.35, max=30.17 N
+[info] measured link_6->jaw-midpoint distance: 0.0360 m (ee_frame's _EE_OFFSET-based estimate: 0.0360 m)
+far (sphere untouched, nowhere near gripper) force_norm: min=0.0000, max=0.0000 N (real negative control)
+hold (gripper closed on sphere)               force_norm: min=27.3466, max=30.1718 N
 hold reward==1.0 fraction: 120/120 (force_threshold=0.05)
 ```
 
-Both `open` and `hold` read large force here because this test continuously
-re-teleports the sphere to the exact geometric center every step (to
-survive the arm's settling dynamics), which pins it inside the jaws'
-collision volume regardless of the commanded aperture — a known
-methodological artifact of this specific test, not evidence that
-`force_threshold` or the sensor logic is wrong. The relevant comparison is
-against every *earlier* run this session (sphere far from the gripper,
-hundreds of steps, all real contact reads exactly `0.0` with zero false
-positives) versus this run's genuine-contact reading (tens of Newtons):
-`force_threshold=0.05` sits safely between an unambiguous true zero and
-unambiguous real contact, so it is kept unchanged.
+An independent review of the first version of this script (which only had
+`open`/`close`/`hold` phases, all with the sphere pinned to the pinch
+point) correctly flagged two gaps: the `0.036` offset value rested on an
+uncommitted, unreproducible diagnostic, and the `open` phase's own
+`(expect ~0.0)` label was false — pinning the sphere to the geometric
+center every step (needed to survive the arm's settling dynamics) puts it
+inside the jaws' collision volume regardless of commanded aperture, so
+`open` read large force too, not a real negative control. Both fixed: the
+script now measures and prints the real `link_6`-to-jaw-midpoint distance
+directly (confirming `_EE_OFFSET=0.036` against live geometry, not just a
+throwaway script), and adds a genuine `far` phase where the sphere is left
+untouched at its normal spawn position, comfortably outside contact range,
+giving a real `0.0N` baseline in the same committed, re-runnable output.
+`force_threshold=0.05` sits safely between that unambiguous true zero and
+the unambiguous real contact reading (tens of Newtons), so it is kept
+unchanged.

@@ -117,17 +117,43 @@ omitted from the new env config (no `commands` field).
   `env._target_pos_w` via `subtract_frame_transforms` instead of
   `mdp.generated_commands`.
 - **Reward:** new functions `_raw_lift_progress_mirrored` and
-  `staged_potential_progress_mirrored` — copies of the existing
-  `_raw_lift_progress`/`staged_potential_progress` with one
-  simplification: since `env._target_pos_w` is already world-frame (no
-  command-frame transform needed), the goal sub-term becomes
+  `staged_milestone_bonus` — the raw staged signal
+  (`_raw_lift_progress_mirrored`) is a copy of the existing
+  `_raw_lift_progress` with one simplification: since `env._target_pos_w`
+  is already world-frame (no command-frame transform needed), the goal
+  sub-term becomes
   `goal_dist = torch.norm(object.data.root_pos_w - env._target_pos_w, dim=-1)`
   directly — no `combine_frame_transforms`, no `robot_cfg`/`command_name`
-  params for this sub-term. New functions (not edits to the existing
-  ones) since `pickplace_env_cfg.py`'s versions stay in active use
-  elsewhere. Reuses `env._lift_potential_max` (same buffer name/lazy-init
-  pattern) — safe since this task's `Ar4PickPlaceMirrorSceneCfg`/env never
-  runs in the same process as `Ar4PickPlaceSceneCfg`'s env.
+  params for this sub-term. The wrapper is **not** a copy of
+  `staged_potential_progress` — per the "Why now" section's finding, that
+  formula's `gamma` discount makes holding a plateaued potential cost
+  negative reward every step, which made "never approach the object" the
+  reward-minimizing policy. `staged_milestone_bonus` fixes this by
+  dropping the discount from the bookkeeping delta entirely:
+
+  ```python
+  def staged_milestone_bonus(env, object_cfg, ee_frame_cfg, jaw1_contact_cfg,
+                              jaw2_contact_cfg, reach_std, force_threshold,
+                              lift_minimal_height, goal_std) -> torch.Tensor:
+      if not hasattr(env, "_lift_milestone_max"):
+          env._lift_milestone_max = torch.zeros(env.num_envs, device=env.device)
+      raw = _raw_lift_progress_mirrored(env, object_cfg, ee_frame_cfg,
+                                         jaw1_contact_cfg, jaw2_contact_cfg,
+                                         reach_std, force_threshold,
+                                         lift_minimal_height, goal_std)
+      prev = env._lift_milestone_max.clone()
+      env._lift_milestone_max = torch.maximum(env._lift_milestone_max, raw)
+      return env._lift_milestone_max - prev  # undiscounted: 0 at a plateau, > 0 on a new milestone, never negative
+  ```
+
+  No `gamma` param at all (there is nothing to discount) — this also
+  means no more "must match `Ar4PickPlacePPORunnerCfg.algorithm.gamma`
+  exactly" constraint, since that constraint was itself part of the bug.
+  Uses a new buffer name `_lift_milestone_max` (not `_lift_potential_max`)
+  so a stray import of the old scene's env alongside this one can never
+  silently share state. New functions throughout (not edits to the
+  existing `pickplace_env_cfg.py` ones), which stay in active use
+  elsewhere.
 - **Termination:** new function `object_reached_mirrored_goal(env,
   threshold, object_cfg)` — same shape as `mdp.object_reached_goal` but
   compares against `env._target_pos_w` instead of `command_manager`.
@@ -138,8 +164,9 @@ omitted from the new env config (no `commands` field).
 (matching `Ar4PickPlaceEnvCfg`, not the smaller single-object precedent's
 `num_envs=16` default — this is a real training run, not an interactive
 demo), same `episode_length_s=5.0`, `decimation=2`, `sim.dt=0.01`, PPO
-hyperparameters unchanged (reuses `Ar4PickPlacePPORunnerCfg` as-is,
-`gamma=0.98` must still match the reward's `gamma` param).
+hyperparameters unchanged (reuses `Ar4PickPlacePPORunnerCfg` as-is;
+`staged_milestone_bonus` has no `gamma` param, so there is no discount to
+keep in sync this time).
 
 ## Part 2: Grasp-gated stillness penalty
 
@@ -170,14 +197,23 @@ the prior episode's end state):
 - `still_bound = 0.005` (m), `patience_steps = 25` (0.5s at the
   0.02s control step — `decimation=2` × `sim.dt=0.01`), `weight = -2.0`
   in `RewardsCfg` (comparable in magnitude to the reach/grasp stage
-  weights inside `staged_potential_progress`, so it's not negligible next
+  weights inside `staged_milestone_bonus`, so it's not negligible next
   to the -1e-4 `action_rate`/`joint_vel` terms, but far smaller than the
   25.0-weighted main term).
 
 ### `RewardsCfg` for the new scene
 
 ```python
-staged_potential_progress_mirrored = RewTerm(func=..., weight=25.0, params={...})
+staged_milestone_bonus = RewTerm(func=ar4_mdp.staged_milestone_bonus, weight=25.0, params={
+    "object_cfg": SceneEntityCfg("sphere"),
+    "ee_frame_cfg": SceneEntityCfg("ee_frame"),
+    "jaw1_contact_cfg": SceneEntityCfg("gripper_jaw1_contact"),
+    "jaw2_contact_cfg": SceneEntityCfg("gripper_jaw2_contact"),
+    "reach_std": 0.1,
+    "force_threshold": 0.05,
+    "lift_minimal_height": 0.03,
+    "goal_std": 0.3,
+})
 stillness_penalty = RewTerm(func=ar4_mdp.stillness_penalty, weight=-2.0, params={
     "object_cfg": SceneEntityCfg("sphere"),
     "jaw1_contact_cfg": SceneEntityCfg("gripper_jaw1_contact"),
@@ -222,5 +258,6 @@ joint_vel = RewTerm(func=mdp.joint_vel_l2, weight=-1e-4, params={"asset_cfg": Sc
 - `num_envs=4096` for the real training run (user-specified explicitly,
   overriding the smaller single-object precedent's default).
 - PPO hyperparameters (`Ar4PickPlacePPORunnerCfg`) unchanged, reused
-  as-is; `gamma=0.98` must match between the runner cfg and the reward's
-  `gamma` param, exactly as in the existing potential-shaping term.
+  as-is. `staged_milestone_bonus` takes no `gamma` param — do not add one
+  or reintroduce a discounted delta; that discount is the exact bug this
+  design fixes (see "Why now").

@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 import torch
 
 from isaaclab.managers import SceneEntityCfg
-from isaaclab.utils.math import combine_frame_transforms
+from isaaclab.utils.math import combine_frame_transforms, sample_uniform, subtract_frame_transforms
 
 if TYPE_CHECKING:
     from isaaclab.assets import RigidObject
@@ -143,3 +143,76 @@ def reset_lift_potential(env: ManagerBasedRLEnv, env_ids: torch.Tensor) -> None:
     if not hasattr(env, "_lift_potential_max"):
         env._lift_potential_max = torch.zeros(env.num_envs, device=env.device)
     env._lift_potential_max[env_ids] = 0.0
+
+
+def set_mirrored_goal(
+    env: ManagerBasedRLEnv,
+    env_ids: torch.Tensor,
+    sphere_cfg: SceneEntityCfg,
+    goal_y_range: tuple[float, float],
+    goal_z_range: tuple[float, float],
+) -> None:
+    """Event term (mode="reset"): must be registered AFTER the sphere's
+    own reset_root_state_uniform event in the same EventCfg (Isaac Lab's
+    EventManager runs same-mode terms in registration order - confirmed
+    against event_manager.py's apply(), which iterates
+    self._mode_term_cfgs[mode] in a plain for loop over registration
+    order) so this reads the sphere's freshly-randomized position, not
+    the previous episode's. Computes the goal as the mirror image of the
+    sphere's spawn across the robot's local x=0 plane (robot_cfg.py's
+    AR4_MK5_CFG has no explicit init_state.pos, defaulting to (0,0,0) -
+    the robot base sits at each env's own local origin, so negating
+    local x is exactly "the other side of the robot"). goal_y is
+    independently resampled (not mirrored) for a second degree of
+    freedom. Stores the result in env._target_pos_w (world frame,
+    per-env, shape (num_envs, 3)) - this stateful buffer replaces
+    CommandsCfg/UniformPoseCommandCfg for this scene, since the command
+    manager has no way to make one term's target a function of another
+    term's own random draw within the same reset. See
+    docs/superpowers/specs/2026-07-06-ar4-sphere-mirror-scene-design.md.
+    """
+    sphere: RigidObject = env.scene[sphere_cfg.name]
+    if not hasattr(env, "_target_pos_w"):
+        env._target_pos_w = torch.zeros(env.num_envs, 3, device=env.device)
+
+    origins = env.scene.env_origins[env_ids]
+    sphere_local_x = sphere.data.root_pos_w[env_ids, 0] - origins[:, 0]
+
+    num = len(env_ids)
+    goal_local_x = -sphere_local_x
+    goal_local_y = sample_uniform(goal_y_range[0], goal_y_range[1], (num,), env.device)
+    goal_local_z = sample_uniform(goal_z_range[0], goal_z_range[1], (num,), env.device)
+
+    env._target_pos_w[env_ids, 0] = origins[:, 0] + goal_local_x
+    env._target_pos_w[env_ids, 1] = origins[:, 1] + goal_local_y
+    env._target_pos_w[env_ids, 2] = origins[:, 2] + goal_local_z
+
+
+def mirrored_target_position_in_robot_root_frame(
+    env: ManagerBasedRLEnv,
+    robot_cfg: SceneEntityCfg,
+) -> torch.Tensor:
+    """The mirrored goal position (env._target_pos_w, set by
+    set_mirrored_goal) expressed in the robot's root frame - mirrors
+    isaaclab_tasks' object_position_in_robot_root_frame pattern exactly,
+    reading the stateful buffer instead of an object's own root_pos_w."""
+    robot: RigidObject = env.scene[robot_cfg.name]
+    if not hasattr(env, "_target_pos_w"):
+        env._target_pos_w = torch.zeros(env.num_envs, 3, device=env.device)
+    target_pos_b, _ = subtract_frame_transforms(robot.data.root_pos_w, robot.data.root_quat_w, env._target_pos_w)
+    return target_pos_b
+
+
+def object_reached_mirrored_goal(
+    env: ManagerBasedRLEnv,
+    threshold: float,
+    object_cfg: SceneEntityCfg,
+) -> torch.Tensor:
+    """Termination: object within threshold of env._target_pos_w - same
+    shape as isaaclab_tasks' object_reached_goal, but compares against
+    the stateful mirrored-goal buffer instead of the command manager."""
+    object: RigidObject = env.scene[object_cfg.name]
+    if not hasattr(env, "_target_pos_w"):
+        env._target_pos_w = torch.zeros(env.num_envs, 3, device=env.device)
+    distance = torch.norm(object.data.root_pos_w - env._target_pos_w, dim=-1)
+    return distance < threshold

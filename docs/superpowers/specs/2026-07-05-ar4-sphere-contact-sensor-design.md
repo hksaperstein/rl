@@ -46,29 +46,61 @@ principle).
 
 ## Design
 
-### 1. Contact sensor
+### 1. Contact sensors
 
-Add a `ContactSensorCfg` to `Ar4PickPlaceSceneCfg`
-(`tasks/ar4/pickplace_env_cfg.py`) covering both gripper jaw links in one
-sensor (mirroring the reference's `right_.*_Pad_Link` wildcard pattern):
+**Correction (found empirically during implementation, not anticipated by
+the original design below): one wildcard sensor covering both jaw links
+does not work.** A single `ContactSensorCfg` whose `prim_path` matches 2
+bodies per env (`gripper_jaw[12]_link`, 32 bodies total across 16 envs)
+cannot pair with `filter_prim_paths_expr=["{ENV_REGEX_NS}/Sphere"]`, which
+only expands to 1 match per env (16 total) — PhysX's rigid contact view
+requires the filter match count to equal the sensor body count, and fails
+at construction with `Filter pattern ... did not match the correct number
+of entries (expected 32, found 16)`. The reference this design cited
+(`place_toy2box_rmp_rel_env_cfg.py`'s single wildcard sensor) apparently
+gets away with this only because that robot has exactly one pad link per
+side matched by its wildcard, not two — so the 1:1 body-to-filter ratio
+happened to hold there by coincidence, not because a multi-body wildcard
+sensor is generally supported against a single-instance filter target.
+
+**Fix: two separate `ContactSensorCfg` entries, one per jaw link** (mirrors
+the *other* real reference this repo's research already found —
+`dexsuite/mdp/rewards.py`'s `contacts()`, which reads one
+`ContactSensor` per finger link, e.g. `thumb_link_3_object_s`,
+`index_link_3_object_s` — a working precedent for exactly this "one sensor
+per body" structure):
 
 ```python
-gripper_contact = ContactSensorCfg(
-    prim_path="{ENV_REGEX_NS}/Robot/root_joint/gripper_jaw[12]_link",
+gripper_jaw1_contact = ContactSensorCfg(
+    prim_path="{ENV_REGEX_NS}/Robot/root_joint/gripper_jaw1_link",
     update_period=0.0,  # every physics step, matching this env's other sensors
+    history_length=6,
+    debug_vis=False,
+    filter_prim_paths_expr=["{ENV_REGEX_NS}/Sphere"],
+)
+gripper_jaw2_contact = ContactSensorCfg(
+    prim_path="{ENV_REGEX_NS}/Robot/root_joint/gripper_jaw2_link",
+    update_period=0.0,
     history_length=6,
     debug_vis=False,
     filter_prim_paths_expr=["{ENV_REGEX_NS}/Sphere"],
 )
 ```
 
-Confirm the exact prim_path pattern against the real scene (the flat-
+Each sensor now matches exactly 1 body per env against exactly 1 filtered
+prim per env (16 == 16) — no count mismatch.
+
+Also confirmed empirically during implementation: the robot's spawn config
+(`tasks/ar4/robot_cfg.py`'s `AR4_MK5_CFG`) had
+`activate_contact_sensors=False`, which must be `True` for any body on the
+robot to support a `ContactSensor` at all (fails fast with a clear
+"could not find any bodies with contact reporter API" error otherwise).
+
+Prim path pattern confirmed correct against the real scene (the flat-
 sibling-under-`root_joint` convention already confirmed correct for
 `gripper_jaw1_link`/`gripper_jaw2_link` by the alignment-gate experiment's
 smoke test) and the sphere's real prim path
-(`SPHERE_CFG.prim_path = "{ENV_REGEX_NS}/Sphere"` in `objects_cfg.py`) —
-don't assume, verify via the smoke test the same way the alignment
-experiment did (a wrong path raises a clear, fast-failing error).
+(`SPHERE_CFG.prim_path = "{ENV_REGEX_NS}/Sphere"` in `objects_cfg.py`).
 
 `filter_prim_paths_expr` restricts what counts as a "contact" to the
 sphere specifically (not the table or other props) — this is the
@@ -77,29 +109,49 @@ signal rather than "is anything touching the fingers."
 
 ### 2. Reward term
 
+**Correction (also found empirically): `net_forces_w` is not filtered.**
+Per Isaac Lab's own `ContactSensorData` docstring, `net_forces_w` is "the
+sum of the normal contact forces acting on the sensor bodies" — from *any*
+contact, not restricted to `filter_prim_paths_expr`'s target. Using it
+would silently readmit exactly the failure mode this whole experiment
+exists to avoid: a jaw touching the ground plane or another prop would
+count as "grasping the sphere." The reference snippet's use of
+`net_forces_w` despite specifying a filter is either a bug in that
+reference or relies on that scene having no other possible contact source
+for the sensor body — not safe to copy blindly here, where the gripper
+jaws can plausibly touch the ground or other static props during
+exploration. **The correctly-filtered field is `force_matrix_w`**, shape
+`(num_envs, num_bodies, num_filters, 3)` — with the two-sensor fix above,
+each sensor's `force_matrix_w` has `num_bodies=1, num_filters=1`.
+
 Add a reward function (new, in `tasks/ar4/mdp.py` — this file doesn't
 currently exist since prior experiments' versions were reverted; create
-fresh) adapting `object_grasped`'s bilateral-force-threshold logic:
+fresh) adapting `object_grasped`'s bilateral-force-threshold logic, reading
+both jaw sensors:
 
 ```python
 def contact_grasp_bonus(
     env: ManagerBasedRLEnv,
     force_threshold: float,
-    contact_sensor_cfg: SceneEntityCfg,
+    jaw1_contact_cfg: SceneEntityCfg,
+    jaw2_contact_cfg: SceneEntityCfg,
 ) -> torch.Tensor:
     """Dense bonus when both gripper fingers register real contact force
-    against the sphere - a ground-truth grasp signal (ContactSensor),
-    replacing the geometric position/closure proxies every prior
-    experiment this session used (see ROADMAP.md's grasp/lift history for
-    why those failed: either reward-hackable via a loose distance check,
-    or too sparse to discover via a tight alignment check). Adapted from
-    isaaclab_tasks' manipulation/place/agibot task's object_grasped
-    pattern (net_forces_w bilateral force-threshold check).
+    against the sphere specifically - a ground-truth grasp signal
+    (ContactSensor, filtered via force_matrix_w), replacing the geometric
+    position/closure proxies every prior experiment this session used (see
+    ROADMAP.md's grasp/lift history for why those failed: either
+    reward-hackable via a loose distance check, or too sparse to discover
+    via a tight alignment check). Adapted from isaaclab_tasks'
+    manipulation/place/agibot task's object_grasped pattern (bilateral
+    force-threshold check), corrected to use the filtered force_matrix_w
+    field and one sensor per jaw (see this file's Design section for why).
     """
-    contact_sensor: ContactSensor = env.scene[contact_sensor_cfg.name]
-    net_forces = contact_sensor.data.net_forces_w  # shape depends on body_ids matched by the prim_path wildcard
-    force_norm = torch.linalg.vector_norm(net_forces, dim=-1)
-    both_fingers_contact = torch.all(force_norm > force_threshold, dim=-1)
+    jaw1_sensor: ContactSensor = env.scene[jaw1_contact_cfg.name]
+    jaw2_sensor: ContactSensor = env.scene[jaw2_contact_cfg.name]
+    jaw1_force = torch.linalg.vector_norm(jaw1_sensor.data.force_matrix_w, dim=-1).view(env.num_envs)
+    jaw2_force = torch.linalg.vector_norm(jaw2_sensor.data.force_matrix_w, dim=-1).view(env.num_envs)
+    both_fingers_contact = (jaw1_force > force_threshold) & (jaw2_force > force_threshold)
     return both_fingers_contact.float()
 ```
 

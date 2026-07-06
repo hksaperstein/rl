@@ -322,6 +322,61 @@ follow-ups below.
        alone (without the contact-sensor reward) changes anything, to
        isolate which of this run's two real changes drove the
        contact-convergence improvement.
+   - **Follow-up experiment: curriculum-gated dense lift-height reward
+     (falsified).** Acted on the recommendation above: added a new dense,
+     `tanh`-shaped `lift_height_progress` reward term
+     (`tasks/ar4/mdp.py`), inert (`weight=0.0`) during phase-1 reach+grip
+     training and switched on (`weight=15.0`) at iteration 700 via Isaac
+     Lab's own `modify_reward_weight` curriculum term (the same mechanism
+     the Franka lift task this repo's rewards were adapted from uses for
+     its own curriculum) — timed to this run's own TensorBoard data, where
+     `grasp_contact` plateaus by iteration ~600-750. Full design in
+     `docs/superpowers/specs/2026-07-06-ar4-sphere-lift-curriculum-design.md`,
+     plan in
+     `docs/superpowers/plans/2026-07-06-ar4-sphere-lift-curriculum-implementation.md`,
+     full run data in
+     `docs/superpowers/plans/2026-07-06-ar4-sphere-lift-curriculum-report.md`.
+     - **The curriculum mechanism itself fired exactly as designed**
+       (`lift_height_progress` reads `0.0` at iteration 699, nonzero at
+       701 — confirmed directly from the TensorBoard scalars, not just
+       assumed from config). But its real-world magnitude was negligible:
+       max `0.0065` over the entire run, corresponding to roughly
+       **0.065mm** of real height gain (via `tanh`'s small-angle
+       behavior) — many orders of magnitude short of the 21mm
+       `lifting_sphere` actually requires. `lifting_sphere` itself never
+       moved off `0.0000` at any point, including after the switch.
+     - **Real eval (10 episodes, frame-extracted video, all 10 inspected
+       directly): 0/10 show any real lift** — the same "reach, grip,
+       freeze" static-pose signature as the ContactSensor experiment
+       before it. Two episodes showed the sphere briefly vanish from a
+       single sampled frame each; checking adjacent frames in the same
+       episodes confirmed the sphere reappearing at the identical
+       ground-level position next to the gripper in both cases — a
+       viewing-angle occlusion artifact (the gripper body blocking
+       line-of-sight at that specific pose), not a lift, consistent with
+       the negligible quantitative height-gain figure above.
+     - **Interpretation:** the curriculum window opened too late and/or
+       too weak relative to how deeply the static-grip behavior had
+       already converged by iteration 700 (`grasp_contact` was already at
+       ~17.8/20, essentially its plateau, at the switch point) — the
+       remaining ~800 iterations were not enough for a newly-introduced
+       `weight=15.0` dense term to meaningfully perturb a policy that
+       stable. This rules out "the sparse `lifting_sphere` signal was the
+       only problem" as a complete explanation; the entrenchment of the
+       static-grip optimum itself is now the more likely bottleneck.
+     - **Not attempting a further reward-only tweak unilaterally** — per
+       the design doc's own instruction, flagged back to the user.
+       Remaining candidates, none yet tried: a genuine hierarchical
+       reach-then-grasp-policy split (train lift as a separate policy
+       phase, or freeze the reach+grip policy and fine-tune only for
+       lift, rather than a single policy learning both simultaneously);
+       an earlier and/or much stronger curriculum switch (before the
+       static-grip optimum entrenches so deeply, e.g. iteration 200-300
+       instead of 700); or questioning whether the gripper's real
+       closed-jaw force is physically sufficient to support lifting this
+       0.01kg sphere at all — a physical-plausibility question this
+       session has not yet directly measured, distinct from every reward-
+       design question tried so far.
 2. Shape classifier misclassifies cube/rectangular-prism as "sphere" against
    real depth data. Root-caused: `PLANARITY_RESIDUAL_THRESHOLD` (tuned on
    near-noiseless synthetic data) doesn't generalize to real sensor noise.

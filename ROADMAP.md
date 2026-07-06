@@ -175,6 +175,44 @@ follow-ups below.
        arXiv:2206.13966, verbatim-confirmed progressive-tolerance-
        tightening pattern). This decision point was flagged back to the
        user rather than attempting a fourth reward tweak unilaterally.
+   - **Follow-up experiment: gripper PD-gain rescale (falsified, not a
+     reward-shaping attempt this time).** Per user push to keep researching
+     rather than only iterate on reward heuristics: literature research
+     (junior + independent senior citation review — all 11 citations real
+     this round, no fabrications, a first this session — but the headline
+     recommendation was found overstated: the cited paper's own three-way
+     split says stiff/overdamped gains mainly harm *sim-to-real transfer*,
+     not pure in-sim PPO convergence, which is all this repo does; the
+     specific rescaled-gain target numbers were the junior's own
+     extrapolation, not literature-backed. Full docs in
+     `docs/superpowers/specs/research/2026-07-05-grasp-scale-literature-*.md`)
+     surfaced a real, concrete comparison: this repo's reward weights are
+     already an exact, verified copy of Isaac Lab's own shipped, working
+     Franka+DexCube lift example (same functions/weights, same
+     `BinaryJointPositionActionCfg` gripper action) — the one dramatic
+     difference is physical scale (AR4's gripper: 2.8cm aperture grasping an
+     18mm sphere, vs. Franka's 8cm aperture and ~4.1cm cube, each roughly
+     2.3-2.85x smaller). Hypothesis tested empirically regardless of the
+     weak citation backing (worth a cheap test either way): rescaled the
+     gripper actuator's PD gains (`tasks/ar4/robot_cfg.py`,
+     stiffness 1000.0→350.0, damping 50.0→30.0, preserving the original
+     damping ratio under the softer stiffness — derivation in the reverted
+     commit's diff) against the *unmodified baseline reward* (no grasp bonus
+     of any kind), to isolate gains as the single variable. Result:
+     **no change — a fourth falsified hypothesis.** Full 1500-iteration run:
+     `lifting_sphere` never moved off 0.0000 (max 0.0002, pure noise, same
+     as every prior run); `reaching_sphere` converged to ~0.94 (comparable
+     to, slightly above, prior runs). Eval video (10 episodes) showed the
+     same static gripper-near-sphere pose with no lift, matching this
+     session's already-documented failure signatures rather than anything
+     new. Reverted (no evidence of benefit, and unlike the reward-weight
+     no-op precedent, an unverified physical-parameter change isn't worth
+     carrying forward without a demonstrated reason). This result is
+     actually consistent with the senior review's own correction: the
+     underlying paper's claim was about sim-to-real gain transfer, not
+     in-sim convergence, so a null result here doesn't contradict the
+     literature - it just confirms gains weren't the right axis for this
+     specific (already in-sim) problem.
 2. Shape classifier misclassifies cube/rectangular-prism as "sphere" against
    real depth data. Root-caused: `PLANARITY_RESIDUAL_THRESHOLD` (tuned on
    near-noiseless synthetic data) doesn't generalize to real sensor noise.

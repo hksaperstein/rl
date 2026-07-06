@@ -204,9 +204,17 @@ class RewardsCfg:
         },
     )
 
+    # weight is POSITIVE, not negative: stillness_penalty's own return value
+    # is already the signed penalty (-1.0 when triggered, 0.0 otherwise).
+    # RewardManager.compute() multiplies func(...) * weight * dt
+    # (reward_manager.py:149) - a negative weight here would multiply two
+    # negatives into a POSITIVE reward for the exact stay-still-after-grasp
+    # behavior this term exists to punish. Confirmed as a real bug via a
+    # completed training run: Episode_Reward/stillness_penalty grew to
+    # +1.3 (should be <= 0 always). See ROADMAP.md.
     stillness_penalty = RewTerm(
         func=ar4_mdp.stillness_penalty,
-        weight=-2.0,
+        weight=2.0,
         params={
             "object_cfg": SceneEntityCfg("sphere"),
             "jaw1_contact_cfg": SceneEntityCfg("gripper_jaw1_contact"),

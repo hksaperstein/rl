@@ -115,3 +115,57 @@ specific numbers. Do not cite arXiv:2509.14816, arXiv:2403.00282, or the
 "2-3x safety factor" claim as literature evidence in any future record;
 the Ng/Harada/Russell 1999 potential-based-shaping citation can be trusted
 at face value.
+
+## Addendum: junior researcher self-corrected after this review, then added two new citations
+
+Independently of this review, the junior researcher re-did its own pass
+(Scholar-first, per a mid-task instruction) and **arrived at the same
+corrections this review made**: struck the false "gradient conflict"
+specificity from arXiv:2509.14816/2403.00282 (downgraded Q1 to explicit
+"WEAK/PARTIAL, no paper names this exact pattern"), and struck the
+unverifiable "2-3x safety factor" claim from arXiv:1607.06620. Good
+convergent signal — two independent passes reached the same verdict on
+the same weak points.
+
+The revision also **added two new citations not covered above**, which
+the Principal verified directly via `WebFetch`/`WebSearch` before
+trusting them, given this session's track record:
+
+- **arXiv:2207.12552** ("Peduncle Gripping and Cutting Force for
+  Strawberry Harvesting Robotic End-effector Design") — **confirmed real
+  and accurately characterized.** Fetched directly: grip force "limited
+  to 10 N" for a strawberry "of mass up to 50 grams" at "manipulation
+  acceleration of 50 m/s²" — matches the report's paraphrase exactly.
+  This replaces the struck safety-factor claim with a real, checkable
+  empirical comparison: a published gripper handles 5x this sphere's mass
+  at high acceleration on roughly a third of this repo's own measured
+  20-30N contact force, supporting (not proving) that grip force isn't
+  the bottleneck.
+- **Li et al., *Sensors* 2025, 25(17):5253 (DOI 10.3390/s25175253),
+  "Improved PPO Optimization for Robotic Arm Grasping Trajectory Planning
+  and Real-Robot Migration"** — **confirmed real** (verified via search
+  cross-referencing MDPI/PMC/ResearchGate listings; direct MDPI fetch was
+  blocked, HTTP 403). This is a genuinely on-point citation: a
+  grasping-trajectory-planning PPO paper that explicitly names "local
+  optimum traps" as a problem it solves, via a simulated-annealing+PPO
+  hybrid (SA-PPO) with a dynamically-adjusted learning rate, reporting a
+  98% vs. 92% success-rate improvement over baseline PPO with real-robot
+  (AUBO-i5) validation. This is the strongest, most directly-applicable
+  citation across the entire report — real, on-topic, and specific to
+  the exact failure category (PPO local-optimum entrenchment in robotic
+  grasping).
+
+**Revised bottom line:** the final version of the junior report is
+materially more trustworthy than what this review originally assessed.
+Q1 (reward conflict) remains correctly downgraded to an untested
+engineering hypothesis. Q2 (potential-based shaping) is unchanged and
+solid. Q3 (premature convergence) is now **well-supported** by a genuine
+manipulation-specific citation (Li et al. 2025) in addition to the
+general entropy-collapse literature. Q4 (grip force) now rests on a real,
+verified empirical comparison rather than a fabricated safety factor. The
+revised priority order — (1) multiplicative gating as an untested
+hypothesis, (2) SA-PPO-style dynamic learning-rate scaling once
+`grasp_contact` saturates, (3) potential-based reward shaping, (4)
+gradient-conflict-resolution/trajectory-buffer regularization as a
+last-resort, higher-overhead option — is a reasonable synthesis of what
+actually survived verification.

@@ -188,13 +188,19 @@ def _discard_non_body_closed_debris(die_obj):
     alone), so no exported asset ever contains stray un-subtracted cutter
     geometry. This can leave a single numeral missing from one face in the
     rare worst case, which is a far smaller defect than shipping floating
-    garbage polygons in training data, and it is surfaced via a printed
-    warning rather than silently swallowed.
+    garbage polygons in training data.
+
+    Returns the warning message (also printed, as before) if debris was
+    found and discarded, or None if the die was already clean -- callers
+    (apply_engraved_glyphs) collect this into the asset's manifest record so
+    a batch-level validation pass can flag it without depending on anyone
+    reading the console output of the Blender generation run.
     """
     bm = bmesh.new()
     bm.from_mesh(die_obj.data)
     components = _connected_components(bm)
 
+    warning = None
     if components:
         body = max(components, key=lambda c: c["bbox_diag_sq"])
         debris = [c for c in components if c is not body and not c["has_boundary"]]
@@ -205,16 +211,18 @@ def _discard_non_body_closed_debris(die_obj):
                 bmesh.ops.delete(bm, geom=extra["faces"], context='FACES')
             bm.to_mesh(die_obj.data)
             die_obj.data.update()
-            print(
-                f"WARNING: {die_obj.name}: {len(debris)} un-subtracted "
-                f"closed debris shell(s) ({debris_face_count} faces total) "
-                f"survived every per-cut EXACT->FLOAT retry and were "
-                f"discarded at the end of the cut loop to keep the shipped "
-                f"asset clean; this likely means at least one numeral/pip "
-                f"cut failed to engrave on this die."
+            warning = (
+                f"{die_obj.name}: {len(debris)} un-subtracted closed debris "
+                f"shell(s) ({debris_face_count} faces total) survived every "
+                f"per-cut EXACT->FLOAT retry and were discarded at the end "
+                f"of the cut loop to keep the shipped asset clean; this "
+                f"likely means at least one numeral/pip cut failed to "
+                f"engrave on this die."
             )
+            print(f"WARNING: {warning}")
 
     bm.free()
+    return warning
 
 
 def _boolean_diff_apply(die_obj, cutter_obj):
@@ -325,6 +333,11 @@ def _boolean_diff_apply(die_obj, cutter_obj):
     any check below, and a future fix needs a way to validate a cut's effect
     that doesn't depend on trusting an isolated cutter mesh's own volume
     sign.
+
+    Returns None if the cut succeeded (on EXACT or after a FLOAT retry), or
+    the warning message (also printed, as before) if both solvers failed and
+    the cut was skipped -- collected by apply_engraved_glyphs into the
+    asset's manifest record.
     """
     bm_before = bmesh.new()
     bm_before.from_mesh(die_obj.data)
@@ -353,6 +366,8 @@ def _boolean_diff_apply(die_obj, cutter_obj):
 
     bad = _apply_and_measure('EXACT')
 
+    warning = None
+
     if bad:
         bm_before.to_mesh(die_obj.data)
         die_obj.data.update()
@@ -367,20 +382,23 @@ def _boolean_diff_apply(die_obj, cutter_obj):
             # already accepts for the debris case.
             bm_before.to_mesh(die_obj.data)
             die_obj.data.update()
-            print(
-                f"WARNING: {die_obj.name}: a glyph cut was skipped entirely "
-                f"-- both EXACT and FLOAT solvers produced a collapsed or "
+            warning = (
+                f"{die_obj.name}: a glyph cut was skipped entirely -- both "
+                f"EXACT and FLOAT solvers produced a collapsed or "
                 f"debris-laden result for this cutter; this die is missing "
                 f"one numeral/pip as a result."
             )
+            print(f"WARNING: {warning}")
 
     bm_before.free()
     bpy.data.objects.remove(cutter_obj, do_unlink=True)
+    return warning
 
 
 def apply_engraved_glyphs(die_obj, die_type, assignment, glyph_style, glyph_fill, font_id, size_mm):
     depth = size_mm * ENGRAVE_DEPTH_FRACTION
     glyph_font_size = size_mm * 0.18
+    warnings = []
 
     # Phase 1: compute every cut's (value, orientation) against the PRISTINE
     # mesh, entirely before any boolean modifier is applied. Each
@@ -404,7 +422,9 @@ def apply_engraved_glyphs(die_obj, die_type, assignment, glyph_style, glyph_fill
                 pip.location = orient @ Vector(
                     (ox * size_mm * 0.4, oy * size_mm * 0.4, -depth * 0.5)
                 )
-                _boolean_diff_apply(die_obj, pip)
+                cut_warning = _boolean_diff_apply(die_obj, pip)
+                if cut_warning is not None:
+                    warnings.append(cut_warning)
         else:
             label = glyph_label(value, glyph_style)
             bpy.ops.object.text_add()
@@ -418,16 +438,22 @@ def apply_engraved_glyphs(die_obj, die_type, assignment, glyph_style, glyph_fill
             bpy.ops.object.convert(target='MESH')
             _weld_cutter_mesh(txt_obj)
             txt_obj.matrix_world = orient @ Matrix.Translation((0, 0, -depth))
-            _boolean_diff_apply(die_obj, txt_obj)
+            cut_warning = _boolean_diff_apply(die_obj, txt_obj)
+            if cut_warning is not None:
+                warnings.append(cut_warning)
 
     # Final backstop, run once after every cut has had its own per-cut retry
     # chance: discard any un-subtracted closed debris shell still left over
     # (see _discard_non_body_closed_debris) so the shipped die is guaranteed
     # free of stray cutter geometry.
-    _discard_non_body_closed_debris(die_obj)
+    debris_warning = _discard_non_body_closed_debris(die_obj)
+    if debris_warning is not None:
+        warnings.append(debris_warning)
 
     if glyph_fill == "painted":
         _assign_fill_material_to_recessed_faces(die_obj)
+
+    return warnings
 
 
 def _assign_fill_material_to_recessed_faces(die_obj):

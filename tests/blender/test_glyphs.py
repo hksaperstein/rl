@@ -605,6 +605,183 @@ def test_engraved_arabic_numerals_d4_does_not_leave_undetected_debris():
     bpy.data.objects.remove(obj, do_unlink=True)
 
 
+def test_apply_engraved_glyphs_returns_empty_list_for_clean_die():
+    """
+    Contract test for the manifest-warning-surfacing feature: a die that
+    engraves cleanly (the common case -- see the ~1.8% baseline warning
+    rate noted in _boolean_diff_apply's docstring) must return an empty
+    list from apply_engraved_glyphs, not None and not a list with entries,
+    so orchestrator.py can write `engraving_warnings: []` straight into a
+    clean asset's manifest record.
+    """
+    import bpy
+    from dice_gen import geometry, numbering, glyphs
+
+    die_type = "d6"
+    obj = geometry.build_die_base_mesh(die_type, size_mm=16.0)
+    pairs = geometry.compute_opposite_face_pairs(obj)
+    assignment = numbering.assign_values_to_opposite_pairs(die_type, pairs)
+
+    warnings = glyphs.apply_engraved_glyphs(
+        obj, die_type, assignment,
+        glyph_style="arabic_numerals", glyph_fill="blank",
+        font_id="font_sans_bold", size_mm=16.0,
+    )
+
+    assert warnings == [], f"expected no warnings for a clean d6 engrave, got {warnings}"
+
+    bpy.data.objects.remove(obj, do_unlink=True)
+
+
+def test_apply_engraved_glyphs_aggregates_forced_cut_warnings():
+    """
+    Verifies apply_engraved_glyphs actually collects and returns whatever
+    _boolean_diff_apply reports, in order, rather than swallowing it.
+    Forces every cut to report a warning (via a monkeypatched
+    _boolean_diff_apply, the same spy technique already used by
+    test_engraved_glyphs_use_pristine_face_orientations_not_reindexed_mid_loop)
+    so the aggregation logic is exercised deterministically, independent of
+    whether any real Blender boolean happens to fail on this run.
+    """
+    import bpy
+    from dice_gen import geometry, numbering, glyphs
+
+    die_type = "d6"
+    obj = geometry.build_die_base_mesh(die_type, size_mm=16.0)
+    pairs = geometry.compute_opposite_face_pairs(obj)
+    assignment = numbering.assign_values_to_opposite_pairs(die_type, pairs)
+    assert len(assignment) == 6, "d6 should have 6 faces assigned"
+
+    real_boolean_apply_fn = glyphs._boolean_diff_apply
+    call_count = [0]
+
+    def fake_boolean_apply(die_obj_arg, cutter_obj):
+        call_count[0] += 1
+        bpy.data.objects.remove(cutter_obj, do_unlink=True)
+        return f"forced test warning #{call_count[0]}"
+
+    glyphs._boolean_diff_apply = fake_boolean_apply
+    try:
+        warnings = glyphs.apply_engraved_glyphs(
+            obj, die_type, assignment,
+            glyph_style="arabic_numerals", glyph_fill="blank",
+            font_id="font_sans_bold", size_mm=16.0,
+        )
+    finally:
+        glyphs._boolean_diff_apply = real_boolean_apply_fn
+
+    assert len(warnings) == 6, f"expected one forced warning per face cut, got {warnings}"
+    assert warnings == [f"forced test warning #{i}" for i in range(1, 7)], warnings
+
+    bpy.data.objects.remove(obj, do_unlink=True)
+
+
+def test_boolean_diff_apply_returns_warning_when_both_solvers_fail():
+    """
+    Directly exercises _boolean_diff_apply's "both EXACT and FLOAT produced
+    a collapsed or debris-laden result" branch, which used to only print a
+    WARNING and now must also return that message. Forces the branch
+    deterministically by monkeypatching _non_body_closed_component_count
+    (called inside _boolean_diff_apply's local _apply_and_measure) to always
+    report more debris than before the cut, regardless of what the real cut
+    did -- this makes both the EXACT and FLOAT attempts look "bad" without
+    depending on finding a genuinely pathological glyph/size combination.
+    """
+    import bpy
+    from dice_gen import geometry, glyphs
+
+    die_type = "d6"
+    obj = geometry.build_die_base_mesh(die_type, size_mm=16.0)
+
+    import bmesh
+    bm_pristine = bmesh.new()
+    bm_pristine.from_mesh(obj.data)
+    volume_pristine = bm_pristine.calc_volume()
+    faces_pristine = len(bm_pristine.faces)
+    bm_pristine.free()
+
+    bpy.ops.mesh.primitive_uv_sphere_add(radius=16.0 * 0.05)
+    cutter = bpy.context.active_object
+    cutter.location = (0, 0, 0)
+
+    real_component_count_fn = glyphs._non_body_closed_component_count
+    call_count = [0]
+    def fake_component_count(bm):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            return 0  # First call: pristine die has no debris
+        else:
+            return 999  # Subsequent calls: force debris to appear
+
+    glyphs._non_body_closed_component_count = fake_component_count
+    try:
+        warning = glyphs._boolean_diff_apply(obj, cutter)
+    finally:
+        glyphs._non_body_closed_component_count = real_component_count_fn
+
+    assert warning is not None, "expected a warning string when both solvers look bad"
+    assert obj.name in warning
+
+    bm_after = bmesh.new()
+    bm_after.from_mesh(obj.data)
+    volume_after = bm_after.calc_volume()
+    faces_after = len(bm_after.faces)
+    bm_after.free()
+
+    assert faces_after == faces_pristine, (
+        "a skipped cut must leave the die's mesh exactly as it was before "
+        "the cut was attempted"
+    )
+    assert abs(volume_after - volume_pristine) < 1e-6
+
+    bpy.data.objects.remove(obj, do_unlink=True)
+
+
+def test_discard_non_body_closed_debris_returns_warning_for_manual_debris():
+    """
+    Directly exercises _discard_non_body_closed_debris's "found un-subtracted
+    debris" branch by manually constructing a die mesh with an artificial
+    disconnected closed shell, rather than depending on a genuine boolean
+    failure to produce one. A small closed cube, disjoint from the die
+    body, is exactly what real un-subtracted cutter debris looks like to
+    this function (see _connected_components' bbox_diag_sq discussion).
+    """
+    import bpy
+    import bmesh
+    from mathutils import Vector
+    from dice_gen import geometry, glyphs
+
+    die_type = "d6"
+    obj = geometry.build_die_base_mesh(die_type, size_mm=16.0)
+
+    bm = bmesh.new()
+    bm.from_mesh(obj.data)
+    faces_before = len(bm.faces)
+    debris_verts = bmesh.ops.create_cube(bm, size=1.0)["verts"]
+    for v in debris_verts:
+        v.co += Vector((100, 100, 100))  # place far from the die body, fully disjoint
+    bm.to_mesh(obj.data)
+    obj.data.update()
+    bm.free()
+
+    warning = glyphs._discard_non_body_closed_debris(obj)
+
+    assert warning is not None, "expected a warning string when debris is present"
+    assert obj.name in warning
+
+    bm2 = bmesh.new()
+    bm2.from_mesh(obj.data)
+    faces_after = len(bm2.faces)
+    bm2.free()
+
+    assert faces_after == faces_before, (
+        "the manually added debris cube should have been discarded, leaving "
+        "the die's original face count"
+    )
+
+    bpy.data.objects.remove(obj, do_unlink=True)
+
+
 def test_decal_glyphs_survive_usd_export_roundtrip_without_black_faces():
     """
     Regression test for the export-loss bug fixed alongside commit 5bc3361's
@@ -863,6 +1040,10 @@ def run():
     test_engraved_greek_numerals_d10_does_not_collapse_from_exact_solver_on_alpha_cut()
     test_engraved_arabic_numerals_d20_does_not_silently_noop_from_exact_solver()
     test_engraved_arabic_numerals_d4_does_not_leave_undetected_debris()
+    test_apply_engraved_glyphs_returns_empty_list_for_clean_die()
+    test_apply_engraved_glyphs_aggregates_forced_cut_warnings()
+    test_boolean_diff_apply_returns_warning_when_both_solvers_fail()
+    test_discard_non_body_closed_debris_returns_warning_for_manual_debris()
 
 
 run_and_report(run)

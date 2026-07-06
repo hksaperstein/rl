@@ -14,7 +14,7 @@ import torch
 
 from isaaclab.controllers import DifferentialIKController, DifferentialIKControllerCfg
 from isaaclab.managers import SceneEntityCfg
-from isaaclab.utils.math import combine_frame_transforms, sample_uniform, subtract_frame_transforms
+from isaaclab.utils.math import combine_frame_transforms, quat_apply, sample_uniform, subtract_frame_transforms
 
 if TYPE_CHECKING:
     from isaaclab.assets import Articulation, RigidObject
@@ -410,6 +410,7 @@ def ik_guided_path_bonus(
     proximity_std: float,
     advance_tolerance: float,
     ik_joint_std: float,
+    gripper_tool_offset: tuple[float, float, float],
 ) -> torch.Tensor:
     """Undiscounted running-max bonus (same corrected pattern as
     staged_milestone_bonus - see that function's docstring for the decay
@@ -475,7 +476,21 @@ def ik_guided_path_bonus(
     )
     joint_pos = robot.data.joint_pos[:, env._ik_robot_entity_cfg.joint_ids]
 
-    waypoint_command_b, _ = subtract_frame_transforms(root_pose_w[:, 0:3], root_pose_w[:, 3:7], current_waypoint)
+    # The waypoint is defined for the gripper's pinch point (ee_frame's
+    # target_pos_w - link_6 offset by gripper_tool_offset along its own
+    # local +Z, see _EE_OFFSET in pickplace_env_cfg.py), but the IK
+    # controller/Jacobian operate on the raw link_6 body. Subtract the
+    # offset (rotated into world frame by link_6's current world
+    # orientation) from the waypoint before commanding IK, so the
+    # suggested joint target places the PINCH POINT - not link_6 itself -
+    # at the waypoint. Without this, IK's suggested target is
+    # systematically off by the offset's magnitude (3.6cm, larger than
+    # advance_tolerance), so the IK-match sub-signal could never reach
+    # its maximum even at the objectively correct grasp pose.
+    offset_vec = torch.tensor(gripper_tool_offset, device=env.device).expand(env.num_envs, 3)
+    offset_w = quat_apply(ee_pose_w[:, 3:7], offset_vec)
+    ik_target_w = current_waypoint - offset_w
+    waypoint_command_b, _ = subtract_frame_transforms(root_pose_w[:, 0:3], root_pose_w[:, 3:7], ik_target_w)
     env._ik_controller.set_command(waypoint_command_b, ee_pos=ee_pos_b, ee_quat=ee_quat_b)
     joint_pos_des = env._ik_controller.compute(ee_pos_b, ee_quat_b, jacobian, joint_pos)
 

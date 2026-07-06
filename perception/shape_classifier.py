@@ -16,6 +16,17 @@ from scipy.spatial import ConvexHull, QhullError
 # sphere 9mm radius. See the design doc's "Approaches considered" section -
 # revisit these if real camera noise proves them too tight/loose.
 HEIGHT_THRESHOLD = 0.024  # m, midpoint between the cube (0.018m) and prism (0.030m) heights
+# Reverted to the original 0.0008 after an empirical recalibration attempt
+# (scripts/measure_planarity_residual.py,
+# docs/superpowers/plans/2026-07-05-perception-threshold-recalibration-report.md)
+# proved no single threshold value can work: the real camera has ~zero sensor
+# noise, but off-center objects' segmented clusters include a genuine sliver of
+# oblique-visible side wall that inflates the plane-fit residual - and at this
+# camera's real object layout, the cube's own residual (~0.0029m) exceeds the
+# sphere's own residual (~0.0021m), so raising the threshold to fix the cube
+# only creates a new sphere-misclassification regression (measured 2/4 -> 1/4
+# objects correct). The real fix is upstream (exclude side-wall points before
+# the plane fit, not retune this constant) - see ROADMAP.md item 2.
 PLANARITY_RESIDUAL_THRESHOLD = 0.0008  # m, above this the top surface reads as curved, not flat
 TILT_THRESHOLD_RAD = np.radians(15.0)  # above this a flat surface reads as a slanted (wedge) face
 CIRCULARITY_THRESHOLD = 0.7  # footprint roundness (1.0 = circle) above which a curved cap reads as a sphere

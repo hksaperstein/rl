@@ -224,8 +224,40 @@ follow-ups below.
        arXiv:2011.13244) but is a bigger architecture change (new camera)
        than this bug fix needs - noted as a future direction, not part of
        this fix.
-     - Not yet implemented - Phase 1 (empirical threshold recalibration) is
-       immediately actionable and is the next step.
+     - **Phase 1 attempted, falsified — real root cause found, is NOT sensor
+       noise.** Empirically measured the real camera's planarity-residual
+       distribution (`scripts/measure_planarity_residual.py`): the render is
+       almost perfectly noise-free (~30nm dead-center), but at the objects'
+       real off-center scene positions (~20cm to the side of the top-down
+       camera), the segmented cluster genuinely includes a sliver of the
+       object's *oblique-visible side wall* — real 3D geometry, not noise.
+       This inflates the cube's own residual (0.00293m) *above* the sphere's
+       own residual (0.00210m) at their real positions — an ordering
+       inversion meaning **no single `PLANARITY_RESIDUAL_THRESHOLD` value can
+       classify both correctly**. Recalibrating to the measured mean+3σ
+       (0.0045m) was tried and reverted: it measurably made real end-to-end
+       classification worse (2/4 → 1/4 objects correct — cube/rect_prism
+       stayed wrong, and the previously-correct sphere newly broke).
+       `PLANARITY_RESIDUAL_THRESHOLD` is back at `0.0008`; full data in
+       `docs/superpowers/plans/2026-07-05-perception-threshold-recalibration-report.md`.
+       Real fix identified (implementation in progress): filter each
+       cluster's point cloud to a top height-band before the SVD plane fit,
+       excluding the contaminating side-wall points at the source rather
+       than retuning a downstream threshold.
+     - **LiDAR empirically tried, confirms RGB-D conclusion more decisively
+       than the literature review alone.** Per direct user request, added an
+       experimental base-mounted LiDAR (`RayCasterCfg` + `LidarPatternCfg`,
+       16-channel, tried and then reverted — code didn't solve anything, kept
+       only as a documented negative result:
+       `docs/superpowers/plans/2026-07-05-ar4-base-lidar-report.md`).
+       Finding: this Isaac Lab installation's `RayCaster` only ray-casts
+       against **one static mesh** (enforced in code) — it is architecturally
+       blind to the dynamic cube/sphere/rect_prism/wedge entirely, seeing
+       only the ground plane, regardless of resolution. Separately, even
+       ignoring that limitation, measured angular resolution in the
+       workspace-relevant channels (~7mm at 0.3m range) is comparable to the
+       18mm sphere — too coarse either way. Confirms: stick with RGB-D, no
+       further LiDAR investigation planned.
 3. `interactive_demo.py` live GUI drag verification (plan Task 10, Step 4)
    was never performed — needs a human running it without `--headless` to
    confirm the physical drag → settle → pick-and-place → idle-again flow.

@@ -381,6 +381,79 @@ follow-ups below.
        0.01kg sphere at all — a physical-plausibility question this
        session has not yet directly measured, distinct from every reward-
        design question tried so far.
+   - **Follow-up experiment: always-on dense lift-height reward
+     (falsified) — rules out curriculum timing, points at PPO entropy
+     collapse.** Per user request, removed the curriculum gate entirely:
+     `lift_height_progress` active from iteration 0 at `weight=25.0`
+     (matching `lifting_sphere`), per
+     `docs/superpowers/specs/2026-07-06-ar4-sphere-lift-curriculum-design.md`'s
+     "Revision" section. Plan in
+     `docs/superpowers/plans/2026-07-06-ar4-sphere-lift-always-on-implementation.md`,
+     full run data in
+     `docs/superpowers/plans/2026-07-06-ar4-sphere-lift-always-on-report.md`.
+     - **Result: 0/10 real eval episodes show any lift** — the same
+       "reach, grip, freeze" static-pose signature as both prior
+       experiments (curriculum-gated and sparse-only). `lift_height_progress`
+       did reach a measurably larger real value than the curriculum
+       experiment (~0.0141mm of real height gain vs. ~0.0043mm,
+       weight-normalized — a genuine ~3.3x increase, not the 5.4x a raw,
+       non-weight-normalized comparison first suggested), with an early-
+       training bump that faded as `grasp_contact` converged — but both
+       figures remain many orders of magnitude short of the 21mm
+       `lifting_sphere` requires, and `lifting_sphere` itself never moved.
+       This rules out "the curriculum switch came too late" as the sole
+       explanation, since removing the gate entirely produced the same
+       outcome.
+     - **Citation-verified literature research** (junior researcher,
+       Google-Scholar-first per user preference, then independent senior
+       citation review — full docs in
+       `docs/superpowers/specs/research/2026-07-06-lift-reward-literature-junior.md`
+       and `-senior-review.md`). The junior's first pass overstated
+       several claims (citing two real-but-off-topic multi-objective-RL
+       papers as if they specifically documented a "grasp-reward-vs-lift-
+       motion conflict," and a fabricated "2-3x safety factor" number)
+       — caught independently by both the senior review and the junior's
+       own Google-Scholar-first re-pass (convergent signal). What
+       survived verification:
+       - **The likely mechanism is PPO entropy collapse**, not a specific
+         grasp/lift reward conflict: once a safe, reward-sufficient
+         behavior is found, policy entropy drops and exploration of
+         riskier alternatives (like lifting) effectively stops, even with
+         a dense term nudging toward it. A genuinely on-point, verified
+         citation: Li et al., *Sensors* 2025, 25(17):5253 (DOI
+         10.3390/s25175253), a robotic-arm-grasping PPO paper explicitly
+         targeting "local optimum traps" via a simulated-annealing+PPO
+         hybrid (SA-PPO) with a dynamically-adjusted learning rate,
+         reporting 92%→98% success rate over baseline PPO with real-robot
+         validation — the strongest, most directly-applicable citation
+         found this session.
+       - **Potential-based reward shaping** (Ng, Harada, Russell, ICML
+         1999, "Policy Invariance Under Reward Transformations") is real,
+         verbatim-confirmed, and offers a genuine theoretical guarantee:
+         decomposing reach→grasp→lift as a potential-function chain
+         doesn't change what the optimal policy is, unlike the ad-hoc
+         curriculum-timing approach already tried twice.
+       - **Grip force is very likely not the bottleneck** — not proven by
+         the (struck) fabricated safety-factor citation, but independently
+         supported by this repo's own measured contact force (~20-30N
+         against the sphere's 0.098N weight, from the ContactSensor
+         experiment's calibration) and a real, verified comparison (a
+         published strawberry-harvesting end-effector, arXiv:2207.12552,
+         safely lifts a 5x-heavier object at high acceleration on roughly
+         a third of this repo's measured force).
+       - **The "multiplicative gating" idea** (only reward lift progress
+         while contact is maintained) remains an untested engineering
+         hypothesis, not a literature-validated fix — the citations
+         originally used to back it didn't hold up under verification.
+     - **Not attempting a fourth reward-only tweak unilaterally** — this
+       is the third real attempt on the reward/curriculum axis for this
+       specific sub-problem (sparse-only, curriculum-gated dense,
+       always-on dense). Flagged back to the user with two real,
+       literature-backed candidates not yet tried (SA-PPO-style dynamic
+       learning-rate adjustment once `grasp_contact` saturates;
+       potential-based reward shaping), alongside the previously-named
+       architectural options (hierarchical reach-then-grasp-policy
+       split).
 2. Shape classifier misclassifies cube/rectangular-prism as "sphere" against
    real depth data. Root-caused: `PLANARITY_RESIDUAL_THRESHOLD` (tuned on
    near-noiseless synthetic data) doesn't generalize to real sensor noise.

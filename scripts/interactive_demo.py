@@ -1,17 +1,17 @@
 # scripts/interactive_demo.py
-"""Interactive AR4 pick-and-place demo: drag the cube anywhere in the Isaac Sim
+"""Interactive AR4 pick-and-place demo: drag the sphere anywhere in the Isaac Sim
 GUI viewport (native drag gizmo), and once it settles the trained policy picks
 it up and places it in the fixed target region on the other side - using the
 real camera-based perception pipeline the whole time, exactly as
 eval_loop.py --perception does at inference time.
 
-An out-of-view or out-of-the-workspace cube position never triggers an
+An out-of-view or out-of-the-workspace sphere position never triggers an
 attempt - the arm just keeps watching and waiting.
 
 A single "armed" flag guards each trigger: once a pick-and-place attempt
-fires, the demo disarms itself so the cube sitting still at the goal
+fires, the demo disarms itself so the sphere sitting still at the goal
 position right after placement can't immediately re-trigger another
-attempt. It only re-arms once the cube is observed to have changed state
+attempt. It only re-arms once the sphere is observed to have changed state
 (dragged away, gone stale/out of view, or moved past the stability
 tolerance) - i.e. real evidence of a fresh human drag.
 
@@ -30,7 +30,7 @@ from isaaclab.app import AppLauncher
 parser = argparse.ArgumentParser(description="Run the interactive AR4 pick-and-place demo.")
 parser.add_argument("--checkpoint", type=str, required=True, help="Path to the rsl_rl checkpoint (.pt) to load.")
 parser.add_argument(
-    "--stable_seconds", type=float, default=1.0, help="How long the cube must stay put before the robot acts."
+    "--stable_seconds", type=float, default=1.0, help="How long the sphere must stay put before the robot acts."
 )
 parser.add_argument("--stable_tolerance", type=float, default=0.005, help="Max drift (m) still considered 'stable'.")
 AppLauncher.add_app_launcher_args(parser)
@@ -57,9 +57,9 @@ from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from _perception_adapter import cube_position_obs_slice, perceive_cube  # noqa: E402
+from _perception_adapter import perceive_sphere, sphere_position_obs_slice  # noqa: E402
 from perception.overlay import draw_detections  # noqa: E402
-from perception.tracker import ObjectTracker  # noqa: E402
+from perception.tracker import ObjectTracker, find_by_shape  # noqa: E402
 from tasks.ar4.agents.rsl_rl_ppo_cfg import Ar4PickPlacePPORunnerCfg  # noqa: E402
 from tasks.ar4.pickplace_env_cfg import GROUND_Z, WORKSPACE_BOUNDS, Ar4PickPlaceDemoEnvCfg  # noqa: E402
 
@@ -91,38 +91,38 @@ def main() -> None:
     policy = runner.get_inference_policy(device=env.unwrapped.device)
 
     camera = env.unwrapped.scene["perception_camera"]
-    cube_slice = cube_position_obs_slice(env.unwrapped)
+    sphere_slice = sphere_position_obs_slice(env.unwrapped)
     tracker = ObjectTracker()
     video_writer = imageio.get_writer(VIDEO_PATH, fps=int(1.0 / env.unwrapped.step_dt), codec="libx264")
 
     stable_steps_needed = int(args_cli.stable_seconds / env.unwrapped.step_dt)
     last_stable_position = None
     stable_count = 0
-    # Guards against re-triggering on the cube the robot itself just placed: a trigger disarms
-    # itself, and only re-arms once the cube is observed to have changed (dragged, gone stale/
+    # Guards against re-triggering on the sphere the robot itself just placed: a trigger disarms
+    # itself, and only re-arms once the sphere is observed to have changed (dragged, gone stale/
     # out of view, or moved past the stability tolerance) since the last placement.
     armed = True
 
     obs = env.get_observations()
-    print("[INFO] Watching for the cube to be placed and settled. Drag it in the viewport.")
+    print("[INFO] Watching for the sphere to be placed and settled. Drag it in the viewport.")
     with torch.inference_mode():
         while simulation_app.is_running():
-            cube_pos_b, tracked, rgb = perceive_cube(env.unwrapped, camera, tracker, GROUND_Z)
-            cube = next((t for t in tracked if t.shape_label == "cube"), None)
+            sphere_pos_b, tracked, rgb = perceive_sphere(env.unwrapped, camera, tracker, GROUND_Z)
+            sphere = find_by_shape(tracked, "sphere")
 
             ready_to_act = False
-            if cube is not None and not cube.is_stale and _in_workspace_bounds(cube.position):
+            if sphere is not None and not sphere.is_stale and _in_workspace_bounds(sphere.position):
                 if last_stable_position is None:
                     # No baseline yet (e.g. right after a trigger reset the bookkeeping below) -
                     # this alone is not evidence of a human drag, so leave `armed` untouched.
                     stable_count = 0
-                elif np.linalg.norm(cube.position - last_stable_position) <= args_cli.stable_tolerance:
+                elif np.linalg.norm(sphere.position - last_stable_position) <= args_cli.stable_tolerance:
                     stable_count += 1
                 else:
-                    # The cube actually moved since we last looked - real evidence of a drag.
+                    # The sphere actually moved since we last looked - real evidence of a drag.
                     stable_count = 0
                     armed = True
-                last_stable_position = cube.position
+                last_stable_position = sphere.position
                 ready_to_act = armed and stable_count >= stable_steps_needed
             else:
                 stable_count = 0
@@ -137,18 +137,18 @@ def main() -> None:
                 obs, _, _, _ = env.step(actions)
                 continue
 
-            print("[INFO] Cube settled - picking it up.")
+            print("[INFO] Sphere settled - picking it up.")
             armed = False
             stable_count = 0
             last_stable_position = None
             episode_done = False
             for _ in range(env.unwrapped.max_episode_length):
-                if cube_pos_b is not None:
-                    col_start, col_end = cube_slice
-                    obs[:, col_start:col_end] = cube_pos_b
+                if sphere_pos_b is not None:
+                    col_start, col_end = sphere_slice
+                    obs[:, col_start:col_end] = sphere_pos_b
                 actions = policy(obs)
                 obs, _, dones, _ = env.step(actions)
-                cube_pos_b, tracked, rgb = perceive_cube(env.unwrapped, camera, tracker, GROUND_Z)
+                sphere_pos_b, tracked, rgb = perceive_sphere(env.unwrapped, camera, tracker, GROUND_Z)
                 video_writer.append_data(draw_detections(rgb, tracked))
                 if bool(dones[0]):
                     episode_done = True

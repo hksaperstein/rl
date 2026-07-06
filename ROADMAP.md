@@ -213,6 +213,42 @@ follow-ups below.
      in-sim convergence, so a null result here doesn't contradict the
      literature - it just confirms gains weren't the right axis for this
      specific (already in-sim) problem.
+   - **Follow-up experiment: single-object scene + real-camera-observed
+     training (paused mid-run by user request, inconclusive — not a fifth
+     falsified hypothesis).** Per user direction to try something other
+     than a reward/control tweak: built a single-object scene (sphere only,
+     `tasks/ar4/pickplace_single_object_env_cfg.py`) and a
+     `PerceptionObservationWrapper` (`scripts/_perception_adapter.py`,
+     new `--perception` flag on `train.py`) that overrides the
+     `sphere_position` observation with a position derived from the real
+     `perception_camera` + this repo's classical perception pipeline
+     (reward stays privileged - only the observation changes). Along the
+     way, fixed a real pre-existing bug: `_perception_adapter.py` was
+     hardcoded to a stale `"cube_position"`/`find_by_shape(..., "cube")`
+     from before the Cube→Sphere retargeting, silently breaking
+     `eval_loop.py --perception` and `interactive_demo.py` (which had the
+     same staleness bug inline) - both fixed and renamed to sphere
+     terminology. Design in
+     `docs/superpowers/specs/2026-07-05-ar4-single-object-camera-training-design.md`,
+     full report in
+     `docs/superpowers/plans/2026-07-05-ar4-single-object-camera-training-report.md`.
+     **Real, load-bearing finding**: this repo's perception pipeline is
+     plain serial numpy per-env (not GPU-batched), so a camera-observed
+     training run costs roughly **2.7 hours for 1500 iterations at
+     num_envs=16** (measured 6.3-7.3s/iteration, collection ~150x the PPO
+     learning-phase cost) versus minutes for the privileged-observation
+     baseline at num_envs=4096 - and per-iteration sample count is
+     inherently ~256x smaller (16 vs. 4096 envs), so raising `num_envs`
+     here buys no free parallelism, only proportionally more wall-clock
+     cost. The user paused the run at iteration 110/500 (~12 min in) to
+     pivot to a contact-sensor experiment instead; partial data (mean
+     reward 0→0.91, episode length 12→249, `lifting_sphere` flat at 0.0000
+     throughout) shows *something* is being learned but is **far too little
+     data (1/14th a full run, 256x fewer samples/iteration) to call success
+     or failure**. Code + bug fix kept and committed (real, working,
+     verified-correct infrastructure, not a dead end); resuming this
+     experiment later needs a deliberately long (~3h) dispatch, not a quick
+     check.
 2. Shape classifier misclassifies cube/rectangular-prism as "sphere" against
    real depth data. Root-caused: `PLANARITY_RESIDUAL_THRESHOLD` (tuned on
    near-noiseless synthetic data) doesn't generalize to real sensor noise.

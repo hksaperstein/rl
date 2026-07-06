@@ -21,7 +21,7 @@ parser.add_argument(
     "--perception",
     action="store_true",
     default=False,
-    help="Use the real camera-based perception pipeline instead of privileged simulation state for the cube's observed position.",
+    help="Use the real camera-based perception pipeline instead of privileged simulation state for the sphere's observed position.",
 )
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
@@ -48,7 +48,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import imageio  # noqa: E402
 
-from _perception_adapter import cube_position_obs_slice, perceive_cube  # noqa: E402
+from _perception_adapter import perceive_sphere, sphere_position_obs_slice  # noqa: E402
 from perception.overlay import draw_detections  # noqa: E402
 from perception.tracker import ObjectTracker  # noqa: E402
 from tasks.ar4.agents.rsl_rl_ppo_cfg import Ar4PickPlacePPORunnerCfg  # noqa: E402
@@ -97,17 +97,17 @@ def main() -> None:
     policy = runner.get_inference_policy(device=env.unwrapped.device)
 
     camera = env.unwrapped.scene["perception_camera"] if args_cli.perception else None
-    cube_slice = cube_position_obs_slice(env.unwrapped) if args_cli.perception else None
+    sphere_slice = sphere_position_obs_slice(env.unwrapped) if args_cli.perception else None
 
     obs = env.get_observations()
     completed_episodes = 0
     with torch.inference_mode():
         while completed_episodes < args_cli.episodes and simulation_app.is_running():
             if args_cli.perception:
-                cube_pos_b, tracked, rgb = perceive_cube(env.unwrapped, camera, tracker, GROUND_Z)
-                if cube_pos_b is not None:
-                    col_start, col_end = cube_slice
-                    obs[:, col_start:col_end] = cube_pos_b
+                sphere_pos_b, tracked, rgb = perceive_sphere(env.unwrapped, camera, tracker, GROUND_Z)
+                if sphere_pos_b is not None:
+                    col_start, col_end = sphere_slice
+                    obs[:, col_start:col_end] = sphere_pos_b
                 perception_writer.append_data(draw_detections(rgb, tracked))
 
             actions = policy(obs)

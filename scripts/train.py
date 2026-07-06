@@ -6,6 +6,14 @@
     /home/saps/IsaacLab/isaaclab.sh -p scripts/train.py --num_envs 4096
     # smoke test (fast, verifies the loop runs end-to-end and writes a checkpoint):
     /home/saps/IsaacLab/isaaclab.sh -p scripts/train.py --num_envs 16 --max_iterations 2 --headless
+
+    # single-object scene (sphere only), observing the sphere's position via the
+    # real RGB-D camera + perception pipeline instead of privileged sim state
+    # (reward stays privileged) - see
+    # docs/superpowers/specs/2026-07-05-ar4-single-object-camera-training-design.md.
+    # Keep --num_envs small: the perception pipeline is plain numpy/CPU, not
+    # GPU-batched, and camera rendering itself isn't free at scale.
+    /home/saps/IsaacLab/isaaclab.sh -p scripts/train.py --perception --num_envs 16 --max_iterations 2 --headless
 """
 
 import argparse
@@ -18,10 +26,20 @@ parser.add_argument("--max_iterations", type=int, default=None, help="Override t
 parser.add_argument("--video", action="store_true", default=False, help="Record videos periodically during training.")
 parser.add_argument("--video_length", type=int, default=200, help="Length of each recorded video (steps).")
 parser.add_argument("--video_interval", type=int, default=2000, help="Steps between recorded videos.")
+parser.add_argument(
+    "--perception",
+    action="store_true",
+    default=False,
+    help=(
+        "Train on the single-object (sphere-only) scene, observing the sphere's position via the real "
+        "RGB-D perception_camera + perception pipeline instead of privileged simulation state. The reward "
+        "function is unchanged (stays privileged). Implies --enable_cameras."
+    ),
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
-if args_cli.video:
+if args_cli.video or args_cli.perception:
     args_cli.enable_cameras = True
 
 app_launcher = AppLauncher(args_cli)
@@ -45,14 +63,17 @@ from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from _perception_adapter import PerceptionObservationWrapper  # noqa: E402
 from tasks.ar4.agents.rsl_rl_ppo_cfg import Ar4PickPlacePPORunnerCfg  # noqa: E402
-from tasks.ar4.pickplace_env_cfg import Ar4PickPlaceEnvCfg  # noqa: E402
+from tasks.ar4.pickplace_env_cfg import GROUND_Z, Ar4PickPlaceEnvCfg  # noqa: E402
+from tasks.ar4.pickplace_single_object_env_cfg import Ar4PickPlaceSingleObjectEnvCfg  # noqa: E402
 
 LOG_ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs", "train")
 
 
 def main() -> None:
-    env_cfg = Ar4PickPlaceEnvCfg()
+    env_cfg_cls = Ar4PickPlaceSingleObjectEnvCfg if args_cli.perception else Ar4PickPlaceEnvCfg
+    env_cfg = env_cfg_cls()
     env_cfg.scene.num_envs = args_cli.num_envs
     env_cfg.sim.device = args_cli.device
 
@@ -77,6 +98,9 @@ def main() -> None:
         }
         print_dict(video_kwargs, nesting=4)
         env = gym.wrappers.RecordVideo(env, **video_kwargs)
+
+    if args_cli.perception:
+        env = PerceptionObservationWrapper(env, ground_z=GROUND_Z)
 
     env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
 

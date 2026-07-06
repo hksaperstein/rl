@@ -2,15 +2,32 @@
 (tasks/ar4/mdp.py's contact_grasp_bonus) against a real closed grasp,
 before spending a full training run on an untested force_threshold.
 
-Holds the arm motionless at its default (all-zero-joint) pose and
-teleports the sphere directly to the gripper's real jaw pinch-point
-position (read live from the ee_frame sensor), then closes the gripper on
-it - avoiding any dependency on scripts/grasp_demo.py's IK reach waypoints,
-which a real run showed do not reliably bring the end-effector near the
-object in this scene (see
-docs/superpowers/specs/2026-07-05-ar4-sphere-contact-sensor-design.md's
-"Calibration method correction" section). Teleport pattern precedented in
+Commands the arm to hold its all-zero-joint pose (its default reset target)
+and teleports the sphere every step to the gripper's *live* jaw pinch-point
+position (read fresh from the ee_frame sensor each iteration, not read once
+and frozen) - avoiding any dependency on scripts/grasp_demo.py's IK reach
+waypoints, which a real run showed do not reliably bring the end-effector
+near the object in this scene. Teleport pattern precedented in
 scripts/perception_calibration.py and scripts/measure_planarity_residual.py.
+
+Two corrections found empirically while validating this script (see
+docs/superpowers/specs/2026-07-05-ar4-sphere-contact-sensor-design.md's
+"Major finding" and "Calibration method correction" sections for the full
+diagnosis):
+1. Commanding an all-zero joint target does not hold the arm rigidly in
+   place - under this robot's actuator gains, the arm visibly sags/settles
+   for well over 100 steps after reset before its pose stabilizes. Reading
+   the pinch point once (right after reset, before the arm has settled)
+   and freezing it there leaves the sphere floating in stale, empty space
+   once the real arm moves away - this script now re-reads the pinch point
+   every single step instead, so the sphere always tracks wherever the
+   gripper actually is, regardless of settling dynamics.
+2. `_EE_OFFSET` in tasks/ar4/pickplace_env_cfg.py was itself wrong (0.09m,
+   corrected to the measured 0.036m) - this is a separate, more significant
+   finding: that offset feeds the same ee_frame sensor reaching_sphere's
+   reward has used in every experiment this session, so this was likely a
+   root contributor to grasping never emerging, independent of this
+   contact-sensor experiment.
 
 .. code-block:: bash
 
@@ -48,6 +65,7 @@ GRIPPER_CLOSE = -1.0
 
 # (duration_steps, gripper_command, label)
 PHASES = [
+    (150, GRIPPER_OPEN, "settle"),  # let the arm's real pose stabilize before measuring anything
     (60, GRIPPER_OPEN, "open"),
     (60, GRIPPER_CLOSE, "close"),
     (120, GRIPPER_CLOSE, "hold"),
@@ -74,22 +92,21 @@ def main() -> None:
     hold_forces: list[list[float]] = []
     hold_rewards: list[float] = []
 
+    identity_quat = torch.tensor([1.0, 0.0, 0.0, 0.0], device=env.device)
+
     with torch.inference_mode():
         env.reset()
-        # Read the gripper's real jaw pinch-point position at its resting
-        # (all-zero-joint) pose, straight from the same sensor frame
-        # reaching_sphere's reward already trusts in real training.
         ee_frame = env.scene["ee_frame"]
-        pinch_point = ee_frame.data.target_pos_w[0, 0].clone()
-        print(f"[info] gripper pinch-point (world frame): {pinch_point.tolist()}")
-        sphere_pose = torch.cat(
-            [pinch_point, torch.tensor([1.0, 0.0, 0.0, 0.0], device=env.device)]
-        ).unsqueeze(0)
 
         for duration, gripper_cmd, label in PHASES:
-            for _ in range(duration):
-                # Hold the sphere at the pinch point every step - the arm
-                # never moves, so this is the same physical target throughout.
+            for i in range(duration):
+                # Re-read the gripper's real jaw pinch-point position every
+                # step (not once, frozen) - the arm's commanded pose takes
+                # many steps to settle under this robot's actuator gains, so
+                # a stale reading leaves the sphere in empty space once the
+                # real arm moves away from where it started.
+                pinch_point = ee_frame.data.target_pos_w[0, 0].clone()
+                sphere_pose = torch.cat([pinch_point, identity_quat]).unsqueeze(0)
                 env.scene["sphere"].write_root_pose_to_sim(sphere_pose)
 
                 action = torch.zeros(env.num_envs, num_joints + 1, device=env.device)
@@ -109,7 +126,7 @@ def main() -> None:
                 elif label == "open":
                     open_forces.append(force_norm)
 
-            print(f"[phase done] {label}: last force_norm={force_norm}, reward={reward.item()}")
+            print(f"[phase done] {label}: last force_norm={force_norm}, reward={reward.item()}, pinch_point={pinch_point.tolist()}")
 
     print("\n=== Calibration summary ===")
     open_min = min(min(f) for f in open_forces)

@@ -29,11 +29,17 @@ from isaaclab_tasks.manager_based.manipulation.lift import mdp
 from . import mdp as ar4_mdp
 from .env_cfg import ActionsCfg, Ar4SceneCfg
 
-# Empirically-tuned offset (m) from the link_6 frame to the gripper's jaw
-# pinch point along link_6's local +Z axis (ee_link sits at this same frame
-# with an identity transform, but isn't itself a rigid body, so link_6 is
-# used directly) - same value used for the scripted IK reach in grasp_demo.py.
-_EE_OFFSET = (0.0, 0.0, 0.09)
+# Offset (m) from the link_6 frame to the gripper's jaw pinch point along
+# link_6's local +Z axis (ee_link sits at this same frame with an identity
+# transform, but isn't itself a rigid body, so link_6 is used directly).
+# Corrected from the prior 0.09 estimate (grasp_demo.py's docstring already
+# flagged that value as "a rough estimate ... never measured") after
+# measuring the real distance directly via robot.data.body_pos_w for
+# gripper_jaw1_link/gripper_jaw2_link: the true link_6-to-jaw-midpoint
+# distance is 0.036m, not 0.09m - see
+# docs/superpowers/specs/2026-07-05-ar4-sphere-contact-sensor-design.md's
+# "Major finding" section for the measurement and its implications.
+_EE_OFFSET = (0.0, 0.0, 0.036)
 
 
 @configclass

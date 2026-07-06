@@ -95,6 +95,16 @@ combination) — a partial version (adding this as a seventh term alongside
 the existing six) would not test the hypothesis at all, since the old
 terms' conflict-prone dynamics would still dominate.
 
+The `lift_height_progress` **function** in `tasks/ar4/mdp.py` (not just
+its `RewTerm` registration) should be deleted, not left as dead code —
+nothing calls it once its registration is removed, matching this repo's
+established practice of fully removing reverted/superseded reward
+functions rather than leaving orphaned code (e.g. the grasp-bonus and
+alignment-gate functions from earlier falsified experiments were fully
+removed, not left unregistered). `contact_grasp_bonus`, by contrast,
+**stays** — it's reused directly as a helper by the new
+`_raw_lift_progress` function below, not superseded.
+
 **Not touched:** `action_rate`, `joint_vel` (small fixed penalties,
 unrelated to this hypothesis), `sphere_reached_goal` (a *termination*, not
 a reward — unaffected), `_EE_OFFSET`, `ContactSensorCfg` entries, every
@@ -151,11 +161,10 @@ def _raw_lift_progress(
     reach_dist = torch.norm(object.data.root_pos_w - ee_frame.data.target_pos_w[:, 0, :], dim=-1)
     reach_term = 1.0 - torch.tanh(reach_dist / reach_std)
 
-    jaw1_sensor: ContactSensor = env.scene[jaw1_contact_cfg.name]
-    jaw2_sensor: ContactSensor = env.scene[jaw2_contact_cfg.name]
-    jaw1_force = torch.linalg.vector_norm(jaw1_sensor.data.force_matrix_w, dim=-1).view(env.num_envs)
-    jaw2_force = torch.linalg.vector_norm(jaw2_sensor.data.force_matrix_w, dim=-1).view(env.num_envs)
-    grasp_term = ((jaw1_force > force_threshold) & (jaw2_force > force_threshold)).float()
+    # Reuse the already-tested contact_grasp_bonus directly (same bilateral
+    # force-threshold check used by every prior experiment this session)
+    # rather than re-deriving the same jaw-force logic inline.
+    grasp_term = contact_grasp_bonus(env, force_threshold, jaw1_contact_cfg, jaw2_contact_cfg)
 
     lift_term = (object.data.root_pos_w[:, 2] > lift_minimal_height).float()
 

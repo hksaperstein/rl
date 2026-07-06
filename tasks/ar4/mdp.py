@@ -501,3 +501,35 @@ def ik_guided_path_bonus(
     prev = env._ik_milestone_max.clone()
     env._ik_milestone_max = torch.maximum(env._ik_milestone_max, raw)
     return env._ik_milestone_max - prev
+
+
+def gripper_schedule_bonus(
+    env: ManagerBasedRLEnv,
+    robot_cfg: SceneEntityCfg,
+    gripper_joint_names: list[str],
+    open_pos: float,
+    closed_pos: float,
+) -> torch.Tensor:
+    """Reward matching the classical plan's expected gripper state for
+    the current path waypoint: open through waypoints 0-1 (pre-grasp,
+    grasp-approach), closed from waypoint 2 onward (lift, transit,
+    place). Uses the actual gripper joint position (not the commanded
+    action) as ground truth, consistent with contact_grasp_bonus reading
+    real physical state rather than commands. Returns 1.0/0.0
+    (matches/doesn't) - the "+0.1" magnitude described in the design
+    spec comes from this term's RewardsCfg weight (0.1), not from this
+    function's own return value. See
+    docs/superpowers/specs/2026-07-06-ar4-ik-guided-path-design.md.
+    """
+    robot: Articulation = env.scene[robot_cfg.name]
+    if not hasattr(env, "_path_waypoint_idx"):
+        env._path_waypoint_idx = torch.zeros(env.num_envs, dtype=torch.long, device=env.device)
+
+    gripper_joint_ids, _ = robot.find_joints(gripper_joint_names)
+    gripper_pos = robot.data.joint_pos[:, gripper_joint_ids].mean(dim=-1)
+    midpoint = (open_pos + closed_pos) / 2.0
+    is_open = gripper_pos > midpoint
+
+    expected_open = env._path_waypoint_idx < 2
+    matches = is_open == expected_open
+    return matches.float()

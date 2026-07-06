@@ -35,6 +35,7 @@ from isaaclab_tasks.manager_based.manipulation.lift import mdp
 from . import mdp as ar4_mdp
 from .env_cfg import ActionsCfg
 from .pickplace_mirror_env_cfg import Ar4PickPlaceMirrorSceneCfg
+from .robot_cfg import ARM_JOINT_NAMES, GRIPPER_CLOSED_POS, GRIPPER_JOINT_NAMES, GRIPPER_OPEN_POS
 
 # Same values as pickplace_mirror_env_cfg.py's EventCfg/RewardsCfg reuse.
 _LIFT_MINIMAL_HEIGHT = 0.03
@@ -126,3 +127,90 @@ class TerminationsCfg:
         func=ar4_mdp.object_reached_mirrored_goal,
         params={"threshold": 0.02, "object_cfg": SceneEntityCfg("sphere")},
     )
+
+
+@configclass
+class RewardsCfg:
+    """Classical-IK-guided path reward: replaces the old staged
+    reach/grasp/lift/goal signal with waypoint-sequenced Cartesian
+    proximity + live IK-action-matching (ik_guided_path_bonus), plus a
+    gripper-open/closed timing bonus. contact_grasp_bonus and
+    stillness_penalty are reused unchanged from the mirror-scene task as
+    standalone additive terms (no longer folded inside a staged signal)."""
+
+    ik_guided_path_bonus = RewTerm(
+        func=ar4_mdp.ik_guided_path_bonus,
+        weight=25.0,
+        params={
+            "robot_cfg": SceneEntityCfg("robot", joint_names=ARM_JOINT_NAMES),
+            "ee_frame_cfg": SceneEntityCfg("ee_frame"),
+            "proximity_std": 0.1,
+            "advance_tolerance": 0.03,
+            "ik_joint_std": 0.5,
+            "gripper_tool_offset": (0.0, 0.0, 0.036),
+        },
+    )
+
+    gripper_schedule_bonus = RewTerm(
+        func=ar4_mdp.gripper_schedule_bonus,
+        weight=0.1,
+        params={
+            "robot_cfg": SceneEntityCfg("robot"),
+            "gripper_joint_names": GRIPPER_JOINT_NAMES,
+            "open_pos": GRIPPER_OPEN_POS,
+            "closed_pos": GRIPPER_CLOSED_POS,
+        },
+    )
+
+    contact_grasp_bonus = RewTerm(
+        func=ar4_mdp.contact_grasp_bonus,
+        weight=20.0,
+        params={
+            "force_threshold": 0.05,
+            "jaw1_contact_cfg": SceneEntityCfg("gripper_jaw1_contact"),
+            "jaw2_contact_cfg": SceneEntityCfg("gripper_jaw2_contact"),
+        },
+    )
+
+    stillness_penalty = RewTerm(
+        func=ar4_mdp.stillness_penalty,
+        weight=2.0,
+        params={
+            "object_cfg": SceneEntityCfg("sphere"),
+            "jaw1_contact_cfg": SceneEntityCfg("gripper_jaw1_contact"),
+            "jaw2_contact_cfg": SceneEntityCfg("gripper_jaw2_contact"),
+            "force_threshold": 0.05,
+            "still_bound": 0.005,
+            "patience_steps": 25,
+        },
+    )
+
+    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-1e-4)
+
+    joint_vel = RewTerm(func=mdp.joint_vel_l2, weight=-1e-4, params={"asset_cfg": SceneEntityCfg("robot")})
+
+
+@configclass
+class Ar4PickPlaceIkGuidedEnvCfg(ManagerBasedRLEnvCfg):
+    """AR4 classical-IK-guided task: same scene/spawn/goal as the mirror
+    task, but reach/grasp/lift/carry is shaped by a live classical-IK
+    path-tracking reward instead of ad hoc end-state distances.
+    num_envs=4096 default (a real training-scale run) -
+    scripts/train.py's --num_envs flag overrides this per-run same as
+    every other env cfg in this repo."""
+
+    scene: Ar4PickPlaceMirrorSceneCfg = Ar4PickPlaceMirrorSceneCfg(num_envs=4096, env_spacing=2.5)
+    observations: ObservationsCfg = ObservationsCfg()
+    actions: ActionsCfg = ActionsCfg()
+    rewards: RewardsCfg = RewardsCfg()
+    terminations: TerminationsCfg = TerminationsCfg()
+    events: EventCfg = EventCfg()
+
+    def __post_init__(self) -> None:
+        self.decimation = 2
+        self.episode_length_s = 5.0
+        self.sim.dt = 0.01
+        self.sim.render_interval = self.decimation
+        self.sim.physics_material = sim_utils.RigidBodyMaterialCfg(static_friction=1.0, dynamic_friction=1.0)
+        self.viewer.eye = (1.5, 1.5, 1.2)
+        self.viewer.lookat = (0.0, 0.0, 0.4)

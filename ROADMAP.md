@@ -340,11 +340,15 @@ follow-ups below.
        (`lift_height_progress` reads `0.0` at iteration 699, nonzero at
        701 — confirmed directly from the TensorBoard scalars, not just
        assumed from config). But its real-world magnitude was negligible:
-       max `0.0065` over the entire run, corresponding to roughly
-       **0.065mm** of real height gain (via `tanh`'s small-angle
-       behavior) — many orders of magnitude short of the 21mm
-       `lifting_sphere` actually requires. `lifting_sphere` itself never
-       moved off `0.0000` at any point, including after the switch.
+       the logged `Episode_Reward` max of `0.0065` is `weight(15.0) ×`
+       the mean per-step `tanh` value, so the real per-step `tanh` is
+       ~`0.0065/15 ≈ 0.00043`, corresponding to roughly **0.0043mm** of
+       real height gain (via `tanh`'s small-angle behavior) — many orders
+       of magnitude short of the 21mm `lifting_sphere` actually requires.
+       `lifting_sphere` itself never rose above noise (max `0.0027`,
+       ~0.01% of steps — comparable in scale to the `0.0016` transient
+       blip the ContactSensor baseline showed), including after the
+       curriculum switch.
      - **Real eval (10 episodes, frame-extracted video, all 10 inspected
        directly): 0/10 show any real lift** — the same "reach, grip,
        freeze" static-pose signature as the ContactSensor experiment

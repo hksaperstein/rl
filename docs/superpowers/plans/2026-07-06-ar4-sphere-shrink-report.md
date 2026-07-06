@@ -83,3 +83,36 @@
 ### Trajectory Analysis
 
 Both `staged_milestone_bonus` and `sphere_reached_goal` show monotonic growth throughout training, with `staged_milestone_bonus` peaking at 0.037264 (step 1340) and `sphere_reached_goal` peaking at 0.044566 (step 1344). The 12mm sphere produces marginally lower peak milestone bonus (0.037264) compared to the 18mm baseline (approximately 0.04), suggesting the reduced aperture margin does not improve gripper stability in reaching the goal state.
+
+## Task 2: Real eval + video inspection (decision gate)
+
+**Checkpoint tested:** `logs/train/2026-07-06_16-31-04/model_1499.pt`
+
+**Eval setup:** 10-episode evaluation with `--mirror`, 12mm-diameter sphere (shrunk from 18mm), randomized spawn across the full workspace, goal mirrored to the opposite side of the robot. All 10 episodes personally inspected frame-by-frame by the controller (not delegated), given a prior misjudgment this session where a coarse start/25/50/75/end sample misread an accidental knock as a genuine lift.
+
+**Spawn randomization:** confirmed still working — sphere appears at visibly different relative positions across episodes.
+
+**Per-episode findings:**
+
+| Episode | Result |
+|---|---|
+| 0 (step-0) | No lift — sphere stays on/near ground throughout, gripper never secures it |
+| 1 (step-250) | No lift — arm ends in a collapsed pose, sphere occluded/undetected |
+| 2 (step-500) | No lift — arm remains in the same collapsed pose as episode 1's end (see note below) |
+| 3 (step-750) | No lift — sphere stays on ground; ambiguous gripper-adjacent frame at end but no elevation evidence |
+| 4 (step-1000) | **Accidental knock/launch**, not a grasp — a motion-blur streak is visible trailing upward from the gripper at frame 010, and the sphere is airborne and disconnected from the gripper by frames 020-050 (gripper stays at ground level). Same signature as the false positive found in the prior (18mm) experiment's Episode 5. |
+| 5 (step-1250) | No lift — sphere disappears from view near the gripper (occlusion, not elevation) |
+| 6 (step-1500) | No lift — sphere stays at/near ground level near the gripper's jaws |
+| 7 (step-1750) | No lift — sphere on ground, gripper not co-located with it by episode end |
+| 8 (step-2000) | No lift — sphere stays on ground at the gripper's tip |
+| 9 (step-2250) | No lift — sphere remains on ground, arm doesn't close the distance to it |
+
+**Note on episode continuity:** frame_001 of the step-500 segment shows the identical collapsed arm pose as frame_050 of the step-250 segment, suggesting the two segments may not represent two independently-reset episodes but could be one continuous rollout viewed through consecutive time windows. This wasn't fully resolved and doesn't change the core finding (no genuine lift in any segment inspected), but is worth investigating if this eval methodology is reused — worth adding an explicit per-episode reset marker (e.g. logging env reset events or overlaying the episode/env step count on the video) in a future eval run rather than inferring reset boundaries from arm pose alone.
+
+### Decision Gate Assessment
+
+**Result: 0/10 episodes show a genuine, controlled grasp-and-lift.**
+
+**Verdict: FALSIFIED.** Shrinking the sphere from 18mm to 12mm diameter (roughly doubling the gripper's per-side clearance margin, from 5mm to 8mm) did not produce any improvement — the gripper still never achieves and holds a bilateral grasp in any of the 10 eval episodes, and the one apparent elevation event (Episode 4) is, like the prior experiment's Episode 5, consistent with an accidental collision-launch rather than a controlled grasp. This is evidence against the gripper-aperture-margin hypothesis specifically: a meaningfully looser aperture margin did not change the outcome, so the failure is likely not primarily about clearance tolerance.
+
+**This is the seventh real attempt on the reward/optimization/physical-setup axis** for this sub-problem (sparse-only, curriculum-gated dense, always-on dense, LR-bump, potential-shaping, mirror-scene+stillness-penalty, sphere-shrink). Recommend the Principal/user weigh in on the remaining candidates before further unilateral iteration: a hierarchical policy (separate reach-to-pregrasp and close-gripper phases, rather than one flat policy learning both simultaneously) or a closer look at whether the joint-position action space itself (rather than object size) is the bottleneck for precise gripper-closure timing.

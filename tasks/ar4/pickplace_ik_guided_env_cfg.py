@@ -1,7 +1,7 @@
 # tasks/ar4/pickplace_ik_guided_env_cfg.py
 """Classical-IK-guided variant of the AR4 mirror-goal pick-and-place task:
 same scene/spawn-randomization/mirrored-goal as pickplace_mirror_env_cfg.py
-(sphere-only, shrunk to 12mm diameter, spawn randomized across the full
+(cube-only, default 18mm size, spawn randomized across the full
 workspace, goal on the opposite side of the robot), but the staged reward
 is replaced by a classical-IK-guided path: 5 geometric Cartesian waypoints
 (pre-grasp, grasp, lift, transit, place) plus a live, per-step comparison
@@ -56,8 +56,8 @@ class ObservationsCfg:
     class PolicyCfg(ObsGroup):
         joint_pos = ObsTerm(func=mdp.joint_pos_rel)
         joint_vel = ObsTerm(func=mdp.joint_vel_rel)
-        sphere_position = ObsTerm(
-            func=mdp.object_position_in_robot_root_frame, params={"object_cfg": SceneEntityCfg("sphere")}
+        cube_position = ObsTerm(
+            func=mdp.object_position_in_robot_root_frame, params={"object_cfg": SceneEntityCfg("cube")}
         )
         target_object_position = ObsTerm(
             func=ar4_mdp.mirrored_target_position_in_robot_root_frame,
@@ -76,20 +76,20 @@ class ObservationsCfg:
 class EventCfg:
     """Reset events, in registration order:
     1. reset_all - whole scene back to default.
-    2. reset_sphere_position - randomize the sphere across the full workspace.
-    3. randomize_goal - reads the sphere's now-updated position, sets the mirrored goal.
-    4. compute_path_waypoints - reads both the sphere's position and the
+    2. reset_cube_position - randomize the cube across the full workspace.
+    3. randomize_goal - reads the cube's now-updated position, sets the mirrored goal.
+    4. compute_path_waypoints - reads both the cube's position and the
        goal, computes the 5-waypoint path, and resets path-progress state."""
 
     reset_all = EventTerm(func=mdp.reset_scene_to_default, mode="reset")
 
-    reset_sphere_position = EventTerm(
+    reset_cube_position = EventTerm(
         func=mdp.reset_root_state_uniform,
         mode="reset",
         params={
             "pose_range": {"x": (-0.30, 0.30), "y": (-0.175, 0.175), "z": (0.0, 0.0)},
             "velocity_range": {},
-            "asset_cfg": SceneEntityCfg("sphere"),
+            "asset_cfg": SceneEntityCfg("cube"),
         },
     )
 
@@ -97,7 +97,7 @@ class EventCfg:
         func=ar4_mdp.set_mirrored_goal,
         mode="reset",
         params={
-            "sphere_cfg": SceneEntityCfg("sphere"),
+            "object_cfg": SceneEntityCfg("cube"),
             "goal_y_range": (0.10, 0.45),
             "goal_z_range": (0.0, 0.02),
         },
@@ -107,7 +107,7 @@ class EventCfg:
         func=ar4_mdp.compute_path_waypoints,
         mode="reset",
         params={
-            "sphere_cfg": SceneEntityCfg("sphere"),
+            "object_cfg": SceneEntityCfg("cube"),
             "lift_minimal_height": _LIFT_MINIMAL_HEIGHT,
             "pregrasp_hover": _PREGRASP_HOVER,
             "lift_margin": _LIFT_MARGIN,
@@ -118,14 +118,14 @@ class EventCfg:
 
 @configclass
 class TerminationsCfg:
-    """Success (sphere at the mirrored goal) ends the episode early;
+    """Success (cube at the mirrored goal) ends the episode early;
     otherwise a fixed timeout."""
 
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
 
-    sphere_reached_goal = DoneTerm(
+    cube_reached_goal = DoneTerm(
         func=ar4_mdp.object_reached_mirrored_goal,
-        params={"threshold": 0.02, "object_cfg": SceneEntityCfg("sphere")},
+        params={"threshold": 0.02, "object_cfg": SceneEntityCfg("cube")},
     )
 
 
@@ -176,7 +176,7 @@ class RewardsCfg:
         func=ar4_mdp.stillness_penalty,
         weight=2.0,
         params={
-            "object_cfg": SceneEntityCfg("sphere"),
+            "object_cfg": SceneEntityCfg("cube"),
             "jaw1_contact_cfg": SceneEntityCfg("gripper_jaw1_contact"),
             "jaw2_contact_cfg": SceneEntityCfg("gripper_jaw2_contact"),
             "force_threshold": 0.05,
@@ -193,8 +193,8 @@ class RewardsCfg:
 @configclass
 class Ar4PickPlaceIkGuidedEnvCfg(ManagerBasedRLEnvCfg):
     """AR4 classical-IK-guided task: same scene/spawn/goal as the mirror
-    task, but reach/grasp/lift/carry is shaped by a live classical-IK
-    path-tracking reward instead of ad hoc end-state distances.
+    task with cube (default 18mm size), but reach/grasp/lift/carry is shaped by a
+    live classical-IK path-tracking reward instead of ad hoc end-state distances.
     num_envs=4096 default (a real training-scale run) -
     scripts/train.py's --num_envs flag overrides this per-run same as
     every other env cfg in this repo."""

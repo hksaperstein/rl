@@ -1,6 +1,6 @@
 # tasks/ar4/pickplace_mirror_env_cfg.py
-"""Mirror-goal variant of the AR4 pick-and-place task: only the sphere is
-present in the scene (no cube/rect_prism/wedge), its spawn is randomized
+"""Mirror-goal variant of the AR4 pick-and-place task: only the cube is
+present in the scene (no rect_prism/wedge/sphere), its spawn is randomized
 across the full workspace, and the goal is always on the opposite side of
 the robot from wherever it spawned. See
 docs/superpowers/specs/2026-07-06-ar4-sphere-mirror-scene-design.md.
@@ -12,7 +12,7 @@ there - same convention as pickplace_single_object_env_cfg.py. Also does
 NOT reuse pickplace_env_cfg.py's CommandsCfg/RewardsCfg/ObservationsCfg/
 TerminationsCfg - this task replaces the CommandManager-based goal with a
 stateful per-env buffer (env._target_pos_w) that can express "goal is a
-function of the sphere's own random spawn", which UniformPoseCommandCfg
+function of the cube's own random spawn", which UniformPoseCommandCfg
 cannot.
 
 Import this module only after an Isaac Sim/Isaac Lab AppLauncher has been
@@ -37,12 +37,12 @@ from isaaclab_tasks.manager_based.manipulation.lift import mdp
 
 from . import mdp as ar4_mdp
 from .env_cfg import ActionsCfg
-from .objects_cfg import SPHERE_CFG
+from .objects_cfg import CUBE_CFG
 from .pickplace_env_cfg import _EE_OFFSET
 from .robot_cfg import AR4_MK5_CFG
 
 # Env-local (robot-relative) workspace bounds this task randomizes the
-# sphere's spawn and the goal's y-coordinate within. Defined independently
+# cube's spawn and the goal's y-coordinate within. Defined independently
 # of pickplace_env_cfg.py's WORKSPACE_BOUNDS (that constant is documented
 # as being for the interactive demo/perception entry points specifically),
 # even though the values currently match.
@@ -53,10 +53,10 @@ _GOAL_Z = (0.0, 0.02)
 
 @configclass
 class Ar4PickPlaceMirrorSceneCfg(InteractiveSceneCfg):
-    """AR4 gripper + a single sphere (no cube/rect_prism/wedge), plus the
-    same end-effector FrameTransformer and gripper-to-sphere ContactSensors
+    """AR4 gripper + a single cube (no rect_prism/wedge/sphere), plus the
+    same end-effector FrameTransformer and gripper-to-cube ContactSensors
     as Ar4PickPlaceSceneCfg (pickplace_env_cfg.py) - copied, not imported,
-    since the base scene class differs (no cube/rect_prism/wedge fields)."""
+    since the base scene class differs (no rect_prism/wedge/sphere fields)."""
 
     ground = AssetBaseCfg(prim_path="/World/ground", spawn=sim_utils.GroundPlaneCfg())
     light = AssetBaseCfg(
@@ -65,21 +65,16 @@ class Ar4PickPlaceMirrorSceneCfg(InteractiveSceneCfg):
     )
     robot: ArticulationCfg = AR4_MK5_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
     # Recentered to the workspace midpoint (local x=0.0, y=0.275) so
-    # reset_sphere_position's pose_range in EventCfg below can cover the
-    # full _WORKSPACE_X/_WORKSPACE_Y range symmetrically - SPHERE_CFG
+    # reset_cube_position's pose_range in EventCfg below can cover the
+    # full _WORKSPACE_X/_WORKSPACE_Y range symmetrically - CUBE_CFG
     # itself (objects_cfg.py) is unchanged; .replace() returns a new cfg.
-    #
-    # Shrunk from the shared SPHERE_CFG's radius=0.009 (18mm diameter) to
-    # radius=0.006 (12mm diameter) - testing the hypothesis (ROADMAP.md,
-    # "grasp/lift never emerges" follow-up) that the gripper's ~28mm max
-    # aperture left too little clearance margin (was 5mm/side, now
-    # 8mm/side) for the joint-position action space to reliably converge
-    # on a stable bilateral grasp pose. Resting height (pos z) lowered to
-    # 0.006 to match the new radius so the sphere still sits on the
-    # ground plane rather than floating or clipping into it.
-    sphere: RigidObjectCfg = SPHERE_CFG.replace(
-        init_state=RigidObjectCfg.InitialStateCfg(pos=(0.0, 0.275, 0.006)),
-        spawn=SPHERE_CFG.spawn.replace(radius=0.006),
+    # Using the default 18mm cuboid size with no shrinking - the sphere
+    # shrinking experiment (12mm diameter) did not improve convergence, so
+    # the cube task uses the standard size. Resting height (pos z) set to
+    # 0.009 to match the default cube size so it sits properly on the
+    # ground plane.
+    cube: RigidObjectCfg = CUBE_CFG.replace(
+        init_state=RigidObjectCfg.InitialStateCfg(pos=(0.0, 0.275, 0.009)),
     )
 
     ee_frame: FrameTransformerCfg = FrameTransformerCfg(
@@ -98,14 +93,14 @@ class Ar4PickPlaceMirrorSceneCfg(InteractiveSceneCfg):
         update_period=0.0,
         history_length=6,
         debug_vis=False,
-        filter_prim_paths_expr=["{ENV_REGEX_NS}/Sphere"],
+        filter_prim_paths_expr=["{ENV_REGEX_NS}/Cube"],
     )
     gripper_jaw2_contact: ContactSensorCfg = ContactSensorCfg(
         prim_path="{ENV_REGEX_NS}/Robot/root_joint/gripper_jaw2_link",
         update_period=0.0,
         history_length=6,
         debug_vis=False,
-        filter_prim_paths_expr=["{ENV_REGEX_NS}/Sphere"],
+        filter_prim_paths_expr=["{ENV_REGEX_NS}/Cube"],
     )
 
 
@@ -117,8 +112,8 @@ class ObservationsCfg:
     class PolicyCfg(ObsGroup):
         joint_pos = ObsTerm(func=mdp.joint_pos_rel)
         joint_vel = ObsTerm(func=mdp.joint_vel_rel)
-        sphere_position = ObsTerm(
-            func=mdp.object_position_in_robot_root_frame, params={"object_cfg": SceneEntityCfg("sphere")}
+        cube_position = ObsTerm(
+            func=mdp.object_position_in_robot_root_frame, params={"object_cfg": SceneEntityCfg("cube")}
         )
         target_object_position = ObsTerm(
             func=ar4_mdp.mirrored_target_position_in_robot_root_frame,
@@ -139,11 +134,11 @@ class EventCfg:
     same-mode terms in registration order - later terms may depend on
     earlier ones' output within the same reset):
     1. reset_all - whole scene back to default.
-    2. reset_sphere_position - randomize the sphere across the full
+    2. reset_cube_position - randomize the cube across the full
        workspace (reuses the existing, proven reset_root_state_uniform,
        just with a wider pose_range than pickplace_env_cfg.py's ±2cm
        jitter).
-    3. randomize_goal - reads the sphere's now-updated position, sets the
+    3. randomize_goal - reads the cube's now-updated position, sets the
        mirrored goal into env._target_pos_w.
     4. reset_lift_milestone / reset_stillness_buffers - zero the new
        reward terms' stateful buffers, so a new episode starts with no
@@ -151,13 +146,13 @@ class EventCfg:
 
     reset_all = EventTerm(func=mdp.reset_scene_to_default, mode="reset")
 
-    reset_sphere_position = EventTerm(
+    reset_cube_position = EventTerm(
         func=mdp.reset_root_state_uniform,
         mode="reset",
         params={
             "pose_range": {"x": _WORKSPACE_X, "y": (-0.175, 0.175), "z": (0.0, 0.0)},
             "velocity_range": {},
-            "asset_cfg": SceneEntityCfg("sphere"),
+            "asset_cfg": SceneEntityCfg("cube"),
         },
     )
 
@@ -165,7 +160,7 @@ class EventCfg:
         func=ar4_mdp.set_mirrored_goal,
         mode="reset",
         params={
-            "sphere_cfg": SceneEntityCfg("sphere"),
+            "object_cfg": SceneEntityCfg("cube"),
             "goal_y_range": _WORKSPACE_Y,
             "goal_z_range": _GOAL_Z,
         },
@@ -176,20 +171,20 @@ class EventCfg:
     reset_stillness_buffers = EventTerm(
         func=ar4_mdp.reset_stillness_buffers,
         mode="reset",
-        params={"object_cfg": SceneEntityCfg("sphere")},
+        params={"object_cfg": SceneEntityCfg("cube")},
     )
 
 
 @configclass
 class TerminationsCfg:
-    """Success (sphere at the mirrored goal) ends the episode early;
+    """Success (cube at the mirrored goal) ends the episode early;
     otherwise a fixed timeout."""
 
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
 
-    sphere_reached_goal = DoneTerm(
+    cube_reached_goal = DoneTerm(
         func=ar4_mdp.object_reached_mirrored_goal,
-        params={"threshold": 0.02, "object_cfg": SceneEntityCfg("sphere")},
+        params={"threshold": 0.02, "object_cfg": SceneEntityCfg("cube")},
     )
 
 
@@ -203,7 +198,7 @@ class RewardsCfg:
         func=ar4_mdp.staged_milestone_bonus,
         weight=25.0,
         params={
-            "object_cfg": SceneEntityCfg("sphere"),
+            "object_cfg": SceneEntityCfg("cube"),
             "ee_frame_cfg": SceneEntityCfg("ee_frame"),
             "jaw1_contact_cfg": SceneEntityCfg("gripper_jaw1_contact"),
             "jaw2_contact_cfg": SceneEntityCfg("gripper_jaw2_contact"),
@@ -226,7 +221,7 @@ class RewardsCfg:
         func=ar4_mdp.stillness_penalty,
         weight=2.0,
         params={
-            "object_cfg": SceneEntityCfg("sphere"),
+            "object_cfg": SceneEntityCfg("cube"),
             "jaw1_contact_cfg": SceneEntityCfg("gripper_jaw1_contact"),
             "jaw2_contact_cfg": SceneEntityCfg("gripper_jaw2_contact"),
             "force_threshold": 0.05,
@@ -242,7 +237,7 @@ class RewardsCfg:
 
 @configclass
 class Ar4PickPlaceMirrorEnvCfg(ManagerBasedRLEnvCfg):
-    """AR4 mirror-goal task: pick up the sphere (randomized spawn across
+    """AR4 mirror-goal task: pick up the cube (randomized spawn across
     the full workspace) and place it on the opposite side of the robot.
     num_envs=4096 default (a real training-scale run, not the smaller
     num_envs=16 used by the single-object camera-training precedent) -

@@ -149,18 +149,18 @@ def reset_lift_potential(env: ManagerBasedRLEnv, env_ids: torch.Tensor) -> None:
 def set_mirrored_goal(
     env: ManagerBasedRLEnv,
     env_ids: torch.Tensor,
-    sphere_cfg: SceneEntityCfg,
+    object_cfg: SceneEntityCfg,
     goal_y_range: tuple[float, float],
     goal_z_range: tuple[float, float],
 ) -> None:
-    """Event term (mode="reset"): must be registered AFTER the sphere's
+    """Event term (mode="reset"): must be registered AFTER the object's
     own reset_root_state_uniform event in the same EventCfg (Isaac Lab's
     EventManager runs same-mode terms in registration order - confirmed
     against event_manager.py's apply(), which iterates
     self._mode_term_cfgs[mode] in a plain for loop over registration
-    order) so this reads the sphere's freshly-randomized position, not
+    order) so this reads the object's freshly-randomized position, not
     the previous episode's. Computes the goal as the mirror image of the
-    sphere's spawn across the robot's local x=0 plane (robot_cfg.py's
+    object's spawn across the robot's local x=0 plane (robot_cfg.py's
     AR4_MK5_CFG has no explicit init_state.pos, defaulting to (0,0,0) -
     the robot base sits at each env's own local origin, so negating
     local x is exactly "the other side of the robot"). goal_y is
@@ -172,15 +172,15 @@ def set_mirrored_goal(
     term's own random draw within the same reset. See
     docs/superpowers/specs/2026-07-06-ar4-sphere-mirror-scene-design.md.
     """
-    sphere: RigidObject = env.scene[sphere_cfg.name]
+    object: RigidObject = env.scene[object_cfg.name]
     if not hasattr(env, "_target_pos_w"):
         env._target_pos_w = torch.zeros(env.num_envs, 3, device=env.device)
 
     origins = env.scene.env_origins[env_ids]
-    sphere_local_x = sphere.data.root_pos_w[env_ids, 0] - origins[:, 0]
+    object_local_x = object.data.root_pos_w[env_ids, 0] - origins[:, 0]
 
     num = len(env_ids)
-    goal_local_x = -sphere_local_x
+    goal_local_x = -object_local_x
     goal_local_y = sample_uniform(goal_y_range[0], goal_y_range[1], (num,), env.device)
     goal_local_z = sample_uniform(goal_z_range[0], goal_z_range[1], (num,), env.device)
 
@@ -353,14 +353,14 @@ def reset_stillness_buffers(env: ManagerBasedRLEnv, env_ids: torch.Tensor, objec
 def compute_path_waypoints(
     env: ManagerBasedRLEnv,
     env_ids: torch.Tensor,
-    sphere_cfg: SceneEntityCfg,
+    object_cfg: SceneEntityCfg,
     lift_minimal_height: float,
     pregrasp_hover: float,
     lift_margin: float,
     carry_height: float,
 ) -> None:
     """Event term (mode="reset"): must be registered AFTER
-    reset_sphere_position (sphere's spawn) and AFTER randomize_goal
+    reset_object_position (object's spawn) and AFTER randomize_goal
     (env._target_pos_w) in the same EventCfg, since it reads both.
     Computes 5 Cartesian waypoints (pre-grasp, grasp, lift, transit,
     place) purely geometrically - no IK is used to define them. IK
@@ -370,26 +370,26 @@ def compute_path_waypoints(
     docs/superpowers/specs/2026-07-06-ar4-ik-guided-path-design.md for
     why an offline joint-space path isn't computed here.
     """
-    sphere: RigidObject = env.scene[sphere_cfg.name]
+    object: RigidObject = env.scene[object_cfg.name]
     if not hasattr(env, "_path_waypoints_w"):
         env._path_waypoints_w = torch.zeros(env.num_envs, 5, 3, device=env.device)
         env._path_waypoint_idx = torch.zeros(env.num_envs, dtype=torch.long, device=env.device)
         env._ik_milestone_max = torch.zeros(env.num_envs, device=env.device)
 
-    sphere_pos = sphere.data.root_pos_w[env_ids]
+    object_pos = object.data.root_pos_w[env_ids]
     goal_pos = env._target_pos_w[env_ids]
 
-    pregrasp = sphere_pos.clone()
+    pregrasp = object_pos.clone()
     pregrasp[:, 2] += pregrasp_hover
 
-    grasp = sphere_pos.clone()
+    grasp = object_pos.clone()
 
-    lift = sphere_pos.clone()
+    lift = object_pos.clone()
     lift[:, 2] = lift_minimal_height + lift_margin
 
-    transit = torch.zeros_like(sphere_pos)
-    transit[:, 0] = (sphere_pos[:, 0] + goal_pos[:, 0]) / 2.0
-    transit[:, 1] = (sphere_pos[:, 1] + goal_pos[:, 1]) / 2.0
+    transit = torch.zeros_like(object_pos)
+    transit[:, 0] = (object_pos[:, 0] + goal_pos[:, 0]) / 2.0
+    transit[:, 1] = (object_pos[:, 1] + goal_pos[:, 1]) / 2.0
     transit[:, 2] = carry_height
 
     place = goal_pos.clone()

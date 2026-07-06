@@ -149,72 +149,44 @@ class EventCfg:
         },
     )
 
+    # Zeroes the per-episode running-max potential buffer that
+    # staged_potential_progress relies on for its monotonicity guarantee -
+    # without this, a new episode would start with the PREVIOUS episode's
+    # highest-ever potential still in the buffer, and the shaped reward
+    # would read 0 for the entire episode (no new milestone could ever
+    # exceed a stale carried-over max).
+    reset_lift_potential = EventTerm(func=ar4_mdp.reset_lift_potential, mode="reset")
+
 
 @configclass
 class RewardsCfg:
-    """Dense, staged reward: reach, lift, coarse + fine-grained goal tracking, and small
-    action penalties. There is no separate sparse success-bonus term - success is signaled
-    via the `sphere_reached_goal` termination combined with the fine-grained goal-tracking
-    reward, which increasingly rewards precise placement as the sphere nears the target."""
+    """Single monotonic potential-based staged reward (reach->grasp->lift->
+    goal-tracking), replacing six independent additive terms from prior
+    experiments. See
+    docs/superpowers/specs/2026-07-06-ar4-sphere-lift-potential-shaping-design.md
+    for why: the additive combination let a momentary drop in any one
+    sub-signal (e.g. grasp_contact dipping during a real lift attempt)
+    produce a locally-worse trade than standing still, regardless of
+    exploration. The running-max potential this term is built on can
+    never do that - it is monotonically non-decreasing per episode, so
+    the shaped reward is always >= 0."""
 
-    reaching_sphere = RewTerm(
-        func=mdp.object_ee_distance,
-        params={"std": 0.1, "object_cfg": SceneEntityCfg("sphere"), "ee_frame_cfg": SceneEntityCfg("ee_frame")},
-        weight=1.0,
-    )
-
-    lifting_sphere = RewTerm(
-        func=mdp.object_is_lifted, params={"minimal_height": 0.03, "object_cfg": SceneEntityCfg("sphere")}, weight=25.0
-    )
-
-    grasp_contact = RewTerm(
-        func=ar4_mdp.contact_grasp_bonus,
-        weight=20.0,
-        params={
-            "force_threshold": 0.05,
-            "jaw1_contact_cfg": SceneEntityCfg("gripper_jaw1_contact"),
-            "jaw2_contact_cfg": SceneEntityCfg("gripper_jaw2_contact"),
-        },
-    )
-
-    # Active from iteration 0 (no curriculum gate - the prior curriculum-
-    # gated version turned on too late, after the static-grip behavior had
-    # already entrenched; this term is mechanically ~0 whenever the object
-    # hasn't been lifted, which is impossible before grip exists, so there
-    # was never a real risk in having it active from the start). Weight
-    # matches lifting_sphere's own 25.0. See
-    # docs/superpowers/specs/2026-07-06-ar4-sphere-lift-curriculum-design.md's
-    # "Revision" section.
-    lift_height_progress = RewTerm(
-        func=ar4_mdp.lift_height_progress,
+    staged_potential_progress = RewTerm(
+        func=ar4_mdp.staged_potential_progress,
         weight=25.0,
         params={
-            "height_std": 0.01,
-            "rest_height": 0.009,
+            "gamma": 0.98,  # must match Ar4PickPlacePPORunnerCfg.algorithm.gamma exactly
             "object_cfg": SceneEntityCfg("sphere"),
-        },
-    )
-
-    sphere_goal_tracking = RewTerm(
-        func=mdp.object_goal_distance,
-        params={
-            "std": 0.3,
-            "minimal_height": 0.03,
+            "ee_frame_cfg": SceneEntityCfg("ee_frame"),
+            "jaw1_contact_cfg": SceneEntityCfg("gripper_jaw1_contact"),
+            "jaw2_contact_cfg": SceneEntityCfg("gripper_jaw2_contact"),
+            "robot_cfg": SceneEntityCfg("robot"),
             "command_name": "object_pose",
-            "object_cfg": SceneEntityCfg("sphere"),
+            "reach_std": 0.1,
+            "force_threshold": 0.05,
+            "lift_minimal_height": 0.03,
+            "goal_std": 0.3,
         },
-        weight=16.0,
-    )
-
-    sphere_goal_tracking_fine_grained = RewTerm(
-        func=mdp.object_goal_distance,
-        params={
-            "std": 0.05,
-            "minimal_height": 0.03,
-            "command_name": "object_pose",
-            "object_cfg": SceneEntityCfg("sphere"),
-        },
-        weight=5.0,
     )
 
     action_rate = RewTerm(func=mdp.action_rate_l2, weight=-1e-4)

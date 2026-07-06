@@ -347,3 +347,56 @@ def reset_stillness_buffers(env: ManagerBasedRLEnv, env_ids: torch.Tensor, objec
         env._still_steps = torch.zeros(env.num_envs, device=env.device)
     env._still_ref_pos[env_ids] = object.data.root_pos_w[env_ids]
     env._still_steps[env_ids] = 0.0
+
+
+def compute_path_waypoints(
+    env: ManagerBasedRLEnv,
+    env_ids: torch.Tensor,
+    sphere_cfg: SceneEntityCfg,
+    lift_minimal_height: float,
+    pregrasp_hover: float,
+    lift_margin: float,
+    carry_height: float,
+) -> None:
+    """Event term (mode="reset"): must be registered AFTER
+    reset_sphere_position (sphere's spawn) and AFTER randomize_goal
+    (env._target_pos_w) in the same EventCfg, since it reads both.
+    Computes 5 Cartesian waypoints (pre-grasp, grasp, lift, transit,
+    place) purely geometrically - no IK is used to define them. IK
+    guidance happens later, live, per step (ik_guided_path_bonus), by
+    asking what classical IK would suggest toward whichever waypoint is
+    currently active - see
+    docs/superpowers/specs/2026-07-06-ar4-ik-guided-path-design.md for
+    why an offline joint-space path isn't computed here.
+    """
+    sphere: RigidObject = env.scene[sphere_cfg.name]
+    if not hasattr(env, "_path_waypoints_w"):
+        env._path_waypoints_w = torch.zeros(env.num_envs, 5, 3, device=env.device)
+        env._path_waypoint_idx = torch.zeros(env.num_envs, dtype=torch.long, device=env.device)
+        env._ik_milestone_max = torch.zeros(env.num_envs, device=env.device)
+
+    sphere_pos = sphere.data.root_pos_w[env_ids]
+    goal_pos = env._target_pos_w[env_ids]
+
+    pregrasp = sphere_pos.clone()
+    pregrasp[:, 2] += pregrasp_hover
+
+    grasp = sphere_pos.clone()
+
+    lift = sphere_pos.clone()
+    lift[:, 2] = lift_minimal_height + lift_margin
+
+    transit = torch.zeros_like(sphere_pos)
+    transit[:, 0] = (sphere_pos[:, 0] + goal_pos[:, 0]) / 2.0
+    transit[:, 1] = (sphere_pos[:, 1] + goal_pos[:, 1]) / 2.0
+    transit[:, 2] = carry_height
+
+    place = goal_pos.clone()
+
+    env._path_waypoints_w[env_ids, 0] = pregrasp
+    env._path_waypoints_w[env_ids, 1] = grasp
+    env._path_waypoints_w[env_ids, 2] = lift
+    env._path_waypoints_w[env_ids, 3] = transit
+    env._path_waypoints_w[env_ids, 4] = place
+    env._path_waypoint_idx[env_ids] = 0
+    env._ik_milestone_max[env_ids] = 0.0

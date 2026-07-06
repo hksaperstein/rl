@@ -51,6 +51,7 @@ else in the reward/observation/training setup stays exactly as it is on
 ### Task 1: Add the gripper `ContactSensorCfg` to the scene
 
 **Files:**
+- Modify: `tasks/ar4/robot_cfg.py:39` (`activate_contact_sensors`)
 - Modify: `tasks/ar4/pickplace_env_cfg.py:17` (import), `tasks/ar4/pickplace_env_cfg.py:39-53` (`Ar4PickPlaceSceneCfg`)
 
 **Interfaces:**
@@ -59,7 +60,37 @@ else in the reward/observation/training setup stays exactly as it is on
   `(num_envs, 2, 3)` (one row per gripper jaw), pre-filtered to only count
   contact against `{ENV_REGEX_NS}/Sphere`. Task 2 consumes this by name.
 
-- [ ] **Step 1: Add the `ContactSensorCfg` import**
+- [ ] **Step 1: Activate the contact-reporter API on the robot's rigid bodies**
+
+Isaac Lab's `ContactSensor` can only attach to bodies whose spawn config has
+opted into the contact-reporter API — without this, the sensor fails at
+construction with `RuntimeError: ... could not find any bodies with contact
+reporter API`, regardless of whether the prim path pattern is otherwise
+correct. In `tasks/ar4/robot_cfg.py`, change:
+
+```python
+AR4_MK5_CFG = ArticulationCfg(
+    spawn=sim_utils.UsdFileCfg(
+        usd_path=_resolve_usd_path(),
+        activate_contact_sensors=False,
+```
+
+to:
+
+```python
+AR4_MK5_CFG = ArticulationCfg(
+    spawn=sim_utils.UsdFileCfg(
+        usd_path=_resolve_usd_path(),
+        activate_contact_sensors=True,
+```
+
+This flips a shared config used by every AR4 script (`grasp_demo.py`,
+`interactive_demo.py`, both bare and RL envs) — that's fine: it only
+activates the reporter API needed for a `ContactSensor` to attach to the
+robot's bodies, it doesn't change physics behavior for anything that isn't
+using a `ContactSensor`.
+
+- [ ] **Step 2: Add the `ContactSensorCfg` import**
 
 In `tasks/ar4/pickplace_env_cfg.py`, change:
 
@@ -73,7 +104,7 @@ to:
 from isaaclab.sensors import CameraCfg, ContactSensorCfg, FrameTransformerCfg
 ```
 
-- [ ] **Step 2: Add the sensor to `Ar4PickPlaceSceneCfg`**
+- [ ] **Step 3: Add the sensor to `Ar4PickPlaceSceneCfg`**
 
 In the same file, change:
 
@@ -127,7 +158,7 @@ class Ar4PickPlaceSceneCfg(Ar4SceneCfg):
     )
 ```
 
-- [ ] **Step 3: Smoke test — confirm the prim paths are real**
+- [ ] **Step 4: Smoke test — confirm the prim paths are real**
 
 Run:
 
@@ -144,10 +175,10 @@ names the actual invalid path — compare it against
 the AR4 URDF by the grasp-alignment experiment) and correct the pattern in
 Step 2, then re-run this smoke test.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add tasks/ar4/pickplace_env_cfg.py
+git add tasks/ar4/robot_cfg.py tasks/ar4/pickplace_env_cfg.py
 git commit -m "Add gripper-to-sphere ContactSensor to AR4 pick-and-place scene"
 ```
 

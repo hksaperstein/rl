@@ -45,3 +45,19 @@ cd /home/saps/projects/rl
 **Factual check: Loss/learning_rate held near 0.001 throughout the continuation run**
 
 The learning rate trajectory shows the value stayed exactly at 0.001 across all 10 trajectory samples, with no decay toward the base 0.0001 or lower. This confirms that `schedule="fixed"` in the training script successfully maintained the learning rate bump at 0.001 for the entire 1500-iteration continuation, validating that the experiment tested what it claims to test.
+
+## Task 3: Real eval + video inspection (decision gate)
+
+**Eval command:** `/home/saps/IsaacLab/isaaclab.sh -p scripts/eval_loop.py --checkpoint logs/train/2026-07-06_13-24-16/model_2199.pt --episodes 10` — completed successfully, 10 videos written.
+
+**Frame extraction:** `ffmpeg -vf fps=10` on all 10 videos, controller-inspected directly (all 10 episode directories reviewed).
+
+**Observation:** The same static "reach, grip, freeze" signature as every prior experiment this session (curriculum-gated, always-on, sparse-only). The arm reaches down and holds a completely static pose next to the sphere for the rest of every episode. The sphere never leaves the ground in any of the 10 episodes; frames across episodes at equivalent timepoints are visually near-identical to every prior experiment's videos.
+
+**Decision gate: 0/10 episodes show any real lift.** Same failure signature as every prior attempt.
+
+**Learning-rate-held prerequisite: confirmed met** (Task 2: `Loss/learning_rate` held exactly at `0.001` across all 10 trajectory samples, no decay). This means the experiment genuinely tested its premise — the negative result isn't an artifact of the bump failing to hold.
+
+**Interpretation:** a substantial (10x), sustained, fixed-schedule learning-rate bump applied at exactly the point of behavioral entrenchment (iteration 700, identical starting policy for both this and the always-on experiment) produced no detectable change in outcome: `lifting_sphere` reads exactly `0.0` across the *entire* trajectory (not even the small noise blips seen in two prior runs), and `lift_height_progress`'s magnitude is essentially unchanged from the always-on run's own already-negligible value. This is a stronger null result than "no improvement" — a large, sustained optimizer-level perturbation, applied precisely where the literature predicted it should matter, produced no measurable effect at all on the target behavior.
+
+This is the fourth real attempt on the reward/optimization axis for this specific sub-problem (sparse-only, curriculum-gated dense, always-on dense, LR-bump). Per the user's "try both" instruction, proceeding directly to the second planned experiment (potential-based reward shaping) rather than pausing here.

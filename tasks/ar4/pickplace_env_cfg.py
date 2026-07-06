@@ -26,6 +26,7 @@ from isaaclab.utils.configclass import configclass
 
 from isaaclab_tasks.manager_based.manipulation.lift import mdp
 
+from . import mdp as ar4_mdp
 from .env_cfg import ActionsCfg, Ar4SceneCfg
 
 # Empirically-tuned offset (m) from the link_6 frame to the gripper's jaw
@@ -158,6 +159,16 @@ class RewardsCfg:
 
     lifting_sphere = RewTerm(
         func=mdp.object_is_lifted, params={"minimal_height": 0.03, "object_cfg": SceneEntityCfg("sphere")}, weight=25.0
+    )
+
+    grasp_contact = RewTerm(
+        func=ar4_mdp.contact_grasp_bonus,
+        weight=20.0,
+        params={
+            "force_threshold": 0.05,
+            "jaw1_contact_cfg": SceneEntityCfg("gripper_jaw1_contact"),
+            "jaw2_contact_cfg": SceneEntityCfg("gripper_jaw2_contact"),
+        },
     )
 
     sphere_goal_tracking = RewTerm(

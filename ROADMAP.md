@@ -240,10 +240,33 @@ follow-ups below.
        stayed wrong, and the previously-correct sphere newly broke).
        `PLANARITY_RESIDUAL_THRESHOLD` is back at `0.0008`; full data in
        `docs/superpowers/plans/2026-07-05-perception-threshold-recalibration-report.md`.
-       Real fix identified (implementation in progress): filter each
-       cluster's point cloud to a top height-band before the SVD plane fit,
-       excluding the contaminating side-wall points at the source rather
-       than retuning a downstream threshold.
+     - **Structural fix implemented: 3/4 objects now correct (up from 2/4),
+       fixing the originally-reported bug — with a new, well-characterized
+       wedge regression.** Added `_restrict_to_top_band()`/`TOP_BAND_MARGIN`
+       (4mm, geometrically derived then empirically swept 0.5-10mm against
+       the real camera) in `perception/shape_classifier.py`: the plane-fit
+       residual/tilt now use only points within the margin of the cluster's
+       own top, excluding the oblique side-wall sliver at the source rather
+       than trying to threshold around its effect. Verified (3 repeated real
+       end-to-end runs via `scripts/perception_classification_check.py`):
+       **cube → cube, rect_prism → rectangular_prism, sphere → sphere**, all
+       correct — the exact ROADMAP bug is fixed. All 25 `perception/tests/`
+       unit tests still pass. **New regression: wedge → cube.** Root cause
+       is structural, not a tuning miss: the wedge's real tilted face spans
+       nearly its whole height range, so a top-band crop thin enough to
+       exclude cube/rect_prism's side-wall sliver (≲4mm) also destroys the
+       wedge's own tilt signal (measured tilt drops 53°→3.5° within the
+       band); the wedge's tilt only recovers past a margin (~10mm) that
+       reintroduces the cube/rect_prism regression — no single margin fixes
+       all four shapes simultaneously. Full margin-sweep data in
+       `docs/superpowers/plans/2026-07-05-perception-sidewall-fix-report.md`.
+       Recommended follow-up (not yet done): give the wedge's tilt check a
+       RANSAC-style robust plane fit over the *full* cluster (robust to the
+       side-wall sliver as an outlier population) instead of relying on the
+       same top-band-restricted fit used for the residual/circularity
+       checks — decided to ship this net improvement now (3/4 > 2/4, and
+       fixes the specific bug this item was originally opened for) rather
+       than block on a fully general fix.
      - **LiDAR empirically tried, confirms RGB-D conclusion more decisively
        than the literature review alone.** Per direct user request, added an
        experimental base-mounted LiDAR (`RayCasterCfg` + `LidarPatternCfg`,

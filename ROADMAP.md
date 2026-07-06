@@ -567,6 +567,40 @@ follow-ups below.
        become a penalty; `stillness_penalty` instead returns an
        *already-signed* value — mixing the two conventions inside one
        `RewardsCfg` is exactly where this bug slipped in.
+     - **Final result (FALSIFIED).** Full run data:
+       `docs/superpowers/plans/2026-07-06-ar4-sphere-mirror-scene-report.md`.
+       10-episode real eval on the corrected checkpoint
+       (`logs/train/2026-07-06_16-02-16/model_1499.pt`): **0/10 episodes
+       show a genuine, controlled grasp-and-lift.** One episode (5)
+       initially looked like a lift in a coarse start/25%/50%/75%/end
+       sample, but a full frame-by-frame re-inspection (022 through 050)
+       showed the sphere separating from the gripper and drifting to a
+       hover disconnected from the arm — the gripper stays static near
+       the ground throughout, never co-located with the airborne sphere
+       again after first contact. Far more consistent with the tiny
+       object (0.01kg, 9mm radius) being knocked/launched by a glancing
+       collision with the arm's body than with a bilateral grasp
+       (`contact_grasp_bonus` requires simultaneous force on *both*
+       jaws, which a glancing knock from one link wouldn't satisfy).
+       This is the sixth real attempt on the reward/optimization axis for
+       this sub-problem (sparse-only, curriculum-gated dense, always-on
+       dense, LR-bump, potential-shaping, mirror-scene+stillness-penalty).
+       What *is* newly confirmed working: full-workspace spawn
+       randomization, the mirrored opposite-side goal mechanism (verified
+       correct independently before training), the stillness-penalty sign
+       fix (confirmed non-positive throughout training), and the
+       corrected milestone-bonus formula (confirmed non-negative and
+       growing, no decay bug). None of that changed the core outcome —
+       the gripper still never achieves and holds a bilateral grasp in
+       any eval episode. Per `superpowers:systematic-debugging` Phase
+       4.5, flagging back to the user rather than attempting a seventh
+       reward/optimization tweak unilaterally. Candidates worth
+       considering next: the gripper's ~28mm max aperture vs. the
+       sphere's 18mm diameter may leave too little margin for the
+       current joint-position-target action space to reliably converge
+       on a stable bilateral grasp pose, or a hierarchical policy
+       (separate reach-to-pregrasp and close-gripper phases) instead of
+       one flat policy learning both simultaneously.
 2. Shape classifier misclassifies cube/rectangular-prism as "sphere" against
    real depth data. Root-caused: `PLANARITY_RESIDUAL_THRESHOLD` (tuned on
    near-noiseless synthetic data) doesn't generalize to real sensor noise.

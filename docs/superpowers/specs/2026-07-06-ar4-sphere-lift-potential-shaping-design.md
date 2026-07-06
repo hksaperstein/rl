@@ -100,6 +100,27 @@ unrelated to this hypothesis), `sphere_reached_goal` (a *termination*, not
 a reward — unaffected), `_EE_OFFSET`, `ContactSensorCfg` entries, every
 observation/command, every PPO hyperparameter.
 
+### Required import changes to `tasks/ar4/mdp.py`
+
+The file's existing `TYPE_CHECKING` block (`RigidObject`, `ManagerBasedRLEnv`,
+`ContactSensor`) needs `FrameTransformer` added (used as a type hint in the
+new function below, same lazy-import pattern already established for the
+other sim-only types):
+
+```python
+if TYPE_CHECKING:
+    from isaaclab.assets import RigidObject
+    from isaaclab.envs import ManagerBasedRLEnv
+    from isaaclab.sensors import ContactSensor, FrameTransformer
+```
+
+And a new **runtime** (not `TYPE_CHECKING`) import for the frame-transform
+helper used in the goal-tracking sub-term:
+
+```python
+from isaaclab.utils.math import combine_frame_transforms
+```
+
 ### 2. Raw (non-monotonic) per-step progress signal
 
 `tasks/ar4/mdp.py`, new helper (not itself a `RewTerm` — called by the
@@ -112,6 +133,7 @@ def _raw_lift_progress(
     ee_frame_cfg: SceneEntityCfg,
     jaw1_contact_cfg: SceneEntityCfg,
     jaw2_contact_cfg: SceneEntityCfg,
+    robot_cfg: SceneEntityCfg,
     command_name: str,
     reach_std: float,
     force_threshold: float,
@@ -137,12 +159,25 @@ def _raw_lift_progress(
 
     lift_term = (object.data.root_pos_w[:, 2] > lift_minimal_height).float()
 
+    # The command is generated in the robot's root frame (UniformPoseCommandCfg
+    # with asset_name="robot") - must transform to world frame before comparing
+    # against the object's world-frame position, exactly matching
+    # isaaclab_tasks' own object_goal_distance (the function sphere_goal_tracking
+    # already used, before this experiment replaces it).
+    robot: RigidObject = env.scene[robot_cfg.name]
     command = env.command_manager.get_command(command_name)
-    goal_dist = torch.norm(object.data.root_pos_w[:, :3] - command[:, :3], dim=-1)
+    des_pos_w, _ = combine_frame_transforms(robot.data.root_pos_w, robot.data.root_quat_w, command[:, :3])
+    goal_dist = torch.norm(object.data.root_pos_w - des_pos_w, dim=-1)
     goal_term = 1.0 - torch.tanh(goal_dist / goal_std)
 
     return 0.1 * reach_term + 0.2 * grasp_term + 0.3 * lift_term + 0.4 * goal_term
 ```
+
+Requires a new import in `tasks/ar4/mdp.py`:
+`from isaaclab.utils.math import combine_frame_transforms` (a runtime
+import, not `TYPE_CHECKING` — it's a plain function, not a type
+annotation, matching how `isaaclab_tasks`' own `object_goal_distance`
+imports it in `isaaclab_tasks/manager_based/manipulation/lift/mdp/rewards.py`).
 
 ### 3. Stateful, monotonic potential-shaping wrapper
 
@@ -159,6 +194,7 @@ def staged_potential_progress(
     ee_frame_cfg: SceneEntityCfg,
     jaw1_contact_cfg: SceneEntityCfg,
     jaw2_contact_cfg: SceneEntityCfg,
+    robot_cfg: SceneEntityCfg,
     command_name: str,
     reach_std: float,
     force_threshold: float,
@@ -179,7 +215,7 @@ def staged_potential_progress(
         env._lift_potential_max = torch.zeros(env.num_envs, device=env.device)
 
     raw = _raw_lift_progress(
-        env, object_cfg, ee_frame_cfg, jaw1_contact_cfg, jaw2_contact_cfg,
+        env, object_cfg, ee_frame_cfg, jaw1_contact_cfg, jaw2_contact_cfg, robot_cfg,
         command_name, reach_std, force_threshold, lift_minimal_height, goal_std,
     )
     prev_potential = env._lift_potential_max.clone()
@@ -213,6 +249,7 @@ staged_potential_progress = RewTerm(
         "ee_frame_cfg": SceneEntityCfg("ee_frame"),
         "jaw1_contact_cfg": SceneEntityCfg("gripper_jaw1_contact"),
         "jaw2_contact_cfg": SceneEntityCfg("gripper_jaw2_contact"),
+        "robot_cfg": SceneEntityCfg("robot"),
         "command_name": "object_pose",
         "reach_std": 0.1,
         "force_threshold": 0.05,

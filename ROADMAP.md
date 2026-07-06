@@ -731,6 +731,32 @@ follow-ups below.
        workspace-relevant channels (~7mm at 0.3m range) is comparable to the
        18mm sphere — too coarse either way. Confirms: stick with RGB-D, no
        further LiDAR investigation planned.
+     - **Follow-up spike (2026-07-06): confirmed the single-static-mesh
+       limitation cannot be worked around by pointing `mesh_prim_paths` at
+       the object instead of the ground — root-caused, not just re-tested.**
+       Per direct user request ("create a lidar with higher resolution"),
+       investigated whether higher resolution could compensate, first
+       checking whether the object-vs-ground limitation itself could be
+       sidestepped. Two independent, code-verified blockers, not just one:
+       (a) `RayCaster._initialize_warp_meshes`
+       (`isaaclab/sensors/ray_caster/ray_caster.py:162-210`) bakes the
+       target mesh's world-space vertices into an immutable `wp.Mesh`
+       **once**, at sim initialization (gated by a `_is_initialized` flag
+       only cleared on a full timeline stop, never on a per-env reset) —
+       confirmed empirically too: teleporting a mesh-typed `RigidObject`
+       (the wedge; cube/rect_prism/sphere are analytic USD primitives, not
+       `UsdGeom.Mesh`, see (b)) from `(0,0,0.009)` to `(0.7,0.7,0.009)` left
+       the RayCaster's `ray_hits_w` centroid completely unchanged. (b)
+       Independent of (a), this repo's actual graspable objects
+       (cube/rect_prism/sphere in `objects_cfg.py`) are procedural/analytic
+       USD primitives, not `UsdGeom.Mesh` prims at all — pointing
+       `mesh_prim_paths` at any of them raises
+       `RuntimeError: Invalid mesh prim path` immediately, reproducible
+       across repeated runs. Conclusion: no resolution setting or
+       target-selection change can make this Isaac Lab version's
+       `RayCaster` see a dynamic graspable object — the limitation is
+       structural, not tunable. RGB-D remains the only viable perception
+       modality in this stack; no further LiDAR investigation planned.
 3. `interactive_demo.py` live GUI drag verification (plan Task 10, Step 4)
    was never performed — needs a human running it without `--headless` to
    confirm the physical drag → settle → pick-and-place → idle-again flow.

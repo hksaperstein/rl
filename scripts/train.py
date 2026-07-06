@@ -36,6 +36,17 @@ parser.add_argument(
         "function is unchanged (stays privileged). Implies --enable_cameras."
     ),
 )
+parser.add_argument(
+    "--mirror",
+    action="store_true",
+    default=False,
+    help=(
+        "Train on the mirror-goal scene (sphere only, spawn randomized across the full workspace, goal "
+        "always on the opposite side of the robot from the spawn), with the corrected undiscounted "
+        "milestone-bonus reward and a grasp-gated stillness penalty. See "
+        "docs/superpowers/specs/2026-07-06-ar4-sphere-mirror-scene-design.md."
+    ),
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
@@ -66,13 +77,19 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from _perception_adapter import PerceptionObservationWrapper  # noqa: E402
 from tasks.ar4.agents.rsl_rl_ppo_cfg import Ar4PickPlacePPORunnerCfg  # noqa: E402
 from tasks.ar4.pickplace_env_cfg import GROUND_Z, Ar4PickPlaceEnvCfg  # noqa: E402
+from tasks.ar4.pickplace_mirror_env_cfg import Ar4PickPlaceMirrorEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_single_object_env_cfg import Ar4PickPlaceSingleObjectEnvCfg  # noqa: E402
 
 LOG_ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs", "train")
 
 
 def main() -> None:
-    env_cfg_cls = Ar4PickPlaceSingleObjectEnvCfg if args_cli.perception else Ar4PickPlaceEnvCfg
+    if args_cli.mirror:
+        env_cfg_cls = Ar4PickPlaceMirrorEnvCfg
+    elif args_cli.perception:
+        env_cfg_cls = Ar4PickPlaceSingleObjectEnvCfg
+    else:
+        env_cfg_cls = Ar4PickPlaceEnvCfg
     env_cfg = env_cfg_cls()
     env_cfg.scene.num_envs = args_cli.num_envs
     env_cfg.sim.device = args_cli.device

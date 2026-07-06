@@ -23,6 +23,12 @@ parser.add_argument(
     default=False,
     help="Use the real camera-based perception pipeline instead of privileged simulation state for the sphere's observed position.",
 )
+parser.add_argument(
+    "--mirror",
+    action="store_true",
+    default=False,
+    help="Evaluate the mirror-goal scene (see scripts/train.py --mirror) instead of the four-object scene.",
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 args_cli.enable_cameras = True  # required for video recording
@@ -53,12 +59,18 @@ from perception.overlay import draw_detections  # noqa: E402
 from perception.tracker import ObjectTracker  # noqa: E402
 from tasks.ar4.agents.rsl_rl_ppo_cfg import Ar4PickPlacePPORunnerCfg  # noqa: E402
 from tasks.ar4.pickplace_env_cfg import GROUND_Z, Ar4PickPlaceEnvCfg, Ar4PickPlacePerceptionEnvCfg  # noqa: E402
+from tasks.ar4.pickplace_mirror_env_cfg import Ar4PickPlaceMirrorEnvCfg  # noqa: E402
 
 VIDEO_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs", "videos")
 
 
 def main() -> None:
-    env_cfg_cls = Ar4PickPlacePerceptionEnvCfg if args_cli.perception else Ar4PickPlaceEnvCfg
+    if args_cli.mirror:
+        env_cfg_cls = Ar4PickPlaceMirrorEnvCfg
+    elif args_cli.perception:
+        env_cfg_cls = Ar4PickPlacePerceptionEnvCfg
+    else:
+        env_cfg_cls = Ar4PickPlaceEnvCfg
     env_cfg = env_cfg_cls()
     env_cfg.scene.num_envs = 1
     env_cfg.sim.device = args_cli.device
@@ -81,12 +93,13 @@ def main() -> None:
         # advances and silently merges every episode into one video. 250 = one episode's
         # worth of steps (episode_length_s=5.0 / step_dt=decimation*sim.dt=2*0.01=0.02s),
         # from Ar4PickPlaceEnvCfg - update this if that config changes.
+        name_prefix = "ar4_pickplace_mirror" if args_cli.mirror else "ar4_pickplace"
         env = gym.wrappers.RecordVideo(
             env,
             video_folder=VIDEO_DIR,
             step_trigger=lambda step: step % 250 == 0,
             video_length=250,
-            name_prefix="ar4_pickplace",
+            name_prefix=name_prefix,
             disable_logger=True,
         )
 

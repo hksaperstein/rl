@@ -181,6 +181,51 @@ follow-ups below.
    Circularity looks more promising as the primary signal, but real
    tilt/plane-fit readings were also noisy on small, low-pixel-count real
    objects — may need more than a threshold nudge.
+   - **Literature research (citation-verified)**: delegated real research on
+     sensing-modality and technique choices (junior researcher + independent
+     senior citation review — the senior review caught a fabricated
+     verbatim quote and a fabricated "3-6mm RMS depth noise at 0.5m" figure
+     built on garbled, self-contradictory arithmetic, echoing the same
+     fabricated-precision-number pattern already seen once this session in
+     the grasp-reward research; full docs in
+     `docs/superpowers/specs/research/2026-07-05-perception-sensing-literature-junior.md`
+     and `-senior-review.md`). What survived verification:
+     - **RGB-D remains the right modality, not LiDAR** — LiDAR's angular
+       resolution creates mm-scale uncertainty on objects this small
+       (9-30mm) at 0.5m range (a correctly-labeled trig estimate, ~8.7mm per
+       1° beam divergence — not dressed up as a citation). No modality
+       change needed; the existing top-down RGB-D camera is the right
+       sensor.
+     - **The 0.8mm threshold is real-noise-unrealistic** (qualitatively
+       confirmed - depth noise at this range is almost certainly far
+       larger), but the specific "recalibrate to 9-18mm" number has no real
+       citation basis and should NOT be adopted on authority. Correct next
+       step: **empirically measure the real planarity-residual distribution
+       on a flat reference surface at the actual 0.55m working distance**
+       (directly actionable in this repo's own sim - the perception camera
+       already has a realistic noise model, no physical hardware needed;
+       `scripts/perception_calibration.py` is the existing tool this could
+       extend) and set the threshold to mean + 3×std from that measurement,
+       not a literature-derived constant.
+     - **Phase 2 fallback** (if recalibration alone isn't enough): a
+       **spin image** local descriptor + lightweight classifier — verbatim-
+       verified 85-91% accuracy on ModelNet10
+       (DOI:10.3390/s24237749/Sensors 2024) — not FPFH (the junior
+       misapplied this paper's result to FPFH; the paper explicitly tested
+       and rejected FPFH in favor of spin image).
+     - **Phase 3 fallback** (if still insufficient): PointNet-style
+       end-to-end learned classifier, verbatim-verified noise/corruption
+       robust (3.8% accuracy drop at 50% missing points, >80% accuracy at
+       20% outlier points - arXiv:1612.00593) - more effort (needs training
+       data) but robust to noise by construction rather than via a
+       hand-tuned threshold.
+     - **Multi-view fusion** (a second camera angle) is a well-verified
+       separate enhancement (MVTN, 13% accuracy gain at 50% occlusion,
+       arXiv:2011.13244) but is a bigger architecture change (new camera)
+       than this bug fix needs - noted as a future direction, not part of
+       this fix.
+     - Not yet implemented - Phase 1 (empirical threshold recalibration) is
+       immediately actionable and is the next step.
 3. `interactive_demo.py` live GUI drag verification (plan Task 10, Step 4)
    was never performed — needs a human running it without `--headless` to
    confirm the physical drag → settle → pick-and-place → idle-again flow.

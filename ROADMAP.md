@@ -108,6 +108,73 @@ follow-ups below.
        `align_grasp_around_handle`/`approach_gripper_handle` combination
        than its bare `grasp_handle` distance check) is the recommended next
        step, still undone.
+   - **Follow-up experiment: multiplicatively-gated alignment reward
+     (falsified, different failure mode).** Implemented exactly the
+     stricter-geometric-check recommendation above: extended the `ee_frame`
+     `FrameTransformerCfg` with two new target frames on the actual gripper
+     jaw links (`gripper_jaw1_link`/`gripper_jaw2_link` — confirmed correct
+     against the AR4 URDF, prim-path hypothesis validated on the first smoke
+     test with no correction needed), and added `aligned_grasp_bonus`
+     (`tasks/ar4/mdp.py`) which multiplicatively gates the closure reward by
+     an alignment score (`1 - tanh(centering_dist / 0.01)`, `centering_dist`
+     = distance from the sphere to the midpoint of the two fingertip
+     frames) — per GRIT's verbatim-confirmed `r_h·α_h` multiplicative
+     pattern (arXiv:2604.04138), replacing the prior experiment's additive/
+     independently-satisfiable combination. Full design in
+     `docs/superpowers/specs/2026-07-05-ar4-sphere-grasp-alignment-design.md`,
+     citation-verified research in `docs/superpowers/specs/research/2026-07-05-grasp-alignment-literature-*.md`
+     (the senior review caught a fabricated `std=0.02m` claim and two
+     misapplied citations in the underlying research before this design was
+     finalized), full run data in
+     `docs/superpowers/plans/2026-07-05-ar4-sphere-grasp-alignment-report.md`.
+     Result: **the gate is not reward-hacked, but also never discovered** —
+     `grasp_sphere_aligned` stayed at noise level (max 0.00207, ~0.7% of its
+     ~0.284 theoretical max) for the entire 1500-iteration run, a sharp
+     contrast with the prior experiment's term saturating near its max by
+     iteration ~1300. `lifting_sphere`/`sphere_reached_goal` again never
+     left 0.0000. Eval video (10 episodes, dense frame sampling) showed a
+     third distinct failure signature: the arm reaches toward the sphere in
+     the first ~1s then **freezes into a completely static pose for the
+     rest of the episode** (byte-identical geometry from t=1.0s to episode
+     end) — this is the *original* exploration-failure signature from the
+     very first experiment (reach-then-freeze, no closing attempt at all),
+     not the second experiment's "closes beside the sphere" signature. The
+     sphere becomes occluded behind the stationary gripper from the fixed
+     camera angle — confirmed via a direct numeric rollout check
+     (querying the sphere's actual world-frame height across 32 parallel
+     envs) to rule out the occlusion being a hidden successful grasp rather
+     than a camera-angle artifact of a sphere still resting on the ground.
+     Root cause: making the reward correct (requiring true centering, 1cm
+     `centering_std` window) came at the direct cost of making it far
+     harder to stumble into via random exploration — tight relative to the
+     sphere's own ~9mm radius and the gripper's small travel range, so the
+     policy's exploration noise essentially never produces the joint
+     (position, orientation, closure) combination needed to get any
+     nonzero signal from this term. The code change was reverted (not
+     merged), matching the second experiment's precedent for an
+     ineffective change; spec/report docs kept as the research record.
+     - This is now a **third falsified dense-reward-shaping-only
+       hypothesis**: (1) lift-weight bump — no-op; (2) additive
+       proximity+closure grasp bonus — reward-hacked; (3)
+       multiplicatively-gated alignment+closure bonus — structurally
+       un-hackable but too sparse to ever be discovered by unguided
+       exploration. Per `superpowers:systematic-debugging` Phase 4.5 (3+
+       failed fixes → question the architecture, not attempt a fourth
+       single-shot tweak), the recommended next steps are no longer
+       reward-shaping-only: **(a)** Isaac Lab's `ContactSensor`/
+       `contact_forces` infrastructure (confirmed real and available in
+       the installed Isaac Lab source — `isaaclab/sensors/contact_sensor/`,
+       `isaaclab/envs/mdp/rewards.py:281`), giving a ground-truth "is the
+       object actually being touched by both fingers" signal instead of a
+       geometric proxy that must be simultaneously correct and
+       discoverable; or **(b)** a curriculum/staged-reward approach (reach-
+       only → reach+close-gripper bonus with a *looser*, discovery-friendly
+       threshold first → tighten the alignment requirement only after
+       closure-near-object is already a well-established behavior),
+       per the second experiment's literature review (Dext-Gen,
+       arXiv:2206.13966, verbatim-confirmed progressive-tolerance-
+       tightening pattern). This decision point was flagged back to the
+       user rather than attempting a fourth reward tweak unilaterally.
 2. Shape classifier misclassifies cube/rectangular-prism as "sphere" against
    real depth data. Root-caused: `PLANARITY_RESIDUAL_THRESHOLD` (tuned on
    near-noiseless synthetic data) doesn't generalize to real sensor noise.

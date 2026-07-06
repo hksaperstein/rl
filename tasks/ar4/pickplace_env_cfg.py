@@ -14,8 +14,6 @@ created.
 
 import isaaclab.sim as sim_utils
 from isaaclab.envs import ManagerBasedRLEnvCfg
-from isaaclab.envs.mdp.curriculums import modify_reward_weight
-from isaaclab.managers import CurriculumTermCfg as CurrTerm
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
@@ -179,11 +177,17 @@ class RewardsCfg:
         },
     )
 
-    # Curriculum-gated: weight starts at 0.0 (inert during phase-1 reach+grip
-    # training) and is raised to 15.0 at iteration 700 by CurriculumCfg below.
+    # Active from iteration 0 (no curriculum gate - the prior curriculum-
+    # gated version turned on too late, after the static-grip behavior had
+    # already entrenched; this term is mechanically ~0 whenever the object
+    # hasn't been lifted, which is impossible before grip exists, so there
+    # was never a real risk in having it active from the start). Weight
+    # matches lifting_sphere's own 25.0. See
+    # docs/superpowers/specs/2026-07-06-ar4-sphere-lift-curriculum-design.md's
+    # "Revision" section.
     lift_height_progress = RewTerm(
         func=ar4_mdp.lift_height_progress,
-        weight=0.0,
+        weight=25.0,
         params={
             "height_std": 0.01,
             "rest_height": 0.009,
@@ -219,24 +223,6 @@ class RewardsCfg:
 
 
 @configclass
-class CurriculumCfg:
-    """Curriculum terms for the MDP. Ramps in the dense lift-height shaping
-    term only after grip has converged (see this session's own TensorBoard
-    data in docs/superpowers/plans/2026-07-06-ar4-sphere-contact-grasp-reward-report.md,
-    where grasp_contact plateaus by iteration ~700), rather than competing
-    with grip-learning from iteration 0. Uses Isaac Lab's own
-    modify_reward_weight curriculum term - the same mechanism the Franka
-    lift task (isaaclab_tasks/manager_based/manipulation/lift/lift_env_cfg.py)
-    uses for its own action_rate/joint_vel curriculum - rather than custom
-    curriculum code."""
-
-    lift_height_progress = CurrTerm(
-        func=modify_reward_weight,
-        params={"term_name": "lift_height_progress", "weight": 15.0, "num_steps": 16800},
-    )
-
-
-@configclass
 class TerminationsCfg:
     """Success (sphere at target) ends the episode early; otherwise a fixed timeout."""
 
@@ -259,7 +245,6 @@ class Ar4PickPlaceEnvCfg(ManagerBasedRLEnvCfg):
     rewards: RewardsCfg = RewardsCfg()
     terminations: TerminationsCfg = TerminationsCfg()
     events: EventCfg = EventCfg()
-    curriculum: CurriculumCfg = CurriculumCfg()
 
     def __post_init__(self) -> None:
         self.decimation = 2

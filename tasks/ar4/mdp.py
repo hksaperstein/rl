@@ -12,11 +12,12 @@ from typing import TYPE_CHECKING
 
 import torch
 
+from isaaclab.controllers import DifferentialIKController, DifferentialIKControllerCfg
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.utils.math import combine_frame_transforms, sample_uniform, subtract_frame_transforms
 
 if TYPE_CHECKING:
-    from isaaclab.assets import RigidObject
+    from isaaclab.assets import Articulation, RigidObject
     from isaaclab.envs import ManagerBasedRLEnv
     from isaaclab.sensors import ContactSensor, FrameTransformer
 
@@ -400,3 +401,88 @@ def compute_path_waypoints(
     env._path_waypoints_w[env_ids, 4] = place
     env._path_waypoint_idx[env_ids] = 0
     env._ik_milestone_max[env_ids] = 0.0
+
+
+def ik_guided_path_bonus(
+    env: ManagerBasedRLEnv,
+    robot_cfg: SceneEntityCfg,
+    ee_frame_cfg: SceneEntityCfg,
+    proximity_std: float,
+    advance_tolerance: float,
+    ik_joint_std: float,
+) -> torch.Tensor:
+    """Undiscounted running-max bonus (same corrected pattern as
+    staged_milestone_bonus - see that function's docstring for the decay
+    bug this avoids) combining two sub-signals:
+
+    1. Cartesian proximity to the current path waypoint
+       (env._path_waypoints_w[:, env._path_waypoint_idx]), weighted so
+       later waypoints dominate - a direct generalization of the old
+       reach/lift/goal staged terms into one continuous 5-stage signal.
+    2. How closely the arm's actual joint configuration matches what a
+       LIVE classical IK controller (DifferentialIKController) suggests
+       as the next joint target toward that same waypoint, computed
+       fresh every step from the real physics state (jacobian, joint
+       pos, ee pose) - see
+       docs/superpowers/specs/2026-07-06-ar4-ik-guided-path-design.md's
+       "Important implementation refinement" section for why this is
+       live rather than a precomputed offline path.
+
+    The waypoint index itself advances (monotonically, capped at 4)
+    whenever the end-effector comes within advance_tolerance of the
+    current waypoint.
+    """
+    robot: Articulation = env.scene[robot_cfg.name]
+    ee_frame: FrameTransformer = env.scene[ee_frame_cfg.name]
+
+    if not hasattr(env, "_path_waypoints_w"):
+        env._path_waypoints_w = torch.zeros(env.num_envs, 5, 3, device=env.device)
+        env._path_waypoint_idx = torch.zeros(env.num_envs, dtype=torch.long, device=env.device)
+        env._ik_milestone_max = torch.zeros(env.num_envs, device=env.device)
+
+    if not hasattr(env, "_ik_controller"):
+        ik_cfg = DifferentialIKControllerCfg(command_type="position", use_relative_mode=False, ik_method="dls")
+        env._ik_controller = DifferentialIKController(ik_cfg, num_envs=env.num_envs, device=env.device)
+        env._ik_robot_entity_cfg = SceneEntityCfg("robot", joint_names=robot_cfg.joint_names, body_names=["link_6"])
+        env._ik_robot_entity_cfg.resolve(env.scene)
+        env._ik_jacobi_idx = (
+            env._ik_robot_entity_cfg.body_ids[0] - 1
+            if robot.is_fixed_base
+            else env._ik_robot_entity_cfg.body_ids[0]
+        )
+
+    current_waypoint = torch.gather(
+        env._path_waypoints_w, 1, env._path_waypoint_idx.view(-1, 1, 1).expand(-1, 1, 3)
+    ).squeeze(1)
+
+    ee_pos_w = ee_frame.data.target_pos_w[:, 0, :]
+    dist_to_waypoint = torch.norm(ee_pos_w - current_waypoint, dim=-1)
+
+    reached = dist_to_waypoint < advance_tolerance
+    env._path_waypoint_idx = torch.where(
+        reached & (env._path_waypoint_idx < 4), env._path_waypoint_idx + 1, env._path_waypoint_idx
+    )
+
+    proximity_term = (1.0 - torch.tanh(dist_to_waypoint / proximity_std)) * (
+        env._path_waypoint_idx.float() + 1.0
+    ) / 5.0
+
+    jacobian = robot.root_physx_view.get_jacobians()[:, env._ik_jacobi_idx, :, env._ik_robot_entity_cfg.joint_ids]
+    root_pose_w = robot.data.root_pose_w
+    ee_pose_w = robot.data.body_pose_w[:, env._ik_robot_entity_cfg.body_ids[0]]
+    ee_pos_b, ee_quat_b = subtract_frame_transforms(
+        root_pose_w[:, 0:3], root_pose_w[:, 3:7], ee_pose_w[:, 0:3], ee_pose_w[:, 3:7]
+    )
+    joint_pos = robot.data.joint_pos[:, env._ik_robot_entity_cfg.joint_ids]
+
+    waypoint_command_b, _ = subtract_frame_transforms(root_pose_w[:, 0:3], root_pose_w[:, 3:7], current_waypoint)
+    env._ik_controller.set_command(waypoint_command_b, ee_pos=ee_pos_b, ee_quat=ee_quat_b)
+    joint_pos_des = env._ik_controller.compute(ee_pos_b, ee_quat_b, jacobian, joint_pos)
+
+    joint_dist = torch.norm(joint_pos - joint_pos_des, dim=-1)
+    ik_match_term = 1.0 - torch.tanh(joint_dist / ik_joint_std)
+
+    raw = proximity_term + ik_match_term
+    prev = env._ik_milestone_max.clone()
+    env._ik_milestone_max = torch.maximum(env._ik_milestone_max, raw)
+    return env._ik_milestone_max - prev

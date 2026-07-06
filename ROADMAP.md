@@ -454,6 +454,46 @@ follow-ups below.
        potential-based reward shaping), alongside the previously-named
        architectural options (hierarchical reach-then-grasp-policy
        split).
+   - **Follow-up experiment: SA-PPO-style dynamic learning-rate bump
+     (falsified) — a strong null result, not just "no improvement."**
+     Per user instruction to try both remaining literature-backed
+     candidates, this experiment tested the first one in isolation.
+     Reused `model_700.pt` from the always-on-lift run (the identical
+     "grip converged, exploration about to collapse" starting policy)
+     and resumed training via a new `scripts/train_lr_bump.py` with
+     `learning_rate` bumped `1e-4`→`1e-3` and `schedule` switched
+     `"adaptive"`→`"fixed"` (the adaptive schedule would otherwise claw
+     the bump back down given the converged policy's low KL divergence —
+     a real gotcha found and fixed during design, not just an oversight
+     avoided by luck), per
+     `docs/superpowers/specs/2026-07-06-ar4-sphere-lift-lr-bump-design.md`.
+     No reward-function changes — this isolated the learning-rate
+     intervention alone against the exact same starting point as the
+     always-on experiment. Plan in
+     `docs/superpowers/plans/2026-07-06-ar4-sphere-lift-lr-bump-implementation.md`,
+     full run data in
+     `docs/superpowers/plans/2026-07-06-ar4-sphere-lift-lr-bump-report.md`.
+     - **Confirmed the learning rate actually held at `0.001` across the
+       entire 1500-iteration continuation** (no decay back toward
+       baseline) — the experiment genuinely tested its premise, this
+       isn't a null result from the bump failing to hold.
+     - **Result: 0/10 real eval episodes show any lift** — same "reach,
+       grip, freeze" signature as every prior experiment. Notably,
+       `lifting_sphere` read *exactly* `0.0` across the **entire**
+       trajectory this time, without even the small noise blips both
+       prior full runs showed — a substantial, sustained, correctly-
+       applied optimizer-level perturbation, injected at precisely the
+       point the literature identified as critical, produced no
+       measurable effect whatsoever on the target behavior. This is a
+       stronger negative result than "didn't help" — it argues against
+       "insufficient exploration pressure at the right moment" being the
+       operative mechanism at all, at least via this specific lever.
+     - **This is the fourth real attempt on the reward/optimization axis
+       for this sub-problem** (sparse-only, curriculum-gated dense,
+       always-on dense, LR-bump). Per the user's "try both" instruction,
+       proceeding directly to the second planned experiment (potential-
+       based reward shaping) — not gating it on this result, since the
+       user explicitly asked for both regardless of outcome.
 2. Shape classifier misclassifies cube/rectangular-prism as "sphere" against
    real depth data. Root-caused: `PLANARITY_RESIDUAL_THRESHOLD` (tuned on
    near-noiseless synthetic data) doesn't generalize to real sensor noise.

@@ -134,7 +134,10 @@ class EventCfg:
        just with a wider pose_range than pickplace_env_cfg.py's ±2cm
        jitter).
     3. randomize_goal - reads the sphere's now-updated position, sets the
-       mirrored goal into env._target_pos_w."""
+       mirrored goal into env._target_pos_w.
+    4. reset_lift_milestone / reset_stillness_buffers - zero the new
+       reward terms' stateful buffers, so a new episode starts with no
+       carried-over progress or stale stillness reference."""
 
     reset_all = EventTerm(func=mdp.reset_scene_to_default, mode="reset")
 
@@ -158,6 +161,14 @@ class EventCfg:
         },
     )
 
+    reset_lift_milestone = EventTerm(func=ar4_mdp.reset_lift_milestone, mode="reset")
+
+    reset_stillness_buffers = EventTerm(
+        func=ar4_mdp.reset_stillness_buffers,
+        mode="reset",
+        params={"object_cfg": SceneEntityCfg("sphere")},
+    )
+
 
 @configclass
 class TerminationsCfg:
@@ -170,3 +181,68 @@ class TerminationsCfg:
         func=ar4_mdp.object_reached_mirrored_goal,
         params={"threshold": 0.02, "object_cfg": SceneEntityCfg("sphere")},
     )
+
+
+@configclass
+class RewardsCfg:
+    """Corrected undiscounted staged milestone bonus (see
+    staged_milestone_bonus's docstring for the bug this fixes in
+    staged_potential_progress) plus a grasp-gated stillness penalty."""
+
+    staged_milestone_bonus = RewTerm(
+        func=ar4_mdp.staged_milestone_bonus,
+        weight=25.0,
+        params={
+            "object_cfg": SceneEntityCfg("sphere"),
+            "ee_frame_cfg": SceneEntityCfg("ee_frame"),
+            "jaw1_contact_cfg": SceneEntityCfg("gripper_jaw1_contact"),
+            "jaw2_contact_cfg": SceneEntityCfg("gripper_jaw2_contact"),
+            "reach_std": 0.1,
+            "force_threshold": 0.05,
+            "lift_minimal_height": 0.03,
+            "goal_std": 0.3,
+        },
+    )
+
+    stillness_penalty = RewTerm(
+        func=ar4_mdp.stillness_penalty,
+        weight=-2.0,
+        params={
+            "object_cfg": SceneEntityCfg("sphere"),
+            "jaw1_contact_cfg": SceneEntityCfg("gripper_jaw1_contact"),
+            "jaw2_contact_cfg": SceneEntityCfg("gripper_jaw2_contact"),
+            "force_threshold": 0.05,
+            "still_bound": 0.005,
+            "patience_steps": 25,
+        },
+    )
+
+    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-1e-4)
+
+    joint_vel = RewTerm(func=mdp.joint_vel_l2, weight=-1e-4, params={"asset_cfg": SceneEntityCfg("robot")})
+
+
+@configclass
+class Ar4PickPlaceMirrorEnvCfg(ManagerBasedRLEnvCfg):
+    """AR4 mirror-goal task: pick up the sphere (randomized spawn across
+    the full workspace) and place it on the opposite side of the robot.
+    num_envs=4096 default (a real training-scale run, not the smaller
+    num_envs=16 used by the single-object camera-training precedent) -
+    scripts/train.py's --num_envs flag overrides this per-run same as
+    every other env cfg in this repo."""
+
+    scene: Ar4PickPlaceMirrorSceneCfg = Ar4PickPlaceMirrorSceneCfg(num_envs=4096, env_spacing=2.5)
+    observations: ObservationsCfg = ObservationsCfg()
+    actions: ActionsCfg = ActionsCfg()
+    rewards: RewardsCfg = RewardsCfg()
+    terminations: TerminationsCfg = TerminationsCfg()
+    events: EventCfg = EventCfg()
+
+    def __post_init__(self) -> None:
+        self.decimation = 2
+        self.episode_length_s = 5.0
+        self.sim.dt = 0.01
+        self.sim.render_interval = self.decimation
+        self.sim.physics_material = sim_utils.RigidBodyMaterialCfg(static_friction=1.0, dynamic_friction=1.0)
+        self.viewer.eye = (1.5, 1.5, 1.2)
+        self.viewer.lookat = (0.0, 0.0, 0.4)

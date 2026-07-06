@@ -216,3 +216,134 @@ def object_reached_mirrored_goal(
         env._target_pos_w = torch.zeros(env.num_envs, 3, device=env.device)
     distance = torch.norm(object.data.root_pos_w - env._target_pos_w, dim=-1)
     return distance < threshold
+
+
+def _raw_lift_progress_mirrored(
+    env: ManagerBasedRLEnv,
+    object_cfg: SceneEntityCfg,
+    ee_frame_cfg: SceneEntityCfg,
+    jaw1_contact_cfg: SceneEntityCfg,
+    jaw2_contact_cfg: SceneEntityCfg,
+    reach_std: float,
+    force_threshold: float,
+    lift_minimal_height: float,
+    goal_std: float,
+) -> torch.Tensor:
+    """Same staged reach/grasp/lift/goal signal as _raw_lift_progress,
+    but the goal sub-term compares against env._target_pos_w directly
+    (already world-frame, set by set_mirrored_goal) instead of
+    transforming a CommandsCfg-generated command - this scene has no
+    CommandsCfg. See
+    docs/superpowers/specs/2026-07-06-ar4-sphere-mirror-scene-design.md.
+    """
+    object: RigidObject = env.scene[object_cfg.name]
+    ee_frame: FrameTransformer = env.scene[ee_frame_cfg.name]
+
+    reach_dist = torch.norm(object.data.root_pos_w - ee_frame.data.target_pos_w[:, 0, :], dim=-1)
+    reach_term = 1.0 - torch.tanh(reach_dist / reach_std)
+
+    grasp_term = contact_grasp_bonus(env, force_threshold, jaw1_contact_cfg, jaw2_contact_cfg)
+
+    lift_term = (object.data.root_pos_w[:, 2] > lift_minimal_height).float()
+
+    if not hasattr(env, "_target_pos_w"):
+        env._target_pos_w = torch.zeros(env.num_envs, 3, device=env.device)
+    goal_dist = torch.norm(object.data.root_pos_w - env._target_pos_w, dim=-1)
+    goal_term = 1.0 - torch.tanh(goal_dist / goal_std)
+
+    return 0.1 * reach_term + 0.2 * grasp_term + 0.3 * lift_term + 0.4 * goal_term
+
+
+def staged_milestone_bonus(
+    env: ManagerBasedRLEnv,
+    object_cfg: SceneEntityCfg,
+    ee_frame_cfg: SceneEntityCfg,
+    jaw1_contact_cfg: SceneEntityCfg,
+    jaw2_contact_cfg: SceneEntityCfg,
+    reach_std: float,
+    force_threshold: float,
+    lift_minimal_height: float,
+    goal_std: float,
+) -> torch.Tensor:
+    """Undiscounted running-max milestone bonus: reward = (new
+    best-ever raw progress) - (previous best-ever raw progress) - 0 at a
+    plateau, positive on any new milestone, never negative. Corrects a
+    bug found in staged_potential_progress (tasks/ar4/mdp.py, used by
+    the four-object scene in pickplace_env_cfg.py): that function's
+    `gamma * new_potential - prev_potential` formula goes NEGATIVE
+    whenever the agent holds a plateaued potential (since gamma < 1),
+    making "never approach the object" the reward-minimizing policy -
+    see
+    docs/superpowers/specs/2026-07-06-ar4-sphere-mirror-scene-design.md's
+    "Why now" section for the full derivation. This version has no gamma
+    at all - do not add one back.
+    """
+    if not hasattr(env, "_lift_milestone_max"):
+        env._lift_milestone_max = torch.zeros(env.num_envs, device=env.device)
+
+    raw = _raw_lift_progress_mirrored(
+        env, object_cfg, ee_frame_cfg, jaw1_contact_cfg, jaw2_contact_cfg,
+        reach_std, force_threshold, lift_minimal_height, goal_std,
+    )
+    prev = env._lift_milestone_max.clone()
+    env._lift_milestone_max = torch.maximum(env._lift_milestone_max, raw)
+    return env._lift_milestone_max - prev
+
+
+def reset_lift_milestone(env: ManagerBasedRLEnv, env_ids: torch.Tensor) -> None:
+    """Event term (mode="reset"): zero the running-max milestone buffer
+    for resetting envs, so a new episode starts with no carried-over
+    progress. Must be registered in EventCfg alongside
+    reset_scene_to_default. Uses a different buffer name
+    (_lift_milestone_max) than reset_lift_potential's
+    (_lift_potential_max) so the two scenes' state can never collide if
+    both were ever imported in the same process.
+    """
+    if not hasattr(env, "_lift_milestone_max"):
+        env._lift_milestone_max = torch.zeros(env.num_envs, device=env.device)
+    env._lift_milestone_max[env_ids] = 0.0
+
+
+def stillness_penalty(
+    env: ManagerBasedRLEnv,
+    object_cfg: SceneEntityCfg,
+    jaw1_contact_cfg: SceneEntityCfg,
+    jaw2_contact_cfg: SceneEntityCfg,
+    force_threshold: float,
+    still_bound: float,
+    patience_steps: int,
+) -> torch.Tensor:
+    """Grasp-gated penalty for the object failing to move beyond
+    still_bound within patience_steps of its last significant movement.
+    Targets the 'reach, grip, freeze' failure mode directly: 0 whenever
+    grasp hasn't been achieved yet (pre-grasp settling isn't penalized),
+    -1.0 once the object has been essentially stationary for too long
+    while gripped. See
+    docs/superpowers/specs/2026-07-06-ar4-sphere-mirror-scene-design.md.
+    """
+    object: RigidObject = env.scene[object_cfg.name]
+    if not hasattr(env, "_still_ref_pos"):
+        env._still_ref_pos = object.data.root_pos_w.clone()
+        env._still_steps = torch.zeros(env.num_envs, device=env.device)
+
+    pos = object.data.root_pos_w
+    moved = torch.norm(pos - env._still_ref_pos, dim=-1) > still_bound
+    env._still_ref_pos = torch.where(moved.unsqueeze(-1), pos, env._still_ref_pos)
+    env._still_steps = torch.where(moved, torch.zeros_like(env._still_steps), env._still_steps + 1)
+
+    grasped = contact_grasp_bonus(env, force_threshold, jaw1_contact_cfg, jaw2_contact_cfg) > 0.5
+    stagnant = env._still_steps > patience_steps
+    return -(grasped & stagnant).float()
+
+
+def reset_stillness_buffers(env: ManagerBasedRLEnv, env_ids: torch.Tensor, object_cfg: SceneEntityCfg) -> None:
+    """Event term (mode="reset"): must be registered after randomize_goal
+    (EventCfg in pickplace_mirror_env_cfg.py) so the reference position
+    reflects the new episode's spawn, not the prior episode's end state.
+    """
+    object: RigidObject = env.scene[object_cfg.name]
+    if not hasattr(env, "_still_ref_pos"):
+        env._still_ref_pos = torch.zeros(env.num_envs, 3, device=env.device)
+        env._still_steps = torch.zeros(env.num_envs, device=env.device)
+    env._still_ref_pos[env_ids] = object.data.root_pos_w[env_ids]
+    env._still_steps[env_ids] = 0.0

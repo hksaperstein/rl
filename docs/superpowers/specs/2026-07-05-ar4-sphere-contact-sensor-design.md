@@ -220,3 +220,61 @@ rather than continuing unilaterally.
   `lifting_sphere`'s `weight=25.0` (both are binary 0/1-per-step
   indicators, so directly comparable), placed slightly below it so lifting
   the sphere still matters more than merely gripping it.
+
+## Calibration method correction (found empirically, Task 3)
+
+The original plan for calibrating `force_threshold` reused
+`scripts/grasp_demo.py`'s already-solved IK joint waypoints (computed for
+the cube's fixed world position), relocating the sphere onto that same
+position on the premise that "the arm's IK solution doesn't care which
+object sits there." **This premise held for the joint angles themselves,
+but the real run showed the end-effector never gets near either object at
+all**: a diagnostic instrumented with the `ee_frame` sensor showed the
+end-effector settling around world `(-0.28, -0.10, 0.0)` during
+close/lift/hold — roughly the sphere task's own mirrored *target* region
+(`CommandsCfg.ranges.pos_x=(-0.22,-0.18)`,
+`pos_y=(-0.34,-0.28)`), nowhere near the `(0.20, 0.28, 0.009)` grasp
+position 0.7m away. Whether this is a real, previously-unverified bug in
+`grasp_demo.py`'s own IK-to-world-frame conversion for the 180°-rotated
+base (that script's own docstring already flags its ~0.09m TCP offset as
+"a rough estimate ... if the gripper doesn't land on the cube, this is the
+first number to adjust" — i.e. it was never itself confirmed via a contact
+sensor, only presumably by eye) or something specific to reusing those
+joint angles inside `Ar4PickPlaceEnvCfg` was not chased down — re-deriving
+IK is a separate, materially bigger problem than calibrating a reward
+threshold, and orthogonal to what this experiment needs.
+
+**Fix: skip IK/reach entirely.** Task 3 does not need a realistic
+reach-grasp motion — it only needs one genuine physics-resolved contact
+event between the gripper jaws and the sphere, to read real force numbers
+off `force_matrix_w`. This repo already has a working, precedented pattern
+for exactly this (`scripts/perception_calibration.py:74`,
+`scripts/measure_planarity_residual.py:85`): hold the arm motionless and
+teleport an object directly via `RigidObject.write_root_pose_to_sim(pose)`
+(`pose` shape `(num_envs, 7)`, `[x, y, z, qw, qx, qy, qz]`, world frame).
+
+Revised calibration approach:
+1. Construct `Ar4PickPlaceEnvCfg`, `num_envs=1`, `env.reset()`. The arm's
+   default reset pose is all-zero joint angles (same as `grasp_demo.py`'s
+   `HOME_Q`), which `ActionsCfg`'s `JointPositionActionCfg` (absolute
+   targets, `scale=1.0`) will hold exactly as long as the action commands
+   `0.0` for all six arm joints every step — no arm motion needed at all.
+2. Read the gripper's real jaw pinch-point world position once, straight
+   from the sensor: `env.scene["ee_frame"].data.target_pos_w[0, 0]` (the
+   `end_effector` target frame, already offset to the jaw pinch point by
+   `_EE_OFFSET` — the same frame `reaching_sphere`'s reward already
+   trusts in real training).
+3. Every step, teleport the sphere to that exact position via
+   `env.scene["sphere"].write_root_pose_to_sim(...)`, holding the arm at
+   zero and driving the gripper joint action from open to closed over a
+   short "close" phase, then holding closed for a "hold" phase.
+4. Read both jaw sensors' `force_matrix_w` and call `contact_grasp_bonus`
+   each step, same as originally planned — "open" phase is the negative
+   control (expect ~0N), "hold" phase is the positive control (expect
+   force above `force_threshold` on both jaws).
+
+This isolates exactly what Task 3 needs to measure (does the sensor +
+threshold correctly detect a real jaws-around-sphere contact) without
+depending on the separate, unverified question of whether `grasp_demo.py`'s
+IK actually reaches the cube — that question is out of scope for this
+experiment and is not resolved by this fix.

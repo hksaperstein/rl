@@ -80,7 +80,7 @@ def _generate_from_params(asset_id, params, outdir):
         raise ValueError(f"{asset_id}: numbering invariant failed for {params.die_type}")
 
     if params.glyph_method == "engraved":
-        glyphs.apply_engraved_glyphs(
+        engraving_warnings = glyphs.apply_engraved_glyphs(
             die_obj, params.die_type, assignment, params.glyph_style,
             params.glyph_fill, params.font_or_style_id, params.size_mm,
         )
@@ -90,6 +90,7 @@ def _generate_from_params(asset_id, params, outdir):
             fill_mat = materials.build_fill_material(die_obj.name, params.material_params)
             materials.apply_material(die_obj, fill_mat, slot_index=1)
     else:
+        engraving_warnings = []
         mat = materials.build_material(die_obj.name, params.material_category, params.material_params)
         materials.apply_material(die_obj, mat, slot_index=0)
         glyphs.apply_decal_glyphs(
@@ -111,6 +112,7 @@ def _generate_from_params(asset_id, params, outdir):
         "material_category": params.material_category,
         "material_params": params.material_params,
         "seed": params.seed,
+        "engraving_warnings": engraving_warnings,
     }
 
     exporter.export_asset(die_obj, manifest_record, outdir, params.bevel_fraction, params.size_mm)

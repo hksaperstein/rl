@@ -30,6 +30,11 @@ def test_generate_batch_produces_manifest_and_assets():
             assert os.path.exists(usd_path)
             assert os.path.exists(thumb_path)
             assert record["die_type"] in ("d4", "d6", "d8", "d10", "d12", "d20")
+            assert isinstance(record.get("engraving_warnings"), list), (
+                f"{record['asset_id']}: expected an engraving_warnings list "
+                f"in every manifest record (empty for decal-method or "
+                f"cleanly-engraved dice), got {record.get('engraving_warnings')!r}"
+            )
 
         failures_path = os.path.join(outdir, "failures.json")
         assert os.path.exists(failures_path)

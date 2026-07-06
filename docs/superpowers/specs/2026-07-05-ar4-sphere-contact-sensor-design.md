@@ -150,3 +150,21 @@ with staged reward phases, or accepting this repo's own physical setup
 may need per-object mass/friction retuning) is likely warranted over a
 sixth single-shot reward tweak — flag this back to the Principal/user
 rather than continuing unilaterally.
+
+## Parameter values (decided, not left to implementer judgment)
+
+- `force_threshold = 0.05` N. The sphere's own weight is ~0.098N (0.01kg,
+  `objects_cfg.py`'s `_MASS`, at g=9.81); 0.05N is about half that — enough
+  above the simulator's contact noise floor (unlike the real-camera depth
+  noise this repo also deals with, a contact sensor reports exactly 0N with
+  no contact, so there's no equivalent "real noise floor" to measure
+  empirically first) to require genuine load-bearing contact on each
+  finger, without demanding a firmer grip than this light an object
+  plausibly needs. Verify in the smoke test by printing the raw
+  `net_forces_w` norms during a few random steps — if real contact events
+  during exploration read far above or below this value, adjust before the
+  full run rather than after.
+- `grasp_contact` reward weight = `20.0`. Same order of magnitude as
+  `lifting_sphere`'s `weight=25.0` (both are binary 0/1-per-step
+  indicators, so directly comparable), placed slightly below it so lifting
+  the sphere still matters more than merely gripping it.

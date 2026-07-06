@@ -68,8 +68,18 @@ class Ar4PickPlaceMirrorSceneCfg(InteractiveSceneCfg):
     # reset_sphere_position's pose_range in EventCfg below can cover the
     # full _WORKSPACE_X/_WORKSPACE_Y range symmetrically - SPHERE_CFG
     # itself (objects_cfg.py) is unchanged; .replace() returns a new cfg.
+    #
+    # Shrunk from the shared SPHERE_CFG's radius=0.009 (18mm diameter) to
+    # radius=0.006 (12mm diameter) - testing the hypothesis (ROADMAP.md,
+    # "grasp/lift never emerges" follow-up) that the gripper's ~28mm max
+    # aperture left too little clearance margin (was 5mm/side, now
+    # 8mm/side) for the joint-position action space to reliably converge
+    # on a stable bilateral grasp pose. Resting height (pos z) lowered to
+    # 0.006 to match the new radius so the sphere still sits on the
+    # ground plane rather than floating or clipping into it.
     sphere: RigidObjectCfg = SPHERE_CFG.replace(
-        init_state=RigidObjectCfg.InitialStateCfg(pos=(0.0, 0.275, 0.009))
+        init_state=RigidObjectCfg.InitialStateCfg(pos=(0.0, 0.275, 0.006)),
+        spawn=SPHERE_CFG.spawn.replace(radius=0.006),
     )
 
     ee_frame: FrameTransformerCfg = FrameTransformerCfg(

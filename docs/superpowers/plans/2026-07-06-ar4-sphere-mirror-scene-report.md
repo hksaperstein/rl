@@ -57,13 +57,11 @@ and must not be used for the eval/decision-gate step (Task 5).
 | 2 (step-500) | Front-center | No marker (occluded) | No marker (arm extended) | NO LIFT |
 | 3 (step-750) | Back-right | Marker visible at bottom | Marker visible at bottom-right | NO LIFT |
 | 4 (step-1000) | Right-front | Marker visible at ground right | (incomplete check) | NO LIFT |
-| 5 (step-1250) | Front-bottom | **Marker in gripper** | **Marker elevated (top of frame)** | **LIFT** |
+| 5 (step-1250) | Front-bottom | Marker near gripper (not held) | Marker floating, disconnected from arm | NO LIFT (see correction below) |
 | 6 (step-1500) | Front-bottom | Marker at ground | No marker | NO LIFT |
 | 7 (step-1750) | (various) | No marker (arm extended) | Marker at ground bottom | NO LIFT |
 | 8 (step-2000) | (various) | Marker at ground right | (not checked) | NO LIFT |
 | 9 (step-2250) | (various) | Marker at ground right | (not checked) | NO LIFT |
-
-**Key observation for Episode 5 (step-1250):** The sphere marker transitioned from being on the ground in frame 001 (front area) to visibly held in the gripper at frames 025-030, and then appeared elevated above the gripper position at frame 050. This is the only unambiguous instance of sphere lifting in all 10 episodes.
 
 **Episodes 0-4, 6-9:** In all other episodes, the sphere marker either:
 - Remained visible at ground level throughout (E.g., E3: visible at bottom in frames 015-050 but always at grid level)
@@ -72,22 +70,22 @@ and must not be used for the eval/decision-gate step (Task 5).
 
 No episodes demonstrated sustained carrying of the sphere toward the opposite side of the robot (the mirror-goal objective).
 
-### Decision Gate Assessment
+### Correction to Episode 5 (controller-verified, overrides the implementer's "LIFT" verdict above)
 
-**Result: 1/10 episodes show real lift**
+The implementer's original report characterized Episode 5 (step-1250) as an unambiguous lift ("sphere in gripper, elevated to top of frame"). Direct frame-by-frame inspection by the controller (not just start/25%/50%/75%/end, but every frame from 022-050) shows this is **not** a controlled grasp-and-lift:
 
-**Verdict: PARTIAL PROGRESS**
+- **Frame 022:** sphere sits on the ground directly beside the gripper fingers — this is the moment of contact.
+- **Frame 028:** the sphere has moved up and to the **left**, now near the arm's elbow/wrist joint — away from the gripper, not held within it.
+- **Frames 045-050:** the sphere hovers well above and to the side of the gripper, which itself remains static near the ground. The gripper and sphere are never co-located again after frame ~025 — there is no frame where the object visibly tracks the gripper's position, which a genuine held-and-lifted object must do.
 
-This is fewer than 8/10 required for success, but Episode 5's unambiguous lift (sphere in gripper, elevated to top of frame, moved from original spawn position) demonstrates that the corrected reward function has enabled *some* lifting behavior. This is a meaningful progression from prior 6-attempt plateaus where 0/10 achieved any lift.
+This trajectory (rises immediately after contact, separates from the gripper, drifts to a hover disconnected from the arm) is consistent with the sphere being **knocked/launched by a glancing collision with the arm's body** during a failed grasp attempt (physically plausible given the object's tiny mass, 0.01 kg, and radius, 9mm — a small contact impulse easily sends it airborne), not a bilateral-grasp-and-lift. `contact_grasp_bonus` requires simultaneous force above threshold on *both* jaws; a glancing knock from one link would not satisfy that, so this episode's `lift_term` reward (raw height > 0.03m) likely fired as a false positive on physically-caused elevation rather than a genuine held lift.
 
-**What's different:** Episode 5 shows the arm successfully grasped and lifted the sphere off the ground, suggesting:
-1. The grasp-gating mechanism (stillness penalty correctly discouraged premature grasp release)
-2. The lift action was triggered in at least one episode
-3. The policy *can* learn to lift when conditions align
+### Decision Gate Assessment (corrected)
 
-**What remains problematic:** The low success rate (1/10 vs. target 8/10) and lack of consistent transport toward goal indicate:
-1. Policy coverage of reach+grasp+lift sequence is incomplete (only 1 episode achieved it)
-2. Mirrored goal reaching may still be underweighted relative to grasp difficulty
-3. No evidence of goal-mirrored transport in any episode (even E5 didn't clearly carry toward opposite side)
+**Result: 0/10 episodes show a genuine, controlled grasp-and-lift.** 1/10 (Episode 5) shows the sphere reaching elevation, but via an apparent accidental knock/launch rather than the gripper holding it — this does not satisfy "the sphere genuinely lifted and carried toward the target" from the plan's decision-gate wording, since the object is never actually held.
 
-**Recommendation for next iteration:** Before attempting another training run, consider whether the grasp geometry or task parameterization (sphere size, initial spawn range, goal position offset) needs adjustment, as one confirmed lift-capable episode suggests the reward structure is now roughly correct but the exploration/policy convergence is limited. A hierarchical policy (separate reach/grasp/carry phases) or curriculum learning might improve consistency.
+**Verdict: FALSIFIED.** This is the sixth real attempt on the reward/optimization axis for this sub-problem (sparse-only, curriculum-gated dense, always-on dense, LR-bump, potential-shaping, mirror-scene+stillness-penalty), and per `superpowers:systematic-debugging` Phase 4.5 the next step should not be a seventh reward/optimization tweak attempted unilaterally.
+
+**What's genuinely new this time:** spawn randomization across the full workspace is confirmed working (sphere visibly spawns at different positions across episodes), the mirrored-goal mechanism is confirmed correct (verified independently via a direct sign check before training), the `stillness_penalty` sign bug is fixed and confirmed non-positive throughout training, and `staged_milestone_bonus` is confirmed non-negative and growing (no reward-decay bug). None of that changes the outcome: the gripper still never achieves and holds a bilateral grasp in any of the 10 eval episodes.
+
+**Recommendation:** the reward/scene axis has now been tuned six different ways without producing a single confirmed controlled grasp. Worth reconsidering the physical/task setup itself rather than the reward function again — candidates: the gripper's ~28mm max aperture vs. the sphere's 18mm diameter may leave too little margin for the current joint-position-target action space to reliably converge on a stable bilateral grasp pose; a hierarchical policy (separate reach-to-pregrasp-pose and close-gripper phases, rather than one flat policy learning both simultaneously) is also worth considering. Flagging back to the Principal/user rather than proceeding to a seventh reward attempt.

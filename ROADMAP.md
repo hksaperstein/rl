@@ -601,6 +601,30 @@ follow-ups below.
        on a stable bilateral grasp pose, or a hierarchical policy
        (separate reach-to-pregrasp and close-gripper phases) instead of
        one flat policy learning both simultaneously.
+     - **Follow-up experiment: shrink the sphere to test the
+       aperture-margin hypothesis (FALSIFIED).** User-directed: reduce
+       the sphere from 18mm to 12mm diameter (roughly doubling the
+       gripper's per-side clearance margin, 5mm -> 8mm), scoped to the
+       mirror-scene's own config only (`objects_cfg.py`'s shared
+       `SPHERE_CFG` untouched). Full run data:
+       `docs/superpowers/plans/2026-07-06-ar4-sphere-shrink-report.md`.
+       **Result: 0/10 real eval episodes show a genuine, controlled
+       grasp-and-lift** — all 10 personally inspected frame-by-frame by
+       the controller (not delegated), given the prior misjudgment on
+       this same sub-problem. One episode again showed the
+       accidental-collision-launch signature (a motion-blur streak
+       trailing upward from the gripper, then the sphere floating
+       disconnected from a static gripper) rather than a real grasp —
+       the same false-positive pattern as the mirror-scene experiment's
+       Episode 5. This is evidence *against* the aperture-margin
+       hypothesis specifically: doubling the clearance margin produced
+       no improvement, so gripper-to-object size tolerance is likely
+       not the primary bottleneck. This is the seventh real attempt on
+       this sub-problem. Remaining candidates worth considering:
+       a hierarchical policy (separate reach-to-pregrasp and
+       close-gripper phases instead of one flat policy learning both),
+       or examining whether the joint-position action space itself
+       (rather than object size) limits precise gripper-closure timing.
 2. Shape classifier misclassifies cube/rectangular-prism as "sphere" against
    real depth data. Root-caused: `PLANARITY_RESIDUAL_THRESHOLD` (tuned on
    near-noiseless synthetic data) doesn't generalize to real sensor noise.

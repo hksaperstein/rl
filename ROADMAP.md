@@ -506,6 +506,47 @@ follow-ups below.
        proceeding directly to the second planned experiment (potential-
        based reward shaping) — not gating it on this result, since the
        user explicitly asked for both regardless of outcome.
+   - **Follow-up experiment: monotonic potential-based reward shaping
+     (falsified — and a genuine bug found in the formula itself).**
+     Replaced six independent additive reward terms with a single
+     running-max potential-based term (Ng, Harada, Russell, ICML 1999),
+     per
+     `docs/superpowers/specs/2026-07-06-ar4-sphere-lift-potential-shaping-design.md`.
+     Full run data:
+     `docs/superpowers/plans/2026-07-06-ar4-sphere-lift-potential-shaping-report.md`.
+     **Result: 0/10 real eval episodes show any lift** — identical
+     "reach, grip, freeze" signature to every prior experiment; in this
+     run, markers never even show real grasping/lifting attempts, just
+     approach-and-hover.
+     - **Root cause found, not just another null result:**
+       `Episode_Reward/staged_potential_progress` *declined* to -0.109
+       over training instead of growing. The term's docstring claimed
+       `gamma * new_potential - prev_potential` is "always >= 0" — false
+       whenever the agent merely *holds* its best-ever potential without
+       improving further: `new_potential == prev_potential == Φ` gives
+       reward `Φ * (gamma - 1)`, which is **negative** for any
+       `gamma < 1` (here `gamma=0.98`). Over a ~225-step episode,
+       reaching the object and holding there (`Φ ≈ 0.1`) costs roughly
+       `0.1 * (-0.02) * 225 ≈ -0.45` total reward — *worse* than never
+       approaching the object at all (`Φ` stays 0 the whole episode,
+       reward stays exactly 0). The policy that minimizes this cost is
+       to never reach for the sphere, which is exactly what the eval
+       showed. This is a bug in the shaping formula's discount handling,
+       not evidence against potential-based shaping as an approach.
+     - **This is the fifth real attempt on the reward/optimization axis**
+       (sparse-only, curriculum-gated dense, always-on dense, LR-bump,
+       potential-shaping). Per `superpowers:systematic-debugging` Phase
+       4.5 this would normally be flagged back rather than attempting a
+       sixth unilateral reward tweak — in this case the user independently
+       raised two related, concrete ideas in parallel (a grasp-gated
+       actuation/movement incentive, and a penalty for staying static
+       within a bound), so the sixth attempt is user-directed rather than
+       unilateral. See
+       `docs/superpowers/specs/2026-07-06-ar4-sphere-mirror-scene-design.md`:
+       a new single-sphere scene with randomized spawn + mirrored
+       opposite-side goal, a corrected *undiscounted* running-max
+       milestone bonus (drops the `gamma` decay that caused the bug
+       above), and a new grasp-gated stillness penalty.
 2. Shape classifier misclassifies cube/rectangular-prism as "sphere" against
    real depth data. Root-caused: `PLANARITY_RESIDUAL_THRESHOLD` (tuned on
    near-noiseless synthetic data) doesn't generalize to real sensor noise.

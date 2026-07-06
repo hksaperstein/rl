@@ -63,12 +63,18 @@ from tasks.ar4.robot_cfg import ARM_JOINT_NAMES  # noqa: E402
 GRIPPER_OPEN = 1.0
 GRIPPER_CLOSE = -1.0
 
-# (duration_steps, gripper_command, label)
+# (duration_steps, gripper_command, label, teleport_sphere_to_pinch_point)
+# The 150-step settle (arm pose stabilization) runs separately, before this
+# loop, so the link_6->jaw-midpoint measurement below reads a settled pose.
+# "far" is a real negative control: the sphere is left at its normal spawn
+# position (untouched, nowhere near the gripper) so this script's own
+# committed output includes a genuine no-contact baseline, not just a claim
+# carried over from separate, uncommitted runs.
 PHASES = [
-    (150, GRIPPER_OPEN, "settle"),  # let the arm's real pose stabilize before measuring anything
-    (60, GRIPPER_OPEN, "open"),
-    (60, GRIPPER_CLOSE, "close"),
-    (120, GRIPPER_CLOSE, "hold"),
+    (30, GRIPPER_OPEN, "far", False),  # negative control: sphere untouched, far from the gripper
+    (60, GRIPPER_OPEN, "open", True),
+    (60, GRIPPER_CLOSE, "close", True),
+    (120, GRIPPER_CLOSE, "hold", True),
 ]
 
 # Must match tasks/ar4/pickplace_env_cfg.py's grasp_contact RewTerm params.
@@ -79,7 +85,8 @@ def main() -> None:
     env_cfg = Ar4PickPlaceEnvCfg()
     env_cfg.scene.num_envs = 1
     env_cfg.sim.device = args_cli.device
-    total_steps = sum(duration for duration, _, _ in PHASES)
+    settle_steps = 150
+    total_steps = settle_steps + sum(duration for duration, _, _, _ in PHASES)
     step_dt = env_cfg.decimation * env_cfg.sim.dt
     env_cfg.episode_length_s = total_steps * step_dt + 2.0
 
@@ -88,7 +95,7 @@ def main() -> None:
     jaw1_cfg = SceneEntityCfg("gripper_jaw1_contact")
     jaw2_cfg = SceneEntityCfg("gripper_jaw2_contact")
 
-    open_forces: list[list[float]] = []
+    far_forces: list[list[float]] = []
     hold_forces: list[list[float]] = []
     hold_rewards: list[float] = []
 
@@ -96,18 +103,42 @@ def main() -> None:
 
     with torch.inference_mode():
         env.reset()
+        robot = env.scene["robot"]
         ee_frame = env.scene["ee_frame"]
 
-        for duration, gripper_cmd, label in PHASES:
+        # Bake the _EE_OFFSET measurement itself into this script's committed,
+        # re-runnable output, rather than leaving it as an uncommitted,
+        # narrative-only claim. Compares the real link_6-to-jaw-midpoint
+        # distance (measured directly from body positions) against the
+        # ee_frame sensor's offset-based estimate, once the arm has settled.
+        for _ in range(settle_steps):
+            action = torch.zeros(env.num_envs, num_joints + 1, device=env.device)
+            action[:, num_joints] = GRIPPER_OPEN
+            env.step(action)
+        link6_idx = robot.data.body_names.index("link_6")
+        jaw1_idx = robot.data.body_names.index("gripper_jaw1_link")
+        jaw2_idx = robot.data.body_names.index("gripper_jaw2_link")
+        jaw_midpoint = (robot.data.body_pos_w[0, jaw1_idx] + robot.data.body_pos_w[0, jaw2_idx]) / 2.0
+        link6_pos = robot.data.body_pos_w[0, link6_idx]
+        measured_offset = torch.norm(jaw_midpoint - link6_pos).item()
+        estimated_offset = torch.norm(ee_frame.data.target_pos_w[0, 0] - link6_pos).item()
+        print(
+            f"[info] measured link_6->jaw-midpoint distance: {measured_offset:.4f} m "
+            f"(ee_frame's _EE_OFFSET-based estimate: {estimated_offset:.4f} m)"
+        )
+
+        for duration, gripper_cmd, label, track_pinch_point in PHASES:
             for i in range(duration):
-                # Re-read the gripper's real jaw pinch-point position every
-                # step (not once, frozen) - the arm's commanded pose takes
-                # many steps to settle under this robot's actuator gains, so
-                # a stale reading leaves the sphere in empty space once the
-                # real arm moves away from where it started.
-                pinch_point = ee_frame.data.target_pos_w[0, 0].clone()
-                sphere_pose = torch.cat([pinch_point, identity_quat]).unsqueeze(0)
-                env.scene["sphere"].write_root_pose_to_sim(sphere_pose)
+                if track_pinch_point:
+                    # Re-read the gripper's real jaw pinch-point position
+                    # every step (not once, frozen) - the arm's commanded
+                    # pose takes many steps to settle under this robot's
+                    # actuator gains, so a stale reading leaves the sphere in
+                    # empty space once the real arm moves away from where it
+                    # started.
+                    pinch_point = ee_frame.data.target_pos_w[0, 0].clone()
+                    sphere_pose = torch.cat([pinch_point, identity_quat]).unsqueeze(0)
+                    env.scene["sphere"].write_root_pose_to_sim(sphere_pose)
 
                 action = torch.zeros(env.num_envs, num_joints + 1, device=env.device)
                 action[:, num_joints] = gripper_cmd
@@ -123,19 +154,19 @@ def main() -> None:
                 if label == "hold":
                     hold_forces.append(force_norm)
                     hold_rewards.append(reward.item())
-                elif label == "open":
-                    open_forces.append(force_norm)
+                elif label == "far":
+                    far_forces.append(force_norm)
 
-            print(f"[phase done] {label}: last force_norm={force_norm}, reward={reward.item()}, pinch_point={pinch_point.tolist()}")
+            print(f"[phase done] {label}: last force_norm={force_norm}, reward={reward.item()}")
 
     print("\n=== Calibration summary ===")
-    open_min = min(min(f) for f in open_forces)
-    open_max = max(max(f) for f in open_forces)
+    far_min = min(min(f) for f in far_forces)
+    far_max = max(max(f) for f in far_forces)
     hold_min = min(min(f) for f in hold_forces)
     hold_max = max(max(f) for f in hold_forces)
     hold_success = sum(r == 1.0 for r in hold_rewards)
-    print(f"open (gripper open, sphere at pinch point) force_norm: min={open_min:.4f}, max={open_max:.4f} N (expect ~0.0)")
-    print(f"hold (gripper closed on sphere)             force_norm: min={hold_min:.4f}, max={hold_max:.4f} N")
+    print(f"far (sphere untouched, nowhere near gripper) force_norm: min={far_min:.4f}, max={far_max:.4f} N (real negative control)")
+    print(f"hold (gripper closed on sphere)               force_norm: min={hold_min:.4f}, max={hold_max:.4f} N")
     print(
         f"hold reward==1.0 fraction: {hold_success}/{len(hold_rewards)} "
         f"(force_threshold={FORCE_THRESHOLD})"

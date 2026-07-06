@@ -197,3 +197,80 @@ whether the gripper's physical grip (closed-jaw force against this
 0.01kg/9mm sphere) is even strong enough to support a lift at all
 (a physical-plausibility question, not a reward-design one) — flag back
 to the user rather than attempting a further reward-only tweak.
+
+## Revision: remove the curriculum gate, raise the weight (per user request to keep iterating)
+
+**Result of the experiment above (full data in
+`docs/superpowers/plans/2026-07-06-ar4-sphere-lift-curriculum-report.md`):
+the curriculum mechanism fired exactly as designed at iteration 700, but
+its real-world effect was negligible** — the logged `Episode_Reward`
+max of `0.0065` is `weight(15.0) ×` the mean per-step `tanh` value, so the
+real per-step `tanh` was only ~`0.00043`, corresponding to ~0.0043mm of
+real height gain (via `tanh`'s small-angle behavior) — many orders of
+magnitude short of the 21mm `lifting_sphere` requires. `lifting_sphere`
+never rose above noise. Real eval: 0/10 episodes showed any lift, same
+"reach, grip, freeze" signature as before. Diagnosis: `grasp_contact` was
+already at ~17.8/20 (essentially its plateau) by iteration 700 — the
+static-grip behavior had already converged too deeply for a newly-
+introduced incentive to perturb it in the remaining ~800 iterations.
+
+**Fix: drop the curriculum, make `lift_height_progress` active from
+iteration 0.** The curriculum was originally added out of caution — "risks
+destabilizing phase-1 grip learning by changing the reward landscape the
+policy is already known to converge well under" (see this spec's original
+"Why not the alternatives" section) — but that caution is no longer
+warranted, for a structural reason visible in the reward function itself:
+`lift_height_progress = tanh(clamp(height - rest_height, min=0) /
+height_std)` is mechanically `~0` whenever the object hasn't actually
+been lifted, which is impossible before grip exists. The term literally
+cannot pay out during phase 1 (reach + grip), regardless of its weight —
+so there was never a real risk to protect against by delaying its
+activation, only an assumed one. Delaying it instead cost the experiment
+its entire runway: by the time it turned on, the alternative (static-hold)
+behavior was already entrenched. Making it active from iteration 0 means
+the first accidental upward jostle of the gripped sphere — however early,
+however small — gets reinforced immediately, rather than only after
+iteration 700.
+
+**Also raise the weight, 15.0 → 25.0** (matching `lifting_sphere`'s own
+weight), so that once real height gain becomes achievable, this dense
+shaping term is at least as influential as the binary success signal it's
+meant to lead into, rather than being subordinate to it.
+
+### Design changes
+
+1. Remove the `CurriculumCfg` class and the `curriculum` field from
+   `Ar4PickPlaceEnvCfg` entirely (this plan introduced both; nothing else
+   in this task's history uses a curriculum, so removing them is a clean
+   revert of just this one piece, not a partial rollback).
+2. Change `lift_height_progress`'s `RewTerm` `weight` from `0.0` to
+   `25.0` directly (no curriculum-driven change over time).
+3. `height_std=0.01` and `rest_height=0.009` are unchanged — these
+   parameters were never the suspected problem (the math already gives
+   meaningful reward for sub-millimeter progress: `tanh(0.001/0.01) ≈
+   0.0997`, ~10% of max for just 1mm of lift), so there's no evidence
+   basis to retune them yet. If this revision also fails to produce real
+   lifting, retuning these would be a more targeted next hypothesis than
+   this revision's curriculum-timing fix.
+4. Every other reward term (`reaching_sphere`, `lifting_sphere`,
+   `grasp_contact`, `sphere_goal_tracking`, `sphere_goal_tracking_fine_grained`,
+   `action_rate`, `joint_vel`) and `_EE_OFFSET` remain untouched — same
+   single-variable discipline as every prior experiment.
+
+### Verification plan
+
+Same as before: smoke test, full 1500-iteration run (monitor
+`Episode_Reward/lift_height_progress` from iteration 0 this time — expect
+it to start contributing meaningfully as soon as `grasp_contact` starts
+converging, not stay at a fixed `0.0` through iteration 700), then real
+eval with frame-extracted video inspection of all 10 episodes.
+
+If `lifting_sphere` still doesn't move off `0.0000` even with the term
+active from the start at a higher weight, this rules out "curriculum
+timing" as the explanation too — per `superpowers:systematic-debugging`
+Phase 4.5 (now three real attempts on the reward/curriculum axis for this
+specific sub-problem: sparse-only, curriculum-gated dense, always-on
+dense), the next step should not be a fourth reward-only tweak. Flag back
+to the user; the remaining candidates are the hierarchical policy split or
+the physical-plausibility check on the gripper's actual lifting force,
+both already named in ROADMAP.md.

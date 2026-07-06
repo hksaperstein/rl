@@ -15,4 +15,8 @@ The `staged_potential_progress` reward shows a downward trajectory from a small 
 
 ## Task 3: Real eval + video inspection (decision gate)
 
-(To be completed after eval video inspection)
+**Eval videos:** `logs/videos/ar4_pickplace-step-{0,250,500,750,1000,1250,1500,1750,2000,2250}.mp4` (10 episodes).
+
+**Frame inspection results:** All 10 episodes (sampled across steps 0, 250, 500, 750, 1000, 1250, 1500, 1750, 2000, 2250) show identical behavior: the robot reaches toward target marker locations and positions the gripper, but never grasps or lifts any sphere. The colored markers indicating object positions remain on the ground throughout every episode.
+
+**Decision gate verdict:** **0/10 episodes show any genuine lift.** This is the same "reach, grip, freeze" failure mode observed in all prior experiments (sparse-only, curriculum-gated dense, always-on dense, LR-bump). The potential-based reward shaping approach has been falsified as a solution to this sub-problem.

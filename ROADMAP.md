@@ -249,6 +249,79 @@ follow-ups below.
      verified-correct infrastructure, not a dead end); resuming this
      experiment later needs a deliberately long (~3h) dispatch, not a quick
      check.
+   - **Follow-up experiment: ContactSensor-based grasp reward — real
+     progress (grip achieved), but lift still doesn't emerge. Also
+     surfaced a likely root-cause bug affecting every prior experiment.**
+     Per the systematic-debugging Phase 4.5 escalation from four falsified
+     reward/control-only hypotheses, replaced the geometric grasp proxy
+     with a ground-truth signal: two `ContactSensorCfg` sensors (one per
+     gripper jaw, filtered to the sphere specifically) feeding a new
+     `grasp_contact` reward that requires real, bilateral contact force
+     above a calibrated threshold. Full design in
+     `docs/superpowers/specs/2026-07-05-ar4-sphere-contact-sensor-design.md`,
+     plan in
+     `docs/superpowers/plans/2026-07-06-ar4-sphere-contact-grasp-reward-implementation.md`,
+     full run data in
+     `docs/superpowers/plans/2026-07-06-ar4-sphere-contact-grasp-reward-report.md`.
+     - **Two real implementation bugs found and fixed while building this**
+       (both empirically discovered via real smoke-test/calibration
+       failures, not anticipated on paper): a single wildcard
+       `ContactSensorCfg` covering both jaw links can't pair with PhysX's
+       per-body filter-count requirement (fixed: one sensor per jaw,
+       matching the `dexsuite`/`kuka_allegro` reference pattern more
+       closely than the design's original citation); and `net_forces_w` is
+       not actually filtered by `filter_prim_paths_expr` at all (it sums
+       *any* contact on the body) — the correct field is `force_matrix_w`.
+     - **Major finding, bigger than this experiment: `_EE_OFFSET` (the
+       link_6-to-jaw-pinch-point offset feeding the `ee_frame` sensor) was
+       wrong by 5.4cm** (`0.09` → measured `0.036`, confirmed directly via
+       `robot.data.body_pos_w` for the real jaw links). This offset is
+       what `reaching_sphere`'s reward has used as its proximity target in
+       **every** grasp experiment this session (lift-weight bump, dense
+       grasp bonus, alignment gate, PD-gain rescale) — a reward maximizing
+       proximity to a point 5.4cm from where the jaws actually meet is a
+       plausible deeper explanation for why grasping never emerged across
+       all four of those prior falsified hypotheses, independent of
+       whatever reward-shaping was layered on top each time. Fixed as a
+       prerequisite correctness bug (like the two above), not treated as a
+       new hypothesis — but flagged here prominently since it retroactively
+       recontextualizes the whole "grasp/lift never emerges" investigation.
+     - **Result: `grasp_contact` converged to ~92% per-step sustained
+       contact (18.39/20 weighted, max 18.58)** — real, bilateral,
+       correctly-filtered contact between both jaws and the sphere,
+       sustained for most of the episode. This is a first for this
+       session: every prior experiment either never closed on the object,
+       closed beside it, or never discovered closure at all. `lifting_sphere`
+       still converged to ~0 (max 0.0027); `sphere_reached_goal` still ~0
+       (max 0.027); `reaching_sphere` converged lower than prior runs
+       (0.727 vs prior ~0.92–0.94) — expected, since it now measures
+       against the corrected (true) jaw pinch point rather than the old
+       5.4cm-off target, a different and harder proximity criterion.
+     - **Real eval (10 episodes, frame-extracted video, all 10 inspected
+       directly): 0/10 show a real grasp+lift — fails the 8/10 decision
+       gate.** But the failure signature is new, not a repeat of any prior
+       one: the arm reaches down within ~1s of every episode and then
+       holds a completely static pose with the gripper directly on the
+       sphere for the rest of the episode, in all 10 episodes — the
+       sphere is visibly never lifted or moved, but (per the `grasp_contact`
+       numbers) it is genuinely, sustainedly gripped throughout, not merely
+       approached. Best described as "reach, grip, freeze" — the specific
+       problem this experiment targeted (does the gripper ever really
+       close on the object) appears solved; a new, distinct bottleneck
+       (grip achieved, but no subsequent attempt to lift) has taken its
+       place.
+     - **Not attempting a further reward tweak unilaterally** — per the
+       design doc's own instruction and this session's established
+       discipline, this is flagged back to the user as a decision point.
+       Plausible next directions (not yet tried): a genuine reach→grip→lift
+       curriculum (now that grip is reliably achieved, staging lift as the
+       next explicit phase may work where it wouldn't before grip was
+       solved); investigating whether `lifting_sphere`'s incentive is
+       simply too weak relative to the reward already banked by holding a
+       safe, static grip; or checking whether the corrected `_EE_OFFSET`
+       alone (without the contact-sensor reward) changes anything, to
+       isolate which of this run's two real changes drove the
+       contact-convergence improvement.
 2. Shape classifier misclassifies cube/rectangular-prism as "sphere" against
    real depth data. Root-caused: `PLANARITY_RESIDUAL_THRESHOLD` (tuned on
    near-noiseless synthetic data) doesn't generalize to real sensor noise.

@@ -15,6 +15,7 @@ import torch
 from isaaclab.managers import SceneEntityCfg
 
 if TYPE_CHECKING:
+    from isaaclab.assets import RigidObject
     from isaaclab.envs import ManagerBasedRLEnv
     from isaaclab.sensors import ContactSensor
 
@@ -46,3 +47,24 @@ def contact_grasp_bonus(
     jaw2_force = torch.linalg.vector_norm(jaw2_sensor.data.force_matrix_w, dim=-1).view(env.num_envs)
     both_fingers_contact = (jaw1_force > force_threshold) & (jaw2_force > force_threshold)
     return both_fingers_contact.float()
+
+
+def lift_height_progress(
+    env: ManagerBasedRLEnv,
+    height_std: float,
+    rest_height: float,
+    object_cfg: SceneEntityCfg,
+) -> torch.Tensor:
+    """Dense reward for upward progress on the object, from its resting
+    height - unlike lifting_sphere's binary object_is_lifted threshold,
+    this gives a real gradient below the success threshold so ordinary PPO
+    exploration has something to climb, rather than needing to stumble
+    directly onto minimal_height with no intermediate signal. Curriculum-
+    gated (see CurriculumCfg in pickplace_env_cfg.py) rather than
+    always-on, so early training (reach + grip) is unaffected until grip
+    is already stable. See
+    docs/superpowers/specs/2026-07-06-ar4-sphere-lift-curriculum-design.md.
+    """
+    object: RigidObject = env.scene[object_cfg.name]
+    height_above_rest = torch.clamp(object.data.root_pos_w[:, 2] - rest_height, min=0.0)
+    return torch.tanh(height_above_rest / height_std)

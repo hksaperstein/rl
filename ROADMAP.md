@@ -672,6 +672,30 @@ follow-ups below.
        forbidden files touched. All future experiments in this line
        (starting with re-running the classical-IK-guided path
        experiment above) use the cube.
+     - **New reward term queued (not yet wired into any RewardsCfg):
+       `ground_penalty`** (`tasks/ar4/mdp.py`) — direct user request:
+       "give a negative reward when the cube is on the ground." Unlike
+       `stillness_penalty` (grasp-gated, only fires after a freeze
+       *following* a successful grasp), this applies from the start of
+       every episode regardless of grasp state, giving constant
+       pressure to lift the object off the ground as soon as possible.
+       Queued behind the current cube training run to avoid stacking
+       two untested variables at once.
+     - **First real physics crash this session, mid-retry of the
+       classical-IK-guided path run on the cube.** `PxRigidActor::detachShape:
+       shape is not attached to this actor!` at iteration 893/1500,
+       preceded by `prim '/World/envs/env_1755/Cube/geometry/mesh' was
+       deleted while being used by a shape in a tensor view class` —
+       this invalidated the entire batched physics tensor view across
+       all 4096 envs and crashed the whole run (not a false report, not
+       an intentional kill — a genuine PhysX-level failure, the first
+       of its kind across all 8 sphere-based experiments plus the
+       mirror-scene/sphere-shrink runs). Root cause not yet fully
+       diagnosed: unclear whether this is a rare per-env fluke or a
+       systematic issue with `CuboidCfg`'s procedural geometry at this
+       scale (4096 parallel envs). Retrying once to check whether it
+       recurs (same/different env index, similar/different iteration)
+       before deciding whether deeper investigation is warranted.
 2. Shape classifier misclassifies cube/rectangular-prism as "sphere" against
    real depth data. Root-caused: `PLANARITY_RESIDUAL_THRESHOLD` (tuned on
    near-noiseless synthetic data) doesn't generalize to real sensor noise.

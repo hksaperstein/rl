@@ -278,3 +278,69 @@ threshold correctly detect a real jaws-around-sphere contact) without
 depending on the separate, unverified question of whether `grasp_demo.py`'s
 IK actually reaches the cube — that question is out of scope for this
 experiment and is not resolved by this fix.
+
+## Major finding: `_EE_OFFSET` was wrong by 5.4cm (found while validating the fix above)
+
+Running the teleport-based calibration script above still read **exactly
+0.0N** contact force throughout, even with the sphere pinned to the
+`ee_frame` sensor's own live position every step. Two further real issues,
+found by direct measurement (not guessing):
+
+1. **The arm does not hold its commanded pose rigidly.** Commanding all six
+   arm joints to target `0.0` every step (matching the default reset pose)
+   does not keep the arm static — under this robot's actuator gains
+   (`stiffness=40`, `robot_cfg.py`), the arm visibly sags/settles for well
+   over 100 steps after `env.reset()` before its pose stabilizes (measured:
+   the gripper jaw midpoint's world Z dropped from `0.475` at the instant
+   after reset to a stable `~0.14-0.19` by step ~100-150). Reading the
+   pinch point once, immediately after `reset()`, captures a transient
+   pre-settling value; the calibration script now re-reads
+   `ee_frame.data.target_pos_w` **every step** instead of freezing one
+   reading, and adds a 150-step settle phase (gripper open, no
+   measurements taken) before the measured open/close/hold sequence.
+2. **`_EE_OFFSET = (0.0, 0.0, 0.09)` (`tasks/ar4/pickplace_env_cfg.py`) is
+   itself wrong.** Measured directly via
+   `robot.data.body_pos_w` for `gripper_jaw1_link`/`gripper_jaw2_link`
+   against `link_6`'s position at the arm's real settled pose: the true
+   distance from `link_6` to the real jaw midpoint is **0.036m**, not
+   0.09m — a 5.4cm error. `_EE_OFFSET`'s own code comment already flagged
+   it as "empirically-tuned... a rough estimate" and `grasp_demo.py`'s
+   docstring independently flagged its TCP offset as unmeasured; both
+   turned out to be the same wrong number, now corrected to `0.036`.
+
+   **This is a bigger deal than this experiment.** `_EE_OFFSET` feeds the
+   `ee_frame` sensor's `end_effector` target frame, which `reaching_sphere`
+   (`object_ee_distance`) has used as its proximity signal in **every**
+   grasp experiment this session (lift-weight bump, dense grasp bonus,
+   alignment gate, PD-gain rescale). A reward that maximizes proximity to
+   a point 5.4cm away from where the jaws actually meet would let the
+   policy converge to "high `reaching_sphere` reward" while the real
+   gripper sits systematically offset from the sphere — a plausible
+   deeper explanation for why grasping never emerged across all four
+   prior falsified hypotheses, independent of whatever reward-shaping term
+   was layered on top each time. This was corrected directly (`_EE_OFFSET`
+   → `0.036`) as a prerequisite bug fix, the same way `activate_contact_sensors`
+   was — not treated as a new hypothesis to test in isolation, since it is
+   an objectively wrong measured constant, not a design choice. Flagged
+   explicitly to the user as a significant, unplanned finding rather than
+   silently folded in.
+
+**Final calibration result (corrected offset + live-tracking script):**
+
+```
+open (gripper open, sphere pinned at pinch point) force_norm: min=27.34, max=30.17 N
+hold (gripper closed on sphere)                   force_norm: min=27.35, max=30.17 N
+hold reward==1.0 fraction: 120/120 (force_threshold=0.05)
+```
+
+Both `open` and `hold` read large force here because this test continuously
+re-teleports the sphere to the exact geometric center every step (to
+survive the arm's settling dynamics), which pins it inside the jaws'
+collision volume regardless of the commanded aperture — a known
+methodological artifact of this specific test, not evidence that
+`force_threshold` or the sensor logic is wrong. The relevant comparison is
+against every *earlier* run this session (sphere far from the gripper,
+hundreds of steps, all real contact reads exactly `0.0` with zero false
+positives) versus this run's genuine-contact reading (tens of Newtons):
+`force_threshold=0.05` sits safely between an unambiguous true zero and
+unambiguous real contact, so it is kept unchanged.

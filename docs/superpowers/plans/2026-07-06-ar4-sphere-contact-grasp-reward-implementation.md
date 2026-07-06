@@ -354,6 +354,12 @@ git commit -m "Add contact-sensor-based grasp_contact reward term for AR4 sphere
 
 **Files:**
 - Create: `scripts/calibrate_gripper_contact.py`
+- Modify: `tasks/ar4/pickplace_env_cfg.py:36` (`_EE_OFFSET`) — a real,
+  measured bug fix found while validating this task's script (0.09 → the
+  measured 0.036), not a new hypothesis. See the design spec's "Major
+  finding" section. This one-line numeric correction affects
+  `reaching_sphere`'s proximity target for every future run, which is why
+  it was flagged to the user rather than folded in silently.
 
 **Interfaces:**
 - Consumes: `contact_grasp_bonus` (Task 2), `gripper_jaw1_contact`/
@@ -429,6 +435,7 @@ GRIPPER_CLOSE = -1.0
 
 # (duration_steps, gripper_command, label)
 PHASES = [
+    (150, GRIPPER_OPEN, "settle"),  # let the arm's real pose stabilize before measuring anything
     (60, GRIPPER_OPEN, "open"),
     (60, GRIPPER_CLOSE, "close"),
     (120, GRIPPER_CLOSE, "hold"),
@@ -455,22 +462,21 @@ def main() -> None:
     hold_forces: list[list[float]] = []
     hold_rewards: list[float] = []
 
+    identity_quat = torch.tensor([1.0, 0.0, 0.0, 0.0], device=env.device)
+
     with torch.inference_mode():
         env.reset()
-        # Read the gripper's real jaw pinch-point position at its resting
-        # (all-zero-joint) pose, straight from the same sensor frame
-        # reaching_sphere's reward already trusts in real training.
         ee_frame = env.scene["ee_frame"]
-        pinch_point = ee_frame.data.target_pos_w[0, 0].clone()
-        print(f"[info] gripper pinch-point (world frame): {pinch_point.tolist()}")
-        sphere_pose = torch.cat(
-            [pinch_point, torch.tensor([1.0, 0.0, 0.0, 0.0], device=env.device)]
-        ).unsqueeze(0)
 
         for duration, gripper_cmd, label in PHASES:
-            for _ in range(duration):
-                # Hold the sphere at the pinch point every step - the arm
-                # never moves, so this is the same physical target throughout.
+            for i in range(duration):
+                # Re-read the gripper's real jaw pinch-point position every
+                # step (not once, frozen) - the arm's commanded pose takes
+                # many steps to settle under this robot's actuator gains, so
+                # a stale reading leaves the sphere in empty space once the
+                # real arm moves away from where it started.
+                pinch_point = ee_frame.data.target_pos_w[0, 0].clone()
+                sphere_pose = torch.cat([pinch_point, identity_quat]).unsqueeze(0)
                 env.scene["sphere"].write_root_pose_to_sim(sphere_pose)
 
                 action = torch.zeros(env.num_envs, num_joints + 1, device=env.device)
@@ -490,7 +496,7 @@ def main() -> None:
                 elif label == "open":
                     open_forces.append(force_norm)
 
-            print(f"[phase done] {label}: last force_norm={force_norm}, reward={reward.item()}")
+            print(f"[phase done] {label}: last force_norm={force_norm}, reward={reward.item()}, pinch_point={pinch_point.tolist()}")
 
     print("\n=== Calibration summary ===")
     open_min = min(min(f) for f in open_forces)

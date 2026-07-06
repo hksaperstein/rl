@@ -350,6 +350,25 @@ def reset_stillness_buffers(env: ManagerBasedRLEnv, env_ids: torch.Tensor, objec
     env._still_steps[env_ids] = 0.0
 
 
+def ground_penalty(
+    env: ManagerBasedRLEnv,
+    object_cfg: SceneEntityCfg,
+    ground_height_threshold: float,
+) -> torch.Tensor:
+    """Penalty for the object remaining on/near the ground, independent
+    of grasp state - unlike stillness_penalty (grasp-gated, only fires
+    after a freeze *following* a successful grasp), this applies from
+    the start of every episode regardless of whether grasp has been
+    achieved, giving constant pressure to lift the object off the
+    ground as soon as possible rather than only kicking in after a
+    stall post-grasp. Direct user request (2026-07-06): "give a
+    negative reward when the cube is on the ground."
+    """
+    object: RigidObject = env.scene[object_cfg.name]
+    on_ground = object.data.root_pos_w[:, 2] < ground_height_threshold
+    return -on_ground.float()
+
+
 def compute_path_waypoints(
     env: ManagerBasedRLEnv,
     env_ids: torch.Tensor,

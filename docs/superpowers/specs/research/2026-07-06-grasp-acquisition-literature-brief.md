@@ -1,6 +1,20 @@
-# Research brief: literature on stuck grasp-acquisition in RL manipulation
+# Research brief: literature on RL for serial-manipulator arms, broadly
 
-## The question
+## Scope note (expanded from an earlier, narrower draft)
+
+This brief originally asked only about one narrow failure mode (stuck
+grasp acquisition). Per explicit direction, the scope is now the
+**broad field of RL for serial-manipulator arms** — grasp acquisition is
+one motivating example, not the boundary of the survey. Treat the
+"current concrete problem" section below as grounding/context for why
+this matters right now, not as a restriction on what to research.
+Survey broadly: reward design, exploration, sample efficiency,
+sim-to-real, architecture choices (hierarchical/modular policies vs.
+flat end-to-end), demonstration/imitation-augmented RL, curriculum
+learning, and any other established methodology families for RL-driven
+serial-arm manipulation generally — not just the grasp-timing sliver.
+
+## The current concrete problem (motivating context, not the only question)
 
 We're training a 6-DOF robot arm (AR4 mk5, a hobby-grade arm) with a
 parallel-jaw gripper, in Isaac Lab (PPO via `rsl_rl`), to reach, grasp,
@@ -15,9 +29,10 @@ frame inspection), but does not learn to close the gripper and hold the
 object through a lift.
 
 **What we need:** a real literature survey (not reasoning from first
-principles) of what's actually known to work for this specific failure
-mode — policies that reach for objects but fail to acquire a stable
-grasp — in RL-for-manipulation research. We want concrete technique
+principles) of the broad field of RL for serial-manipulator arms, with
+particular (but not exclusive) attention to what's known to work for
+this failure mode — policies that reach for objects but fail to acquire a
+stable grasp. We want concrete technique
 names, the papers that introduced/validated them, and how directly each
 one addresses "the arm reaches but the grasp never actually closes and
 holds."
@@ -88,15 +103,27 @@ For each technique found relevant, report: the technique's name, the
 paper(s) that introduced or validated it (with real, verifiable
 citations — author, year, venue; do not fabricate a citation or a
 statistic, and flag explicitly if a claim can't be tied to a specific
-verifiable source), and *specifically* why it addresses "policy reaches
-but doesn't reliably close/hold a stable grasp" rather than manipulation
-RL in general. Prioritize:
+verifiable source), and what problem within RL-for-manipulation it
+solves — note explicitly where it also bears on "policy reaches but
+doesn't reliably close/hold a stable grasp" versus where it's a more
+general manipulation-RL concern. Cover the field broadly first, then
+prioritize:
 
 - Demonstration-guided / imitation-augmented RL for manipulation (e.g.,
   DAPG-style approaches, behavior cloning warm-starts, residual RL on
   top of a classical/scripted controller)
-- Curriculum learning specifically for contact-rich/grasp-acquisition
-  sub-tasks (not just general curriculum learning)
+- Curriculum learning for manipulation generally, and specifically for
+  contact-rich/grasp-acquisition sub-tasks
+- Sample-efficiency and exploration techniques for manipulation RL more
+  broadly (not just this one failure mode) — e.g. off-policy methods,
+  model-based RL for manipulation, asymmetric actor-critic with
+  privileged information
+- Architecture choices: hierarchical/modular policies (explicit
+  phase-structured sub-policies) vs. flat end-to-end policies for
+  multi-stage manipulation tasks
+- Sim-to-real considerations for manipulation RL (domain randomization,
+  reward design that transfers), even though sim-to-real isn't a current
+  goal for this project — useful context on what's been validated
 - Hindsight Experience Replay or other sparse-reward relabeling
   techniques as applied to grasping specifically
 - Any literature on why parallel-jaw grasp *timing* (when to close the

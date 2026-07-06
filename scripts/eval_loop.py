@@ -29,6 +29,12 @@ parser.add_argument(
     default=False,
     help="Evaluate the mirror-goal scene (see scripts/train.py --mirror) instead of the four-object scene.",
 )
+parser.add_argument(
+    "--ik_guided",
+    action="store_true",
+    default=False,
+    help="Evaluate the classical-IK-guided scene (see scripts/train.py --ik_guided) instead of the four-object scene.",
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 args_cli.enable_cameras = True  # required for video recording
@@ -59,13 +65,16 @@ from perception.overlay import draw_detections  # noqa: E402
 from perception.tracker import ObjectTracker  # noqa: E402
 from tasks.ar4.agents.rsl_rl_ppo_cfg import Ar4PickPlacePPORunnerCfg  # noqa: E402
 from tasks.ar4.pickplace_env_cfg import GROUND_Z, Ar4PickPlaceEnvCfg, Ar4PickPlacePerceptionEnvCfg  # noqa: E402
+from tasks.ar4.pickplace_ik_guided_env_cfg import Ar4PickPlaceIkGuidedEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_mirror_env_cfg import Ar4PickPlaceMirrorEnvCfg  # noqa: E402
 
 VIDEO_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs", "videos")
 
 
 def main() -> None:
-    if args_cli.mirror:
+    if args_cli.ik_guided:
+        env_cfg_cls = Ar4PickPlaceIkGuidedEnvCfg
+    elif args_cli.mirror:
         env_cfg_cls = Ar4PickPlaceMirrorEnvCfg
     elif args_cli.perception:
         env_cfg_cls = Ar4PickPlacePerceptionEnvCfg
@@ -93,7 +102,12 @@ def main() -> None:
         # advances and silently merges every episode into one video. 250 = one episode's
         # worth of steps (episode_length_s=5.0 / step_dt=decimation*sim.dt=2*0.01=0.02s),
         # from Ar4PickPlaceEnvCfg - update this if that config changes.
-        name_prefix = "ar4_pickplace_mirror" if args_cli.mirror else "ar4_pickplace"
+        if args_cli.ik_guided:
+            name_prefix = "ar4_pickplace_ik_guided"
+        elif args_cli.mirror:
+            name_prefix = "ar4_pickplace_mirror"
+        else:
+            name_prefix = "ar4_pickplace"
         env = gym.wrappers.RecordVideo(
             env,
             video_folder=VIDEO_DIR,

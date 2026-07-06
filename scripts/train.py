@@ -47,6 +47,16 @@ parser.add_argument(
         "docs/superpowers/specs/2026-07-06-ar4-sphere-mirror-scene-design.md."
     ),
 )
+parser.add_argument(
+    "--ik_guided",
+    action="store_true",
+    default=False,
+    help=(
+        "Train on the classical-IK-guided variant of the mirror-goal scene: reach/grasp/lift/carry is "
+        "shaped by a live classical-IK path-tracking reward instead of ad hoc end-state distances. See "
+        "docs/superpowers/specs/2026-07-06-ar4-ik-guided-path-design.md."
+    ),
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
@@ -77,6 +87,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from _perception_adapter import PerceptionObservationWrapper  # noqa: E402
 from tasks.ar4.agents.rsl_rl_ppo_cfg import Ar4PickPlacePPORunnerCfg  # noqa: E402
 from tasks.ar4.pickplace_env_cfg import GROUND_Z, Ar4PickPlaceEnvCfg  # noqa: E402
+from tasks.ar4.pickplace_ik_guided_env_cfg import Ar4PickPlaceIkGuidedEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_mirror_env_cfg import Ar4PickPlaceMirrorEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_single_object_env_cfg import Ar4PickPlaceSingleObjectEnvCfg  # noqa: E402
 
@@ -84,7 +95,9 @@ LOG_ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 
 
 def main() -> None:
-    if args_cli.mirror:
+    if args_cli.ik_guided:
+        env_cfg_cls = Ar4PickPlaceIkGuidedEnvCfg
+    elif args_cli.mirror:
         env_cfg_cls = Ar4PickPlaceMirrorEnvCfg
     elif args_cli.perception:
         env_cfg_cls = Ar4PickPlaceSingleObjectEnvCfg

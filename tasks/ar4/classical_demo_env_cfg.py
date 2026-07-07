@@ -92,7 +92,11 @@ class ActionsCfg:
         joint_names=ARM_JOINT_NAMES,
         body_name="link_6",
         body_offset=isaaclab_mdp.DifferentialInverseKinematicsActionCfg.OffsetCfg(pos=_EE_OFFSET),
-        scale=0.05,
+        # scale=1.0 (not the usual 0.05): this demo's script commands an already-physical,
+        # pre-bounded Cartesian delta directly (see scripts/classical_pickplace_demo.py's
+        # pursuit_delta / _BASE_MAX_STEP), not a policy's normalized output that needs
+        # scaling down.
+        scale=1.0,
         controller=DifferentialIKControllerCfg(command_type="position", use_relative_mode=True, ik_method="dls"),
     )
     gripper_position = isaaclab_mdp.BinaryJointPositionActionCfg(

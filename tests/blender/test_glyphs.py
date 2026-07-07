@@ -910,9 +910,9 @@ def test_decal_glyphs_survive_usd_export_roundtrip_without_black_faces():
 
         # Sample a corner pixel: the glyph decal's UV smart-project maps
         # each face to its own island, but the glyph ink itself is centered
-        # and small (see PIP_VALUE_LAYOUTS / glyph_font_size), so a texture
-        # corner is always far from any glyph stroke and should show the
-        # die's actual base material color, not black.
+        # and small (see PIP_VALUE_LAYOUTS / _proportional_font_size), so a
+        # texture corner is always far from any glyph stroke and should show
+        # the die's actual base material color, not black.
         corner_rgb = pixels[0, 0, :3]
         assert not np.allclose(corner_rgb, 0.0, atol=0.02), (
             f"reimported decal texture's corner pixel is solid black "

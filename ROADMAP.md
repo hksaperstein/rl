@@ -1587,6 +1587,86 @@ follow-ups below.
          research (e.g. on dense sub-goal/shaping-toward-precondition
          techniques in sparse-grasp RL) before a new spec — not a quick
          patch on this one.
+     - **Experiment 18: add a dense pre-grasp-readiness shaping term
+       (proximity × gripper-closedness) on top of Experiment 17's
+       unchanged antipodal gate — the shaping term is strongly learned,
+       but does not move `lifting_object` off its exact 0/1500 null
+       result. A clean falsification of the "missing gradient" hypothesis,
+       not an inconclusive result.** Hypothesis, grounded in Experiment
+       17's own Task 6 instrumented finding (the policy explores "get
+       close" and "close the gripper" independently but never combines
+       them) plus Xu et al. 2026's complementary "within-stage progress
+       feedback" concept (arXiv:2606.31377, already cited for Experiment
+       17, re-cited here for its other half) and arXiv:1803.04996
+       (abstract-verified only, cited for scope not for a specific
+       ablation number): a dense reward for cube-to-EE proximity
+       multiplied by gripper closedness should give the policy a
+       continuous incentive to combine both halves, without reintroducing
+       a hackable substitute for genuine antipodal contact — the binary
+       gate stays untouched as the only path to the large
+       `lifting_object`/`object_goal_tracking` reward. New
+       `pregrasp_readiness_bonus` (`tasks/ar4/mdp.py`), wired into new
+       `Ar4PickPlacePregraspEnvCfg`
+       (`tasks/ar4/pickplace_pregrasp_env_cfg.py`) at weight 2.0, on top
+       of Experiment 17's exact unchanged reward set. Design spec:
+       `docs/superpowers/specs/2026-07-07-ar4-experiment18-pregrasp-readiness-shaping-design.md`.
+       Full run data:
+       `docs/superpowers/plans/2026-07-07-ar4-experiment18-report.md`.
+       - **The new term is a real, strongly discovered gradient — not the
+         failure mode.** `Episode_Reward/pregrasp_readiness` is nonzero
+         at all 1500/1500 logged iterations (100% in every one of ten
+         150-iteration windows), growing from 0.000166 at iteration 0 to
+         1.268935 at the final iteration, stabilizing in the 1.24-1.27
+         range for the entire second half of training. The policy
+         actively adopts reaching configurations that register readiness
+         as defined — the shaping mechanism itself works exactly as
+         designed.
+       - **`Episode_Reward/lifting_object` remains at exactly 0/1500 —
+         identical to Experiment 17's null result, despite the strong
+         readiness signal.** Not "slightly worse" or "noisier" — the
+         same exact zero, at every one of 1500 logged iterations, in
+         every one of ten 150-iteration windows.
+         `object_goal_tracking`/`object_goal_tracking_fine_grained`
+         (both gated on the same lift condition) are correspondingly
+         also 0/1500. `Loss/value_function` stayed small and bounded
+         throughout (max 0.148235, comparable to Experiment 17's 0.0547,
+         both roughly two orders of magnitude below Experiment 16's
+         curriculum-driven peak of 4.588) — training itself was stable;
+         this is not a divergence artifact.
+       - **This falsifies the experiment's specific hypothesis as
+         written: readiness and lifting are decoupled, not bottlenecked
+         on a missing approach-and-close gradient.** The policy can learn
+         to be "ready" (close + gripper closing) as a side effect of
+         pursuing `reaching_object`, without that readiness ever
+         translating into an actual attempted lift. Per the design
+         spec's own success criteria, this null result narrows rather
+         than repeats the open question — it specifically implicates
+         either the confirmed mimic-joint asset defect (Experiment 17's
+         Task 6 finding: `gripper_jaw2_joint` drifts 20% past its own
+         commanded open limit under load, independent of `jaw1_joint`)
+         or a discoverability gap in the *lift* action itself (vertical
+         motion while maintaining contact) that is categorically
+         different from, and not solved by, better pre-grasp
+         positioning. Per this repo's scientific-method requirement and
+         its own explicit mandate to prefer structurally new directions
+         over repeated parameter tweaks after a string of null results
+         (this is now three consecutive experiments — 16, 17, 18 — all
+         terminating in the same root fact: the cube never leaves the
+         ground by any margin), the next step is not a fourth reward-
+         shaping variant on the same mechanism. Candidate structurally
+         different directions, not yet scoped: (a) directly investigate/
+         fix the confirmed mimic-joint asset defect, since it is a
+         verified, independent, mechanical confound present in every
+         experiment run so far, not a reward-design question; (b)
+         demonstration or curriculum bootstrapping for the lift primitive
+         specifically (e.g. a scripted/classical grasp-lift trajectory as
+         a warm-start or residual-RL base, since three different reward
+         designs across ~4500 combined training iterations have never
+         once produced any vertical lift via pure exploration); (c) the
+         previously-queued staged-decomposition/longer-episode redesign
+         (see `feedback_ar4-episode-length-and-staged-decomposition`
+         memory) now has stronger direct motivation than when first
+         proposed.
 2. Shape classifier misclassifies cube/rectangular-prism as "sphere" against
    real depth data. Root-caused: `PLANARITY_RESIDUAL_THRESHOLD` (tuned on
    near-noiseless synthetic data) doesn't generalize to real sensor noise.

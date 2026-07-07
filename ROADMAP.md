@@ -1397,6 +1397,72 @@ follow-ups below.
          hypothesis and background research before a new spec, not just
          a parameter tweak on this experiment's already-proven
          foundation.
+       - **CORRECTION (same day, prompted directly by the user challenging
+         the video read above, confirmed with real instrumentation, not
+         more visual guessing): the "genuine lift" / "grasp achieved"
+         claim above is wrong. The cube is not gripped by the fingers at
+         any point in the episode.** The user looked at the same frames
+         and pointed out the cube appeared to be carried by the wrist
+         joint, not the gripper jaws — a sharp, correct counter-read of
+         the controller's own video judgment. Verified with a fresh
+         instrumented rollout of the exact checkpoint
+         (`logs/train/2026-07-07_14-40-53/model_1499.pt`), logging
+         `gripper_jaw1_contact`/`gripper_jaw2_contact` force magnitudes
+         (`force_matrix_w`, the same field `antipodal_grasp_bonus` reads),
+         gripper joint positions, and the cube's distance to
+         `gripper_jaw1_link`/`gripper_jaw2_link` vs. `link_6`/
+         `gripper_base_link`, every step across a full episode.
+         **Both jaw contact sensors read exactly `0.0000` at every one of
+         250 logged steps, including the initial approach — the gripper
+         never registers any contact force with the cube, at any point in
+         the episode.** From roughly step 80 through step 248 (out of a
+         250-step episode — the "held" period, `cube_z` rising to and
+         holding around 0.56-0.58m, dropping back to the ground-rest value
+         of 0.009 exactly at episode timeout), `gripper_jaw1_joint` sits at
+         ≈0.014 — essentially fully open, matching `GRIPPER_OPEN_POS`
+         almost exactly — and the cube's distance to `link_6`/
+         `gripper_base_link` (≈0.023m) is consistently smaller than its
+         distance to either jaw (≈0.051-0.056m) for the entire held
+         duration. **Root cause: the cube is being pushed/wedged/carried
+         via contact with the wrist/gripper-housing body as the arm
+         reorients, never touched by the fingers.** This experiment's
+         reward function — by design, faithfully matching both proven
+         references — only checks the cube's world height and
+         goal-distance, with no requirement that a genuine grasp produced
+         that height; the policy found a cheaper way to satisfy the
+         height-gated reward than learning to actually grasp, and the
+         proven references' own `object_is_lifted`/lift-indicator checks
+         are equally height-only, so this reward family does not
+         structurally rule this out — it may be a difference in what the
+         AR4's own wrist/gripper geometry makes exploitable versus a
+         Franka Panda's, not evidence the reward design itself is
+         wrong. **Secondary finding, independent of the above:**
+         `gripper_jaw1_joint`/`gripper_jaw2_joint` do not track each other
+         despite the source URDF's explicit `mimic` joint constraint on
+         `gripper_jaw2_joint` (`multiplier="1"`) — Isaac Sim's USD import
+         of this asset appears not to enforce that constraint, so the two
+         jaws behave as independently-actuated joints rather than a
+         coupled parallel gripper; a real, separate asset-fidelity issue
+         worth its own investigation, not yet done.
+         **Corrected interpretation:** this is not "grasp/lift solved" —
+         grasp specifically is being bypassed, not solved. It is still a
+         real, qualitatively new behavior relative to every one of
+         Experiments 1-15's video samples (none of which ever moved the
+         cube meaningfully off the ground at all, exploit or otherwise),
+         so the reward-gating change clearly did change behavior — but the
+         correct next step is close to the opposite of what the
+         uncorrected entry above recommended: some form of genuine
+         grasp-contact requirement needs to gate the lift/goal-tracking
+         reward (e.g. requiring real bilateral jaw force, not just height,
+         before `lifting_object`/`object_goal_tracking` can fire) rather
+         than continuing to build on this checkpoint's carry-to-goal gap
+         as if grasp were already solved. This does not need to mean
+         reintroducing a *separately-rewarded* grasp term (the literature
+         basis for avoiding that still stands) — it can instead be a
+         *gating condition* on the existing lift/goal-tracking terms,
+         preserving the design principle that grasp itself earns no direct
+         reward. Per this repo's scientific-method requirement, this
+         becomes its own hypothesis-driven experiment, not a quick patch.
 2. Shape classifier misclassifies cube/rectangular-prism as "sphere" against
    real depth data. Root-caused: `PLANARITY_RESIDUAL_THRESHOLD` (tuned on
    near-noiseless synthetic data) doesn't generalize to real sensor noise.

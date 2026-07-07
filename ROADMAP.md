@@ -791,10 +791,10 @@ follow-ups below.
        solver_velocity_iteration_count=1` (well above PhysX defaults)
        for stable contact resolution during grasping — this repo's cube
        used only defaults.
-     - **Experiment 10 (in progress): bundle the physics-derived
-       antipodal-threshold correction with the action-scale and
-       solver-iteration findings.** `antipodal_cos_threshold` corrected
-       to `-0.7071`; new `ActionsCfg` (`scale=0.5`) scoped to
+     - **Experiment 10: bundle the physics-derived antipodal-threshold
+       correction with the action-scale and solver-iteration findings.**
+       `antipodal_cos_threshold` corrected to `-0.7071`; new `ActionsCfg`
+       (`scale=0.5`) scoped to
        `pickplace_mirror_env_cfg.py`/`pickplace_ik_guided_env_cfg.py`
        only (`env_cfg.py`'s shared `ActionsCfg`, scale=1.0, stays
        unchanged — still used by the original sphere task,
@@ -805,7 +805,78 @@ follow-ups below.
        sub-problem's reward/optimization/physics axis, now grounded in
        both literature research and a direct, systematic comparison
        against a proven working reference implementation rather than a
-       reward-only guess.
+       reward-only guess. **Result: `antipodal_grasp_bonus` regressed to
+       exactly 0.000000 by the end of training** (worse than Experiment
+       9's already-tiny 0.001416) — loosening the geometric threshold
+       didn't help, arguing the bottleneck is *precision* of final
+       gripper positioning/alignment under direct joint-space control,
+       not reward-threshold calibration.
+     - **Experiment 11 (user-proposed): replace joint-space action with
+       task-space differential-IK-driven action.** Instead of the policy
+       outputting joint-angle deltas directly (with IK used only for
+       reward-shaping in Experiments 8-10), the policy now outputs
+       Cartesian end-effector deltas and Isaac Lab's built-in
+       `DifferentialInverseKinematicsActionCfg` converts them to joint
+       targets *inside the control loop* — offloading "how to move 6
+       joints" to a classical solver so the policy only learns "where to
+       go." New file `tasks/ar4/pickplace_taskspace_env_cfg.py`
+       (`Ar4PickPlaceTaskspaceEnvCfg`), new simplified
+       `path_proximity_bonus` reward (drops the now-redundant IK-match
+       sub-signal `ik_guided_path_bonus` needed when IK was reward-only),
+       `antipodal_grasp_bonus`/`gripper_schedule_bonus`/
+       `stillness_penalty` carried over unchanged from Experiment 10. New
+       `--taskspace` flag on `scripts/train.py`/`scripts/eval_loop.py`.
+       - **First full run diverged**: independently traced
+         `/tmp/exp11_train_stdout.log` (the controller, not the
+         implementer, caught this — the implementer's own status report
+         called it "Non-Critical") and found the PPO critic's `Mean
+         value_function loss` exploding from ~0.0000 to ~1.56 to ~4047 to
+         ~3.2M between iterations 66-69/1500, reaching ~5.2e23 by the
+         final iteration and never recovering — ~95% of the run's policy
+         updates were driven by a diverged critic, not a clean comparison
+         to Experiment 10. Never seen in Experiments 1-10 (same PPO
+         config, joint-space action), implicating the new
+         `DifferentialInverseKinematicsActionCfg` term specifically: an
+         outlier raw policy action, previously harmless under
+         `JointPositionActionCfg` (saturates at joint limits), likely
+         drives the IK solve into a discontinuous joint-space jump that
+         destabilizes PhysX for one env/step, producing an extreme
+         observation the critic can't fit.
+       - **Fix**: new `Ar4PickPlaceTaskspacePPORunnerCfg(clip_actions=5.0)`
+         (~3.4x the observed action-noise std of 1.46), scoped to the
+         taskspace experiment only — `Ar4PickPlacePPORunnerCfg` itself
+         stays unmodified, still used unchanged by every other
+         experiment. Verified on a 300-iteration diagnostic, then on the
+         full 1500-iteration re-run: `Loss/value_function` stayed bounded
+         for the entire run (max 7.88, one isolated 2-iteration transient
+         spike, immediate recovery — independently re-verified against
+         the raw TensorBoard event file, all 1500 points, not samples).
+       - **Result (first positive signal after 11 experiments):**
+         `antipodal_grasp_bonus` final value **0.018815**, nonzero in
+         91.6% of all 1500 logged iterations — every prior experiment
+         had this at exactly 0 (Experiment 10) or 0.001416 at best
+         (Experiment 9). `cube_reached_goal` final 0.010223, ~3.6x
+         Experiment 10's 0.002848.
+       - **Video inspection (25 frames, 5fps, full episode) qualifies
+         this result**: the arm reaches down toward the cube within the
+         first ~1s and then holds an almost identical low, near-ground
+         pose for the remaining ~4s of the episode — the small red cube
+         stays at or near the gripper tip throughout, consistent with
+         the nonzero antipodal-contact metric (a real, held bilateral
+         grasp is plausible), but the arm never visibly lifts the cube
+         to height or carries it toward the goal in this rollout. **Net
+         assessment: task-space IK-driven action produced the first
+         genuine, sustained antipodal grasp contact this project has
+         seen — a real improvement on the specific "grasp never emerges"
+         sub-problem — but "pick up and move" as a whole is still not
+         achieved.** The next sub-problem is getting the policy from
+         "hold a low grasp" to "lift and carry," which is exactly what
+         motivates the staged-decomposition/episode-length/richer-
+         goal-placement ideas queued as the next design considerations
+         (episodes may be too short to discover a lift+carry+place
+         sequence once a stable grasp is finally reachable; explicit
+         per-stage sub-objectives may be needed rather than one
+         continuous reward).
 2. Shape classifier misclassifies cube/rectangular-prism as "sphere" against
    real depth data. Root-caused: `PLANARITY_RESIDUAL_THRESHOLD` (tuned on
    near-noiseless synthetic data) doesn't generalize to real sensor noise.

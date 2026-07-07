@@ -200,10 +200,13 @@ class RewardsCfg:
     now-redundant IK-action-matching sub-signal, since IK is now part of
     the control loop itself - see path_proximity_bonus's docstring).
     antipodal_grasp_bonus (Experiment 10's physics-corrected -0.7071
-    threshold), gripper_schedule_bonus, stillness_penalty, action_rate,
-    and joint_vel all carry over unchanged from
-    pickplace_ik_guided_env_cfg.py - this experiment isolates the
-    action-space variable specifically."""
+    threshold), gripper_schedule_bonus, action_rate, and joint_vel carry
+    over unchanged from pickplace_ik_guided_env_cfg.py. stillness_penalty's
+    weight is raised from 2.0 to 5.0 (Experiment 12): Experiment 11 showed
+    grasp-and-freeze nets +1.0/step (antipodal_grasp_bonus's +3.0 minus the
+    old stillness_penalty's -2.0 once its patience window elapses) - this
+    flips that to -2.0/step. See
+    docs/superpowers/specs/2026-07-07-ar4-experiment12-stillness-reward-rate-design.md."""
 
     path_proximity_bonus = RewTerm(
         func=ar4_mdp.path_proximity_bonus,
@@ -237,9 +240,15 @@ class RewardsCfg:
         },
     )
 
+    # weight raised 2.0 -> 5.0 (Experiment 12): with antipodal_grasp_bonus's
+    # weight at 3.0, the old weight=2.0 only closed the reward-rate gap to
+    # +3.0 - 2.0 = +1.0/step net POSITIVE for holding a grasp without
+    # progress once patience_steps elapses - it never flipped the sign.
+    # 5.0 makes it 3.0 - 5.0 = -2.0/step net negative. See
+    # docs/superpowers/specs/2026-07-07-ar4-experiment12-stillness-reward-rate-design.md.
     stillness_penalty = RewTerm(
         func=ar4_mdp.stillness_penalty,
-        weight=2.0,
+        weight=5.0,
         params={
             "object_cfg": SceneEntityCfg("cube"),
             "jaw1_contact_cfg": SceneEntityCfg("gripper_jaw1_contact"),

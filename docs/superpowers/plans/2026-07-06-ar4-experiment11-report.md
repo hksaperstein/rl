@@ -165,3 +165,80 @@ Gripper scheduling appears slightly worse under task-space action, though both v
 The task-space IK-driven action design (Experiment 11) did not resolve the antipodal grasp bonus regression observed in Experiment 10. The final trained policy achieves zero antipodal contact, identical to Experiment 10's end state. This suggests that **precise gripper positioning/alignment via IK solver alone is not sufficient to achieve reliable bilateral opposition** — or that the current IK solver's kinematic model, precision, or interaction with task-space action filtering is preventing the policy from discovering such a solution within 1500 training iterations.
 
 **No success/failure judgment on cube lift capability** — evaluation video analysis (Task 5, a separate follow-up) is required to assess whether the policy actually lifts the cube despite the antipodal metric showing no progress.
+
+## Controller correction: the "null result" conclusion above is not yet trustworthy
+
+The implementer's own status report characterized the numerical blow-up visible
+in `action_rate`/`Mean reward` as "Non-Critical... an artifact of task-space
+action scaling x PPO loss interactions... did not crash or produce NaN." That
+downplays a real, severe training-dynamics failure that this report's scalar
+analysis (Sections 1-5 above) never surfaces because it only tracked 5
+specific `Episode_Reward`/`Episode_Termination` tags, not the PPO
+algorithm's own internal diagnostics (`Mean value_function loss`, `Mean
+reward`) printed to stdout every iteration.
+
+Tracing `/tmp/exp11_train_stdout.log` directly (grep on `Mean value_function
+loss`, cross-referenced against `Learning iteration N/1500` headers):
+
+```
+iteration 64: Mean value_function loss: 0.0000   (normal)
+iteration 65: Mean value_function loss: 0.0000   (normal)
+iteration 66: Mean value_function loss: 0.0000   (normal)
+iteration 67: Mean value_function loss: 1.5597       <- onset
+iteration 68: Mean value_function loss: 4047.6953
+iteration 69: Mean value_function loss: 3203922.4125
+iteration 70: Mean value_function loss: 4435292710.4000
+iteration 71: Mean value_function loss: 6730523475968.0000
+iteration 75: Mean value_function loss: 36036165470904299552768.0000
+iteration 1499 (final): Mean value_function loss: 520710107048252559851520.0000
+```
+
+The critic's loss explodes exponentially starting at iteration 67/1500 and
+never recovers for the remaining ~1430 iterations (95.3% of the run). By the
+final iteration it reaches ~5.2e23 - twenty-three orders of magnitude beyond
+a normal PPO value loss (every iteration before 67, and every prior
+experiment this session using the same `Ar4PickPlacePPORunnerCfg`, stays in
+the 0.0000-0.01 range). `Mean reward` (the raw, unweighted PPO return
+diagnostic, not any `Episode_Reward/*` tag) reaches -5.2e11 by the final
+iteration for the same reason. `Mean surrogate loss`, `Mean entropy loss`,
+and `Mean action noise std` all stay completely normal throughout (entropy
+~7.10, noise std ~1.46) - only the critic (value function) is diverging, not
+the actor's exploration behavior directly.
+
+**Why this matters for the conclusions above:** rsl_rl's PPO uses the
+critic's value estimates to compute GAE advantages for every policy-gradient
+update. A critic whose loss is 20+ orders of magnitude off is producing
+value estimates that cannot be meaningfully informing the advantage
+calculation - meaning roughly 95% of this run's 1500 iterations were policy
+updates driven by (at best) garbage advantage signal, not a clean,
+well-behaved 1500-iteration PPO training run comparable to Experiment 10's.
+The "final value" numbers reported in Sections 1-5 above are real logged
+data, but whether they represent a fair, meaningful comparison to
+Experiment 10 - as opposed to noise from a policy that stopped receiving
+useful gradient signal 95% of the way through training - is now in
+question. **The "null result" / "task-space IK did not help" conclusion
+should be treated as unconfirmed pending a re-run with this instability
+fixed**, not as this experiment's final word on the hypothesis.
+
+**Likely root cause (not yet confirmed):** this instability's onset
+(iteration 67) and its complete absence from every prior experiment using
+byte-for-byte the same `Ar4PickPlacePPORunnerCfg` (Experiments 1-10, all
+joint-space `JointPositionActionCfg`) points at the new
+`DifferentialInverseKinematicsActionCfg` action term as the trigger, not the
+PPO hyperparameters themselves (`use_clipped_value_loss=True`,
+`max_grad_norm=1.0` are both already active and match Isaac Lab's own
+proven Franka recipe). The most likely mechanism: an outlier raw policy
+action (ordinary Gaussian-policy tail event, occurs constantly across a
+4096-env x 1500-iteration run regardless of action space) produces an
+extreme Cartesian delta command; under the old `JointPositionActionCfg`
+this only ever produced a smooth, joint-limit-saturating correction
+(benign), but under the new differential-IK action term it can drive the
+IK solve toward a target near/beyond the arm's reachable workspace, and the
+resulting `joint_pos_des` may contain a discontinuity (e.g. a joint-angle
+wrap-around/elbow-flip in the DLS solution) large enough to destabilize
+PhysX's joint-drive integration in that one env for one step, producing an
+extreme (though not literally NaN/Inf, hence no crash) observation value
+that the critic then tries to fit, exploding its own loss. This is a
+hypothesis, not a confirmed root cause - see the follow-up fix task in the
+progress ledger for the corrective action taken and whether it resolves the
+instability.

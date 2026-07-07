@@ -795,3 +795,26 @@ def base_proximity_penalty(
     xy_dist = torch.norm(object_xy - robot_xy, dim=-1)
     too_close = xy_dist < base_xy_threshold
     return -too_close.float()
+
+
+def mirrored_goal_distance_gated(
+    env: ManagerBasedRLEnv,
+    std: float,
+    minimal_height: float,
+    object_cfg: SceneEntityCfg,
+) -> torch.Tensor:
+    """Direct adaptation of isaaclab_tasks.manager_based.manipulation.lift.mdp.object_goal_distance's
+    exact tanh-kernel-distance-gated-on-lift formula to this repo's
+    mirrored-goal buffer (env._target_pos_w, already world-frame, set by
+    set_mirrored_goal) instead of the command manager - see
+    docs/superpowers/specs/2026-07-07-ar4-experiment16-proven-recipe-replication-design.md
+    for why the command manager can't be used here (this repo's goal is a
+    function of the object's own random spawn) and why this is otherwise
+    an unmodified replication of the reference formula, not a new design.
+    """
+    object: RigidObject = env.scene[object_cfg.name]
+    if not hasattr(env, "_target_pos_w"):
+        env._target_pos_w = torch.zeros(env.num_envs, 3, device=env.device)
+    distance = torch.norm(env._target_pos_w - object.data.root_pos_w, dim=-1)
+    lifted = (object.data.root_pos_w[:, 2] > minimal_height).float()
+    return lifted * (1.0 - torch.tanh(distance / std))

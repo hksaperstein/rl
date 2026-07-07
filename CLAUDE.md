@@ -111,3 +111,10 @@ accumulate unpushed.
 ## Status
 
 For current status and open follow-ups, see `ROADMAP.md`.
+
+## Knowledge base
+
+`kb/` is an LLM-compiled, Obsidian-viewable wiki over this repo's own
+research (experiments, concepts, cross-links) — see `kb/README.md` for
+what it is, what counts as its raw source material, and its current
+coverage. Iteratively maintained, not yet complete.

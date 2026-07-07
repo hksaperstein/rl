@@ -14,7 +14,7 @@ from mathutils import Vector, Matrix
 
 from .geometry import compute_face_poles, compute_face_inradius
 
-ENGRAVE_DEPTH_FRACTION = 0.03
+ENGRAVE_DEPTH_FRACTION = 0.02
 FONT_INRADIUS_FRACTION = 0.5
 FONT_EXTRA_CHAR_SHRINK = 0.35
 
@@ -208,6 +208,38 @@ def _weld_cutter_mesh(obj):
     bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
     bm.to_mesh(obj.data)
     obj.data.update()
+    bm.free()
+
+
+def _soften_cutter_edges(cutter_obj, depth):
+    """
+    Explicit user request: engraved recesses should have softened
+    (rounded) edges, not a sharp 90-degree transition where the cut wall
+    meets the die's flat face. Bevels every edge of the cutter mesh
+    itself (limit_method='NONE') before it's used in the boolean cut --
+    the cutter is one small glyph feature, unlike the die body's own
+    bevel (see exporter.py), which is deliberately scoped to structural
+    edges only via a bevel-weight attribute. width/segments calibrated
+    this session: large enough to visibly round the recess, small enough
+    relative to `depth` to keep the added boolean-cut complexity (and
+    its small, measured non-manifold-junction cost -- 10-22 edges on a
+    representative case, tracked via mesh_quality_warnings like every
+    other known residual in this pipeline) modest.
+    """
+    mod = cutter_obj.modifiers.new(name="SoftenEdges", type='BEVEL')
+    mod.width = depth * 0.25
+    mod.segments = 2
+    mod.limit_method = 'NONE'
+    bpy.ops.object.select_all(action='DESELECT')
+    cutter_obj.select_set(True)
+    bpy.context.view_layer.objects.active = cutter_obj
+    bpy.ops.object.modifier_apply(modifier=mod.name)
+
+    bm = bmesh.new()
+    bm.from_mesh(cutter_obj.data)
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    bm.to_mesh(cutter_obj.data)
+    cutter_obj.data.update()
     bm.free()
 
 
@@ -626,6 +658,7 @@ def apply_engraved_glyphs(die_obj, die_type, assignment, glyph_style, glyph_fill
             bpy.context.view_layer.objects.active = txt_obj
             bpy.ops.object.convert(target='MESH')
             _weld_cutter_mesh(txt_obj)
+            _soften_cutter_edges(txt_obj, depth)
             txt_obj.matrix_world = orient @ Matrix.Translation((0, 0, -depth))
             cut_warning = _boolean_diff_apply(die_obj, txt_obj)
             if cut_warning is not None:

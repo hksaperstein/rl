@@ -1842,6 +1842,61 @@ def test_proportional_font_size_shrinks_for_longer_labels():
     assert size_1_char == inradius * 0.5
 
 
+def test_engrave_depth_fraction_is_shallower_than_prior_value():
+    """
+    Explicit user request: "all engravings should be even shallower" --
+    this session had already reduced ENGRAVE_DEPTH_FRACTION once (0.04 ->
+    0.03); this reduces it again.
+    """
+    from dice_gen.glyphs import ENGRAVE_DEPTH_FRACTION
+
+    assert ENGRAVE_DEPTH_FRACTION == 0.02
+
+
+def test_apply_engraved_glyphs_cutter_edges_are_rounded_not_sharp():
+    """
+    Explicit user request: "softer edges" on engraved recesses -- the
+    cutter mesh used for each numeral/pip cut must have its edges beveled
+    (rounded) before the boolean cut runs, rather than left as sharp
+    90-degree transitions. Verified by checking the cutter mesh gains
+    additional geometry from a bevel step: an unbeveled extruded-text
+    mesh has exactly as many faces as its convert(target='MESH') +
+    _weld_cutter_mesh output; a beveled one has more (the bevel adds
+    faces along every edge it rounds).
+    """
+    import bpy
+    from dice_gen import geometry
+    from dice_gen.glyphs import (
+        _face_orientation_matrix, _weld_cutter_mesh, ENGRAVE_DEPTH_FRACTION,
+    )
+
+    size_mm = 18.0
+    depth = size_mm * ENGRAVE_DEPTH_FRACTION
+
+    bpy.ops.wm.read_factory_settings(use_empty=True)
+    bpy.ops.object.text_add()
+    txt_obj = bpy.context.active_object
+    txt_obj.data.body = "8"
+    txt_obj.data.align_x = 'CENTER'; txt_obj.data.align_y = 'CENTER'
+    txt_obj.data.size = 1.8
+    txt_obj.data.extrude = depth
+    bpy.context.view_layer.objects.active = txt_obj
+    bpy.ops.object.convert(target='MESH')
+    _weld_cutter_mesh(txt_obj)
+    unbeveled_face_count = len(txt_obj.data.polygons)
+
+    from dice_gen.glyphs import _soften_cutter_edges
+    _soften_cutter_edges(txt_obj, depth)
+    beveled_face_count = len(txt_obj.data.polygons)
+
+    assert beveled_face_count > unbeveled_face_count, (
+        f"expected bevel to add faces (softened edges), got "
+        f"{unbeveled_face_count} -> {beveled_face_count}"
+    )
+
+    bpy.data.objects.remove(txt_obj, do_unlink=True)
+
+
 def run():
     test_glyph_label_formats()
     test_proportional_font_size_shrinks_for_longer_labels()
@@ -1868,6 +1923,8 @@ def run():
     test_apply_engraved_glyphs_uses_load_font_with_correct_glyph_style()
     test_apply_decal_glyphs_uses_load_font_with_correct_glyph_style()
     test_engrave_depth_fraction_is_shallower_than_before()
+    test_engrave_depth_fraction_is_shallower_than_prior_value()
+    test_apply_engraved_glyphs_cutter_edges_are_rounded_not_sharp()
     test_face_vertex_orientations_returns_one_outward_pointing_matrix_per_vertex()
     test_apply_engraved_glyphs_cuts_three_corners_per_face_for_d4_numerals()
     test_apply_engraved_glyphs_does_not_triple_pips_for_d4()

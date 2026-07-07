@@ -818,3 +818,75 @@ def mirrored_goal_distance_gated(
     distance = torch.norm(env._target_pos_w - object.data.root_pos_w, dim=-1)
     lifted = (object.data.root_pos_w[:, 2] > minimal_height).float()
     return lifted * (1.0 - torch.tanh(distance / std))
+
+
+def genuine_grasp_and_lift(
+    env: ManagerBasedRLEnv,
+    object_cfg: SceneEntityCfg,
+    jaw1_contact_cfg: SceneEntityCfg,
+    jaw2_contact_cfg: SceneEntityCfg,
+    force_threshold: float,
+    antipodal_cos_threshold: float,
+    minimal_height: float,
+) -> torch.Tensor:
+    """Shared gating condition for Experiment 17: the object is lifted
+    ONLY if both the height condition AND a genuine bilateral antipodal
+    grasp (reusing antipodal_grasp_bonus's own force-closure check, not
+    reimplementing it) hold simultaneously - fixes Experiment 16's
+    "stage leakage" exploit (Xu et al. 2026, arXiv:2606.31377), confirmed
+    via direct contact-sensor instrumentation to have let the policy wedge
+    the cube against its own wrist/gripper-housing geometry with zero jaw
+    contact force. See
+    docs/superpowers/specs/2026-07-07-ar4-experiment17-grasp-gated-lift-design.md.
+    """
+    object: RigidObject = env.scene[object_cfg.name]
+    height_ok = object.data.root_pos_w[:, 2] > minimal_height
+    grasp_ok = antipodal_grasp_bonus(
+        env, force_threshold, antipodal_cos_threshold, jaw1_contact_cfg, jaw2_contact_cfg
+    ) > 0.5
+    return (height_ok & grasp_ok).float()
+
+
+def lifting_object_grasp_gated(
+    env: ManagerBasedRLEnv,
+    object_cfg: SceneEntityCfg,
+    jaw1_contact_cfg: SceneEntityCfg,
+    jaw2_contact_cfg: SceneEntityCfg,
+    force_threshold: float,
+    antipodal_cos_threshold: float,
+    minimal_height: float,
+) -> torch.Tensor:
+    """Same binary reward shape as isaaclab_tasks' object_is_lifted
+    (1.0/0.0), but ONLY pays out when genuine_grasp_and_lift's stricter
+    condition holds - see that function's docstring. See
+    docs/superpowers/specs/2026-07-07-ar4-experiment17-grasp-gated-lift-design.md.
+    """
+    return genuine_grasp_and_lift(
+        env, object_cfg, jaw1_contact_cfg, jaw2_contact_cfg, force_threshold, antipodal_cos_threshold, minimal_height
+    )
+
+
+def mirrored_goal_distance_grasp_gated(
+    env: ManagerBasedRLEnv,
+    std: float,
+    minimal_height: float,
+    object_cfg: SceneEntityCfg,
+    jaw1_contact_cfg: SceneEntityCfg,
+    jaw2_contact_cfg: SceneEntityCfg,
+    force_threshold: float,
+    antipodal_cos_threshold: float,
+) -> torch.Tensor:
+    """Same tanh-kernel goal-distance formula as
+    mirrored_goal_distance_gated (Experiment 16), but gated on
+    genuine_grasp_and_lift's height-AND-grasp condition instead of height
+    alone. See
+    docs/superpowers/specs/2026-07-07-ar4-experiment17-grasp-gated-lift-design.md.
+    """
+    object: RigidObject = env.scene[object_cfg.name]
+    if not hasattr(env, "_target_pos_w"):
+        env._target_pos_w = torch.zeros(env.num_envs, 3, device=env.device)
+    distance = torch.norm(env._target_pos_w - object.data.root_pos_w, dim=-1)
+    gate = genuine_grasp_and_lift(
+        env, object_cfg, jaw1_contact_cfg, jaw2_contact_cfg, force_threshold, antipodal_cos_threshold, minimal_height
+    )
+    return gate * (1.0 - torch.tanh(distance / std))

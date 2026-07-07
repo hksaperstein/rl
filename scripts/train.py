@@ -91,6 +91,18 @@ parser.add_argument(
         "docs/superpowers/specs/2026-07-07-ar4-reachskip-curriculum-design.md."
     ),
 )
+parser.add_argument(
+    "--baseproximity",
+    action="store_true",
+    default=False,
+    help=(
+        "Train on the reward-shaping variant of the task-space scene: adds a ground-contact penalty "
+        "and a new cube-to-robot-base proximity penalty, and raises the antipodal grasp bonus's weight "
+        "(with a matched stillness-penalty raise preserving the anti-freeze reward-rate margin), on top "
+        "of Experiment 12's clean baseline reward. See "
+        "docs/superpowers/specs/2026-07-07-ar4-experiment15-reward-shaping-design.md."
+    ),
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
@@ -124,6 +136,7 @@ from tasks.ar4.pickplace_env_cfg import GROUND_Z, Ar4PickPlaceEnvCfg  # noqa: E4
 from tasks.ar4.pickplace_ik_guided_env_cfg import Ar4PickPlaceIkGuidedEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_mirror_env_cfg import Ar4PickPlaceMirrorEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_single_object_env_cfg import Ar4PickPlaceSingleObjectEnvCfg  # noqa: E402
+from tasks.ar4.pickplace_baseproximity_env_cfg import Ar4PickPlaceBaseProximityEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_reachskip_env_cfg import Ar4PickPlaceReachskipEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_residual_env_cfg import Ar4PickPlaceResidualEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_taskspace_env_cfg import (  # noqa: E402
@@ -135,7 +148,9 @@ LOG_ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 
 
 def main() -> None:
-    if args_cli.reachskip:
+    if args_cli.baseproximity:
+        env_cfg_cls = Ar4PickPlaceBaseProximityEnvCfg
+    elif args_cli.reachskip:
         env_cfg_cls = Ar4PickPlaceReachskipEnvCfg
     elif args_cli.residual:
         env_cfg_cls = Ar4PickPlaceResidualEnvCfg
@@ -153,7 +168,7 @@ def main() -> None:
     env_cfg.scene.num_envs = args_cli.num_envs
     env_cfg.sim.device = args_cli.device
 
-    if args_cli.taskspace or args_cli.residual or args_cli.reachskip:
+    if args_cli.taskspace or args_cli.residual or args_cli.reachskip or args_cli.baseproximity:
         agent_cfg = Ar4PickPlaceTaskspacePPORunnerCfg()
     else:
         agent_cfg = Ar4PickPlacePPORunnerCfg()

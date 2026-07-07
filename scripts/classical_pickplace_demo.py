@@ -19,6 +19,7 @@ classical, live end-to-end" demonstration.
 
 import argparse
 import os
+import random
 import subprocess
 import sys
 
@@ -63,6 +64,10 @@ _LIFT_MARGIN = 0.02
 _CARRY_HEIGHT = 0.10
 _ADVANCE_TOLERANCE = 0.03
 _BASE_MAX_STEP = 0.05  # matches tasks/ar4/residual_ik_action.py's _BASE_MAX_STEP
+_STALL_CHECK_INTERVAL = 25  # steps between stall checks
+_STALL_THRESHOLD = 0.005  # meters - min EE movement over the interval to NOT be considered stalled
+_ESCAPE_STEPS = 15  # how many steps to apply the escape perturbation once a stall is detected
+_ESCAPE_PERTURBATION_SCALE = 0.03  # meters - random nudge magnitude added to pursuit_delta while escaping
 _GOAL_POS_B = (0.0, 0.35, 0.02)  # fixed demo goal, robot root frame
 _GRIPPER_OPEN_ACTION = 1.0  # BinaryJointAction convention: raw action >= 0 -> open
 _GRIPPER_CLOSE_ACTION = -1.0  # raw action < 0 -> close
@@ -140,6 +145,8 @@ def main() -> None:
     waypoints = None
     waypoint_idx = 0
     reached_final = False
+    stall_check_pos = None
+    escape_steps_remaining = 0
 
     with torch.inference_mode():
         env.reset()
@@ -164,6 +171,14 @@ def main() -> None:
             root_quat_w = robot.data.root_quat_w
             ee_pos_b, _ = subtract_frame_transforms(root_pos_w, root_quat_w, ee_pos_w)
 
+            if step % _STALL_CHECK_INTERVAL == 0:
+                if stall_check_pos is not None:
+                    moved = torch.norm(ee_pos_b - stall_check_pos, dim=-1).item()
+                    if moved < _STALL_THRESHOLD:
+                        escape_steps_remaining = _ESCAPE_STEPS
+                        print(f"[INFO] Stall detected at step={step} (moved {moved:.5f}m in {_STALL_CHECK_INTERVAL} steps) - injecting escape perturbation.")
+                stall_check_pos = ee_pos_b.clone()
+
             current_waypoint = waypoints[waypoint_idx].unsqueeze(0)
             direction = current_waypoint - ee_pos_b
             dist = torch.norm(direction, dim=-1, keepdim=True)
@@ -179,6 +194,11 @@ def main() -> None:
 
             step_mag = torch.clamp(dist, max=_BASE_MAX_STEP)
             pursuit_delta = direction / (dist + 1e-8) * step_mag
+
+            if escape_steps_remaining > 0:
+                perturbation = (torch.rand(1, 3, device=env.device) * 2.0 - 1.0) * _ESCAPE_PERTURBATION_SCALE
+                pursuit_delta = pursuit_delta + perturbation
+                escape_steps_remaining -= 1
 
             action = torch.zeros(env.num_envs, 4, device=env.device)
             action[:, 0:3] = pursuit_delta

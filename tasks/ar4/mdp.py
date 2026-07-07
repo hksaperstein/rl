@@ -932,3 +932,43 @@ def pregrasp_readiness_bonus(
     closedness_term = torch.clamp((open_pos - gripper_pos) / (open_pos - closed_pos), 0.0, 1.0)
 
     return proximity_term * closedness_term
+
+
+def orientation_alignment_bonus(
+    env: ManagerBasedRLEnv,
+    ee_frame_cfg: SceneEntityCfg,
+) -> torch.Tensor:
+    """Dense reward for keeping the gripper's approach axis close to
+    vertical (top-down), as a SOFT bias layered onto the existing plain
+    joint-space action - not a hard action-space constraint. Experiment
+    20 originally tried hard-locking full 6-DOF pose via a custom
+    absolute-pose differential-IK action term; independent instrumented
+    verification found that mechanism structurally unstable (the real
+    end-effector drifted 75-99 degrees off target within a single
+    episode under zero policy action, across three independently-tried
+    fixes - see
+    docs/superpowers/specs/2026-07-07-ar4-experiment20-vertical-orientation-lock-design.md's
+    "Revision" section). This reward tests the same underlying
+    hypothesis (reduce the policy's orientation-discovery burden for
+    finding an antipodal grasp) without that IK-stability problem class:
+    the policy remains free to reach any joint configuration via ordinary
+    joint-space control, with a continuous incentive (not a hard
+    requirement) toward a top-down approach.
+
+    Computes the gripper's approach axis in world frame
+    (ee_frame's local +Z, matching this repo's own independently-
+    verified convention - see the design spec's Task 2 investigation)
+    and returns (dot(approach_dir, world -Z) + 1) / 2: a natural [0, 1]
+    alignment measure, 1.0 at perfect vertical approach, 0.5 at
+    horizontal, 0.0 pointing straight up. No tanh kernel needed - the
+    dot product is already a smooth, bounded angular-alignment measure.
+    """
+    ee_frame: FrameTransformer = env.scene[ee_frame_cfg.name]
+    ee_quat_w = ee_frame.data.target_quat_w[:, 0, :]
+    local_z = torch.zeros_like(ee_quat_w[:, :3])
+    local_z[:, 2] = 1.0
+    approach_dir_w = quat_apply(ee_quat_w, local_z)
+    world_down = torch.zeros_like(approach_dir_w)
+    world_down[:, 2] = -1.0
+    dot_with_down = torch.sum(approach_dir_w * world_down, dim=-1)
+    return (dot_with_down + 1.0) / 2.0

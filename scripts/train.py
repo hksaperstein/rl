@@ -140,6 +140,18 @@ parser.add_argument(
         "docs/superpowers/specs/2026-07-07-ar4-experiment18-pregrasp-readiness-shaping-design.md."
     ),
 )
+parser.add_argument(
+    "--orientationbias",
+    action="store_true",
+    default=False,
+    help=(
+        "Train on the soft orientation-alignment-bias variant: adds one new reward term rewarding "
+        "the policy for keeping the gripper's approach axis close to vertical (top-down), on top of "
+        "--pregrasp's unchanged reward set. Revised from Experiment 20's original hard IK-lock action "
+        "term, which independent instrumented verification found structurally unstable. See "
+        "docs/superpowers/specs/2026-07-07-ar4-experiment20-vertical-orientation-lock-design.md."
+    ),
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
@@ -175,6 +187,7 @@ from tasks.ar4.pickplace_mirror_env_cfg import Ar4PickPlaceMirrorEnvCfg  # noqa:
 from tasks.ar4.pickplace_single_object_env_cfg import Ar4PickPlaceSingleObjectEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_baseproximity_env_cfg import Ar4PickPlaceBaseProximityEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_graspgated_env_cfg import Ar4PickPlaceGraspGatedEnvCfg  # noqa: E402
+from tasks.ar4.pickplace_orientationbias_env_cfg import Ar4PickPlaceOrientationBiasEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_pregrasp_env_cfg import Ar4PickPlacePregraspEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_provenrecipe_env_cfg import Ar4PickPlaceProvenRecipeEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_reachskip_env_cfg import Ar4PickPlaceReachskipEnvCfg  # noqa: E402
@@ -188,7 +201,9 @@ LOG_ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 
 
 def main() -> None:
-    if args_cli.pregrasp:
+    if args_cli.orientationbias:
+        env_cfg_cls = Ar4PickPlaceOrientationBiasEnvCfg
+    elif args_cli.pregrasp:
         env_cfg_cls = Ar4PickPlacePregraspEnvCfg
     elif args_cli.graspgated:
         env_cfg_cls = Ar4PickPlaceGraspGatedEnvCfg

@@ -77,6 +77,12 @@ parser.add_argument(
     default=False,
     help="Evaluate the dense pre-grasp-readiness shaping scene (see scripts/train.py --pregrasp) instead of the four-object scene.",
 )
+parser.add_argument(
+    "--orientationbias",
+    action="store_true",
+    default=False,
+    help="Evaluate the soft orientation-alignment-bias scene (see scripts/train.py --orientationbias) instead of the four-object scene.",
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 args_cli.enable_cameras = True  # required for video recording
@@ -111,6 +117,7 @@ from tasks.ar4.pickplace_ik_guided_env_cfg import Ar4PickPlaceIkGuidedEnvCfg  # 
 from tasks.ar4.pickplace_mirror_env_cfg import Ar4PickPlaceMirrorEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_baseproximity_env_cfg import Ar4PickPlaceBaseProximityEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_graspgated_env_cfg import Ar4PickPlaceGraspGatedEnvCfg  # noqa: E402
+from tasks.ar4.pickplace_orientationbias_env_cfg import Ar4PickPlaceOrientationBiasEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_pregrasp_env_cfg import Ar4PickPlacePregraspEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_provenrecipe_env_cfg import Ar4PickPlaceProvenRecipeEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_reachskip_env_cfg import Ar4PickPlaceReachskipEnvCfg  # noqa: E402
@@ -124,7 +131,9 @@ VIDEO_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file_
 
 
 def main() -> None:
-    if args_cli.pregrasp:
+    if args_cli.orientationbias:
+        env_cfg_cls = Ar4PickPlaceOrientationBiasEnvCfg
+    elif args_cli.pregrasp:
         env_cfg_cls = Ar4PickPlacePregraspEnvCfg
     elif args_cli.graspgated:
         env_cfg_cls = Ar4PickPlaceGraspGatedEnvCfg
@@ -171,7 +180,9 @@ def main() -> None:
         # advances and silently merges every episode into one video. 250 = one episode's
         # worth of steps (episode_length_s=5.0 / step_dt=decimation*sim.dt=2*0.01=0.02s),
         # from Ar4PickPlaceEnvCfg - update this if that config changes.
-        if args_cli.pregrasp:
+        if args_cli.orientationbias:
+            name_prefix = "ar4_pickplace_orientationbias"
+        elif args_cli.pregrasp:
             name_prefix = "ar4_pickplace_pregrasp"
         elif args_cli.graspgated:
             name_prefix = "ar4_pickplace_graspgated"

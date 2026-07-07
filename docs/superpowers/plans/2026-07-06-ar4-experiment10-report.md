@@ -139,29 +139,55 @@ iteration=1499, value=0.002848
 
 ## Key Comparison: Antipodal Grasp Bonus Analysis
 
-### Experiment 9 (baseline):
-- Final antipodal_grasp_bonus: 0.001416
-- Final ik_guided_path_bonus: 0.151246
-- Cumulative ratio: 1:107 (antipodal fires at ~0.9% cumulative contribution)
+### Controller correction: the "cumulative ratio" comparison below compared different quantities
 
-### Experiment 10 (this run):
-- Final antipodal_grasp_bonus: 0.000000
-- Final ik_guided_path_bonus: 0.117441
-- Cumulative ratio: ~1:11,250 (antipodal fires at ~0.009% cumulative contribution)
-- **Cumulative antipodal total:** 0.015632 across 1500 iterations
-- **Cumulative ik_guided total:** 175.784608 across 1500 iterations
+The original version of this section computed "Experiment 9 cumulative
+1:107" vs "Experiment 10 cumulative 1:11,250" by summing Experiment 10's
+per-iteration logged values across all 1500 training iterations, then
+comparing that sum against Experiment 9's single final-iteration value.
+These are not comparable quantities (one is a single episode snapshot,
+the other integrates a whole training run's worth of snapshots). The
+only fair, apples-to-apples comparison is **final value vs. final
+value**, both single-episode snapshots at the end of a same-length run:
 
-### Critical Finding
-The antipodal grasp bonus is firing **FAR LESS OFTEN** in Experiment 10 than in Experiment 9, despite the threshold being corrected from -0.85 to -0.7071 (which should make the check less strict).
+- Experiment 9 final `antipodal_grasp_bonus`: **0.001416**
+- Experiment 10 final `antipodal_grasp_bonus`: **0.000000**
 
-- Experiment 9: antipodal fires with cumulative value 0.001416 at iteration 1499
-- Experiment 10: antipodal fires with cumulative value 0.015632 across all 1500 iterations, but final value is 0.000000
+**This is a real regression, not an artifact of the ratio math.**
+Experiment 10's antipodal condition is satisfied in exactly **0** of the
+envs being averaged by the end of training — worse than Experiment 9's
+already-tiny 0.001416. The 143 non-zero occurrences (9.5% of logged
+iterations) are concentrated in early iterations (~24-58) and vanish
+entirely by the end of training, i.e., **the policy converged away from
+ever satisfying even the loosened antipodal condition**, rather than
+learning toward it.
 
-This indicates the threshold fix alone did not solve the antipodal grasp bonus deficit. The bonus was expected to increase meaningfully, but instead it remains nearly zero throughout the run. The 143 non-zero occurrences are concentrated in early iterations (mostly iterations 24-58) and remain extremely small in magnitude (median < 0.0001).
+### What this suggests
 
-**Conclusion:** The threshold correction did NOT achieve the expected result of making the antipodal grasp bonus fire more often. This suggests a deeper issue beyond just the threshold value, possibly related to:
-- Gripper force sensing or geometry
-- Cube/gripper contact behavior under the new solver settings
-- The interaction between the corrected threshold and the action scale/solver iteration changes
+`antipodal_grasp_bonus` is a flat, per-step reward (like the
+`contact_grasp_bonus` it replaced) at a comparatively small weight
+(3.0, vs. `ik_guided_path_bonus`'s 25.0) — the policy has little
+incentive to specifically pursue genuine antipodal contact over
+whatever non-antipodal-but-magnitude-satisfying contact pattern is
+easier to fall into (which is exactly what `contact_grasp_bonus`
+rewarded before, and which the policy clearly could achieve reliably
+in Experiments 8-9's ~16.8 cumulative `contact_grasp_bonus` values).
+Loosening the geometric threshold (-0.85 -> -0.7071) didn't help
+because the bottleneck isn't threshold strictness — it's that achieving
+**genuine bilateral opposition** appears to require more precise final
+gripper positioning/alignment than the current control scheme reliably
+achieves, and there's currently little reward pressure directing the
+policy toward that precision specifically.
 
-**No success/failure judgment on cube lift capability** — evaluation video analysis (a separate follow-up task) is required to assess whether the policy actually lifts the cube.
+This is a real, evidence-based argument *for* the next planned
+experiment (Experiment 11: task-space IK-driven action, replacing
+joint-space actions) — if precise final positioning/alignment is the
+actual bottleneck, offloading low-level joint coordination to a
+classical IK solver (so the policy only has to specify *where* the
+gripper should be, not *how* to move 6 joints to get there) may make
+that precision more achievable than it is under direct joint-space
+control.
+
+**No success/failure judgment on cube lift capability** — evaluation
+video analysis (a separate follow-up task) is required to assess
+whether the policy actually lifts the cube.

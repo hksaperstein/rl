@@ -58,7 +58,7 @@ has all 1500 points, steps 0-1499).
 - **Max value across all 1500 iterations: 7.8763**, occurring at iteration 47
 - First 10 values: 0.0026, 0.0010, 0.00017, 0.00014, 0.00011, 0.00008, 0.00007, 0.00004, 0.00003, 0.00003 (normal, decaying range)
 - Last 5 values: 0.00075, 0.00077, 0.00087, 0.00100, 0.00070 (normal range)
-- **Only one jump exceeding 50x between consecutive iterations** in the entire run: iteration 46 (0.0000680) -> iteration 47 (1.1522) -> iteration 48 (7.8763), followed immediately by iteration 49 dropping back to 0.0058 and staying in the 0.0003-0.001 range for the rest of the run.
+- **Only one jump exceeding 50x between consecutive iterations** in the entire run: iteration 45 (0.0000680) -> iteration 46 (1.1522) -> iteration 47 (7.8763), followed immediately by iteration 48 dropping back to 0.0058 and staying in the 0.0003-0.001 range for the rest of the run.
 - **No compounding/exponential pattern found anywhere in the 1500-iteration run.** This is exactly the same isolated 2-iteration transient spike (same rough magnitude, same iteration range) observed in the 300-iteration diagnostic, not a recurrence of the original divergence (which grew from 1.5 to 5.2e23 and never recovered over ~1430 consecutive iterations).
 
 **Conclusion: the `clip_actions=5.0` fix holds for the entire 1500-iteration run.** The critic's value-function loss stayed bounded throughout, with a single benign transient spike and immediate recovery — never the sustained exponential blow-up seen in the original diverged run.

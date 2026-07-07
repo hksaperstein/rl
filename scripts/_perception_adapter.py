@@ -38,13 +38,14 @@ def sphere_position_obs_slice(env) -> tuple[int, int]:
     return observation_term_slice(env, "policy", "sphere_position")
 
 
-def perceive_sphere(env, camera, tracker, ground_z: float, env_index: int = 0):
+def perceive_object(env, camera, tracker, ground_z: float, shape_label: str, env_index: int = 0):
     """Runs perception on `camera`'s current frame for one env, updates `tracker`,
-    and returns (sphere_position_in_robot_root_frame_or_None, tracked_objects,
-    rgb_frame). `env` must be the raw ManagerBasedRLEnv (e.g. `env.unwrapped`),
-    not the rsl_rl-wrapped env. `env_index` selects which parallel env's camera/
-    robot data to read (default 0, matching eval_loop.py/interactive_demo.py's
-    single-env usage)."""
+    and returns (object_position_in_robot_root_frame_or_None, tracked_objects,
+    rgb_frame) for the first tracked object matching `shape_label`. `env` must
+    be the raw ManagerBasedRLEnv (e.g. `env.unwrapped`), not the rsl_rl-wrapped
+    env. `env_index` selects which parallel env's camera/robot data to read
+    (default 0, matching eval_loop.py/interactive_demo.py/
+    classical_pickplace_demo.py's single-env usage)."""
     depth = camera.data.output["distance_to_image_plane"][env_index, ..., 0].cpu().numpy()
     rgb = camera.data.output["rgb"][env_index, ..., :3].cpu().numpy().astype(np.uint8)
     intrinsics = camera.data.intrinsic_matrices[env_index].cpu().numpy()
@@ -53,11 +54,11 @@ def perceive_sphere(env, camera, tracker, ground_z: float, env_index: int = 0):
 
     detections = run_perception(depth, intrinsics, cam_pos, cam_quat_ros, ground_z=ground_z)
     tracked = tracker.update(detections)
-    sphere = find_by_shape(tracked, "sphere")
-    if sphere is None:
+    obj = find_by_shape(tracked, shape_label)
+    if obj is None:
         return None, tracked, rgb
 
-    object_pos_w = torch.tensor(sphere.position, dtype=torch.float32, device=env.device).unsqueeze(0)
+    object_pos_w = torch.tensor(obj.position, dtype=torch.float32, device=env.device).unsqueeze(0)
     robot = env.scene["robot"]
     object_pos_b, _ = subtract_frame_transforms(
         robot.data.root_pos_w[env_index : env_index + 1],
@@ -65,6 +66,13 @@ def perceive_sphere(env, camera, tracker, ground_z: float, env_index: int = 0):
         object_pos_w,
     )
     return object_pos_b, tracked, rgb
+
+
+def perceive_sphere(env, camera, tracker, ground_z: float, env_index: int = 0):
+    """Thin wrapper around perceive_object for the sphere-specific call sites
+    (eval_loop.py --perception, interactive_demo.py) - neither needs any
+    changes as a result of perceive_object's addition."""
+    return perceive_object(env, camera, tracker, ground_z, "sphere", env_index)
 
 
 class PerceptionObservationWrapper(gym.Wrapper):

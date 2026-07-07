@@ -1146,6 +1146,146 @@ follow-ups below.
          for the next experiment, alongside wiring in the existing
          `ground_penalty` function and raising `antipodal_grasp_bonus`'s
          weight.
+     - **Experiment 15: wire in `ground_penalty`, add a new
+       `base_proximity_penalty`, raise `antipodal_grasp_bonus`'s weight
+       (matched by a `stillness_penalty` raise) — direct user-directed
+       reward changes, built on Experiment 12's clean baseline (not
+       Experiment 14's unresolved reach-skip mechanism). Result: the best
+       outcome-metric scalars of the session so far, but the two new
+       penalty terms did not behave as designed — and one of them,
+       `base_proximity_penalty`, moved in the wrong direction, rising to
+       saturation rather than staying low.** Direct user requests
+       (2026-07-07): "negative reward for contacting the ground. higher
+       reward for the cube being in the grasp position" and "negative
+       reward for the cube contacting the base of the robot." New
+       `base_proximity_penalty` function (`tasks/ar4/mdp.py`, cube's xy
+       distance to the robot's own root origin, distinct from
+       `ground_penalty`'s z-height check per explicit user instruction),
+       `ground_penalty` (existing, previously unused) wired in for the
+       first time, `antipodal_grasp_bonus` weight 3.0 → 4.0 with
+       `stillness_penalty` matched 5.0 → 6.0 (preserves the exact
+       -2.0/step anti-freeze margin Experiment 12 verified:
+       4.0 − 6.0 = 3.0 − 5.0 = -2.0). New
+       `Ar4PickPlaceBaseProximityEnvCfg`
+       (`tasks/ar4/pickplace_baseproximity_env_cfg.py`), reusing
+       Experiment 12's action/observations/events/terminations unchanged —
+       isolates the reward function as the only new variable. Design spec:
+       `docs/superpowers/specs/2026-07-07-ar4-experiment15-reward-shaping-design.md`.
+       Full run data:
+       `docs/superpowers/plans/2026-07-07-ar4-experiment15-report.md`.
+       - **Diagnostic (300 iter) flagged a real anomaly the controller did
+         not just pattern-match past: a single-iteration `Loss/value_function`
+         spike to 17.66 at step 39** — roughly 100x any prior accepted
+         spike in this project (Experiment 13's full-run max was 0.17,
+         Experiment 14's diagnostic max was 0.024). The spike's *shape*
+         (isolated, single iteration, decayed within ~10-15 iterations,
+         zero recurrence) matched this project's always-accepted pattern
+         and was structurally unlike Experiment 11's actual divergence bug
+         (a sustained climb starting at iteration 67, not a one-off blip),
+         so the gate was passed on shape grounds — but the controller
+         explicitly flagged the magnitude for the full run to specifically
+         re-examine rather than treating the diagnostic's "pass" as
+         resolved. **The full run confirmed it as a genuine one-off**: the
+         identical spike recurred at the identical step (17.657946, step
+         39, matching to 4+ significant figures) with no second occurrence
+         above 1.0 anywhere in the remaining ~1460 iterations and no
+         gradual upward trend in the loss's baseline — the same
+         diagnostic-vs-full-run confirmation pattern already established
+         in Experiment 14. The raw magnitude itself remains unexplained and
+         far larger than any prior run's, but it did not grow, recur, or
+         destabilize training at scale.
+       - **Scalar comparison against Experiment 12 (and Experiment 14) is
+         the most consistently positive of the session**, unlike
+         Experiments 12-14's mixed or negative pictures.
+         `cube_reached_goal` improved +59.7% versus Experiment 12's final
+         value (0.010773 → 0.017202) and +51.0% versus Experiment 14's
+         (0.011393 → 0.017202) — the best final-iteration success-rate
+         reading of any experiment this session.
+         `antipodal_grasp_bonus` rose +159.8% versus Experiment 12
+         (0.012777 → 0.033199), and unlike Experiment 14 (whose antipodal
+         bonus collapsed to near-zero), this run shows a clear, largely
+         monotonic climb across the back half of training rather than a
+         collapse. `stillness_penalty` worsened modestly (46.8% more
+         negative) and `path_proximity_bonus` declined slightly (-4.5%) —
+         both small relative to the two outcome-oriented metrics' gains.
+       - **The two new penalty terms did not behave as the design spec
+         hoped, and `base_proximity_penalty` moved in the wrong
+         direction.** `ground_penalty`'s nonzero rate never trended down —
+         saturated at 100% in both the first and last 150-iteration windows
+         and every window between. `base_proximity_penalty`'s nonzero rate
+         was supposed to stay low (evidence it only fires for the specific
+         base-collapse-adjacent cases it targets); instead it rose from
+         12.0% in the first 150 iterations to a **saturated 100.0% for
+         roughly the last 1050 of 1500 iterations** — the cube ends up
+         within 8cm of the robot's own root origin on nearly every logged
+         step for the majority of training, the opposite of what a
+         successful deterrent penalty would produce. A rising rate that
+         saturates over training (rather than a roughly-constant ~10% rate,
+         which is what random cube-spawn proximity to the base alone would
+         produce, per the design spec's own area-proportion estimate) is
+         not consistent with "occasional unlucky spawn positions" — it
+         indicates the trained policy is actively converging toward
+         base-proximate states as training progresses.
+       - **Video inspection (3 of 10 recorded episodes, personally
+         inspected by the controller) is consistent with both the positive
+         scalar signal (still a low absolute success rate, so 0/3 in a
+         3-episode sample is statistically unsurprising at ~1.7%) and the
+         base-proximity finding.** Episode 1: the arm reaches down to the
+         cube by ~frame 5 of 25 and holds a static pose near it for the
+         rest of the episode — the established "reach and freeze near the
+         cube" signature, no lift. Episode 3: a near-identical repeat of
+         Episode 1's pattern — reach, then a static diagonal hold near the
+         cube, no lift. **Episode 2 dramatically reproduces Experiment
+         14's arm/cube-collapses-toward-the-base pattern**: starting from
+         an already fairly close spawn, the arm progressively curls tighter
+         against its own base body across the episode, and the cube itself
+         visibly ends up immediately adjacent to the base by the final
+         frames — not merely the arm folding without engaging the cube,
+         but the cube's own position ending up base-proximate, directly
+         matching what `base_proximity_penalty`'s saturating nonzero rate
+         predicts. **None of the 3 episodes show the cube leaving the
+         ground or reaching waypoint index ≥2 (lift)** — the design spec's
+         stated success criterion is not met on this sample, though the
+         improved scalar success rate suggests a larger video sample would
+         likely show at least occasional successes that 3 episodes alone
+         cannot reliably catch.
+       - **Cross-experiment pattern, now seen twice under two different
+         mechanism changes — worth treating as a priority signal, not a
+         coincidence.** Experiment 14 (reach-skip curriculum) showed the
+         arm folding toward its own base in 2 of 3 sampled episodes.
+         Experiment 15 (reward-shaping only, built on Experiment 12's
+         baseline, no curriculum/action changes) now shows the same
+         qualitative behavior in 1 of 3 sampled episodes, corroborated by
+         `base_proximity_penalty`'s rising-to-saturation scalar trend
+         across the majority of training — despite this experiment adding
+         an explicit penalty designed to discourage exactly this. Two
+         structurally different changes (a reset-distribution change in
+         Experiment 14, a reward-shaping change in Experiment 15)
+         independently converging on the same base-proximate failure mode
+         suggests this may not be an artifact of either specific mechanism,
+         but a more fundamental attractor in this task's action-space/
+         reward landscape — plausibly kinematic (echoing the classical
+         demo's own unresolved kinematic-singularity/self-collision stall
+         finding from earlier this session, a third, independent thread
+         that also landed on arm configurations near the base becoming
+         "stuck" states) rather than purely reward-incentive-driven, since
+         adding an explicit penalty against it in Experiment 15 did not
+         prevent it and the rate still rose during training.
+       - **Net assessment: genuinely the most positive outcome-metric
+         result of the session, but with a real, unresolved, and now
+         twice-observed side effect that a purpose-built penalty failed to
+         suppress.** Recommend NOT extending this exact
+         `base_proximity_penalty` formulation with further tuning alone
+         (raising its weight again without understanding why it saturates
+         risks the same "add pressure without fixing the mechanism"
+         pattern already seen not working here) — the recurring
+         base-attractor pattern across three independent investigations
+         (Experiment 14, Experiment 15, and the classical demo's
+         singularity stall) is now a strong candidate for its own
+         dedicated investigation before further reward tuning in this
+         family, alongside continuing to pursue the still-undone
+         episode-length/staged-decomposition direction queued since
+         Experiment 11's entry above.
 2. Shape classifier misclassifies cube/rectangular-prism as "sphere" against
    real depth data. Root-caused: `PLANARITY_RESIDUAL_THRESHOLD` (tuned on
    near-noiseless synthetic data) doesn't generalize to real sensor noise.

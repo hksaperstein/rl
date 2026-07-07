@@ -1286,6 +1286,117 @@ follow-ups below.
          family, alongside continuing to pursue the still-undone
          episode-length/staged-decomposition direction queued since
          Experiment 11's entry above.
+     - **Experiment 16: from-scratch replication of two proven,
+       independently-published Isaac-ecosystem manipulation recipes —
+       genuine, sustained lift confirmed in video for the first time in
+       this entire 16-experiment arc.** Direct user request: research
+       actual working RL-manipulation examples and replicate them on the
+       AR4+cube scene, starting from scratch rather than tuning the
+       existing baseline further. Hypothesis, grounded directly in source
+       (not secondhand): Isaac Lab's own Franka Cube Lift task
+       (`isaaclab_tasks/manager_based/manipulation/lift/`) and
+       IsaacGymEnvs' independently-maintained FrankaCubeStack task both
+       (a) never reward grasp quality as a standalone term — grasp is
+       purely instrumental — and (b) multiplicatively gate the majority
+       of available reward (goal-tracking) behind an actual lift
+       condition, structurally unlike every one of this repo's 15 prior
+       experiments, which always kept a standalone grasp-quality term and
+       an ungated (or only weakly-staged) progression signal — exactly
+       the reward-rate-arithmetic bug class this project's own research
+       has repeatedly diagnosed and never fully eliminated. New
+       `Ar4PickPlaceProvenRecipeEnvCfg`
+       (`tasks/ar4/pickplace_provenrecipe_env_cfg.py`): 6 reward terms
+       (two — `reaching_object`, `lifting_object` — reused directly,
+       unmodified, from Isaac Lab's own installed source, not
+       reimplemented), a plain binary per-step lift reward (not a
+       milestone/running-max bonus), goal-tracking reward gated on lift,
+       plain joint-space action (reverting from this session's
+       task-space/IK lineage, matching both references), and this repo's
+       first use of Isaac Lab's curriculum manager (regularization-weight
+       curriculum, also replicated from the reference). Design spec:
+       `docs/superpowers/specs/2026-07-07-ar4-experiment16-proven-recipe-replication-design.md`.
+       Full run data:
+       `docs/superpowers/plans/2026-07-07-ar4-experiment16-report.md`.
+       - **Diagnostic flagged a genuinely different `Loss/value_function`
+         shape than any prior experiment — climbing and NOT recovering
+         within the 300-iteration window (unlike every previous
+         isolated-spike-then-recover precedent) — fully resolved by the
+         full run with a clean, direct causal explanation, not just a
+         plausible guess.** The loss continued climbing past the
+         diagnostic's endpoint to a run-wide peak of 4.588 at **iteration
+         417** — the exact iteration (confirmed directly in the raw
+         `Curriculum/action_rate_curr`/`joint_vel_curr` scalars) at which
+         the new curriculum mechanism fires, bumping `action_rate`/
+         `joint_vel` weights 1000x (-1e-4 to -1e-1) as designed. From that
+         peak the loss declined steadily and essentially monotonically for
+         the remaining ~1080 iterations to 0.298 (93.5% below peak) —
+         bounded and recovering, not runaway, though it does not fully
+         return to the initial near-zero baseline, settling into a
+         structurally elevated (~0.25-0.45) equilibrium consistent with
+         this reward shape's binary/gated terms firing on ~100% of
+         iterations for the run's back three-quarters.
+       - **Scalar picture is genuinely mixed and worth stating precisely,
+         not glossing over.** `cube_reached_goal`'s final-iteration value
+         (0.008962) is actually *lower* than both Experiment 12's
+         (0.010773, -16.8%) and Experiment 15's (0.017202, -47.9%) — on
+         this specific scalar alone, this experiment looks like a
+         regression. But `lifting_object` and `object_goal_tracking`
+         (this experiment's own direct, literal per-step success signals)
+         both grew strongly, monotonically, and in lockstep across the
+         entire run (nonzero rate 81.3% → saturated 100.0% by iteration
+         ~150; `lifting_object`'s per-window average climbed ~220x, 0.05
+         → 12.1) — the two proxies point in opposite directions, exactly
+         the kind of ambiguity this project's established correction
+         protocol exists for, and exactly why the verdict below rests on
+         video, not the `cube_reached_goal` scalar alone.
+       - **Video inspection (3 of 10 recorded episodes, personally
+         inspected by the controller) resolves the ambiguity decisively
+         in favor of the direct lift signals, not `cube_reached_goal`.**
+         All three sampled episodes show the same clear pattern: the arm
+         reaches the cube within the first ~1-2 seconds, grasps it, and
+         **lifts it — genuinely, visibly off the ground — holding it
+         elevated at the gripper for the remainder of the episode** (a
+         green drop-zone marker, newly added this session, made the goal
+         position directly visible in these videos for the first time).
+         This is qualitatively different from every one of Experiments
+         1-15's video samples, all of which showed either a static
+         low-to-the-ground hold near the cube's spawn point or a collapse
+         toward the robot's own base — never a sustained elevated hold.
+         **3 of 3 sampled episodes show genuine lift; 0 of 3 show the arm
+         carrying the lifted cube toward the goal marker within the
+         episode** — the arm holds the cube up near its own body/gripper
+         area but does not visibly transport it, which is exactly
+         consistent with the lower `cube_reached_goal` reading (reaching
+         within the 2cm success threshold requires actually arriving at
+         the goal, not just lifting).
+       - **Net assessment: this is the most significant structural
+         finding of the entire research arc — the core "grasp achieved,
+         lift never emerges" pattern that has been the through-line of
+         Experiments 1 through 15 is resolved.** The hypothesis is
+         confirmed: removing the standalone grasp reward and gating
+         goal-tracking behind a real lift condition, replicating what two
+         independently-proven recipes actually do, produced the lift
+         behavior 15 ad hoc iterations on this repo's own reward/action
+         lineage did not. The remaining gap is now narrower and better
+         defined than at any prior point in this project: not
+         "reach/grasp/lift," which this experiment resolves, but
+         specifically **carry-to-goal** (transport and place) — a
+         well-scoped next research question, not a return to guessing at
+         the grasp/lift mechanism. Recommended next steps, in priority
+         order: (a) the long-queued episode-length extension (never
+         actually tried this session despite being flagged since early
+         on) is now much better motivated than before, since the policy
+         has a genuine lift to build on and may simply be running out of
+         episode time to carry+place after lifting; (b) consider whether
+         `object_goal_tracking`'s current weight/std balance is
+         sufficient to pull a *lifted* object toward the goal, versus
+         just rewarding the state of being lifted regardless of xy
+         position, given the video shows the cube held near the robot's
+         own body, not moving laterally. Per this repo's now-standing
+         scientific-method requirement, either direction needs its own
+         hypothesis and background research before a new spec, not just
+         a parameter tweak on this experiment's already-proven
+         foundation.
 2. Shape classifier misclassifies cube/rectangular-prism as "sphere" against
    real depth data. Root-caused: `PLANARITY_RESIDUAL_THRESHOLD` (tuned on
    near-noiseless synthetic data) doesn't generalize to real sensor noise.

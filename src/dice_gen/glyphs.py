@@ -778,10 +778,18 @@ def _unwrap_faces_to_full_square(die_obj, margin=0.1):
     apex-down faces -- confirmed via manual batch regeneration (thumbnails
     showed only a clipped top numeral and no bottom-corner numerals on
     several d4 assets). Every triangular face's single distinctive vertex
-    (the one whose local v differs from the other two, which always share
-    a v value for this projection) is normalized to be the HIGH-v one
-    (apex-up) by flipping v for the whole face if the isolated vertex
-    came out low-v instead.
+    (the one whose local v differs most from the other two) is normalized
+    to be the HIGH-v one (apex-up) if it came out low-v instead -- by
+    rotating the face 180 degrees about its center (negating BOTH u and
+    v), NOT by flipping v alone. An earlier version of this fix negated
+    only v, which is a mirror reflection (determinant -1): it corrected
+    apex-up-ness but reversed winding/handedness on exactly the faces it
+    "fixed", which would render any text on those faces backwards.
+    Confirmed via signed-area (shoelace formula) comparison: the raw
+    pre-fix projection was already winding-consistent across every face
+    (all the same sign); the v-only-negate version produced a 50/50 mix
+    of signs. Negating both u and v (determinant +1) corrects the same
+    apex-up/down orientation while preserving winding on every face.
     """
     mesh = die_obj.data
     if mesh.uv_layers.active is None:

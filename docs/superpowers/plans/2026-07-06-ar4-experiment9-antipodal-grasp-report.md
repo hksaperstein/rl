@@ -151,37 +151,76 @@ Sample points across run:
 
 ## Ratio Analysis: Antipodal Grasp vs Path Bonus
 
-### Experiment 8 Baseline (contact_grasp_bonus / ik_guided_path_bonus)
-- Ratio: **118:1** (contact_grasp_bonus 16.80 cumulative vs ik_guided_path_bonus 0.14)
-- Assessment: Extreme imbalance; agent reached/gripped but froze without finishing path
+### Controller correction (2026-07-06): the original analysis below inverted the comparison
 
-### Experiment 9 Current (antipodal_grasp_bonus / ik_guided_path_bonus)
+The original version of this section computed "118:1 -> 106.84:1" and
+called it a "marginal 1.1x improvement." **This compares two ratios that
+are inverses of each other, not two points on the same scale.**
+Experiment 8's 118:1 means grasp reward was **118x larger** than path
+reward (grasp dominates). Experiment 9's 1:106.84 means grasp reward is
+now **106.84x smaller** than path reward (path dominates) — the
+dominant term has completely flipped, not shifted by 10%. Correct
+framing:
 
-**Final iteration ratio**:
-- antipodal_grasp_bonus (final): 0.001416
-- ik_guided_path_bonus (final): 0.151246
-- Ratio: **0.0094** or **1:106.84**
-- Reduction from Experiment 8: 118.00 → 106.84 = **1.1x reduction** (marginal)
+- Experiment 8: `contact_grasp_bonus` / `ik_guided_path_bonus` = 16.80 / 0.14 ≈ **118** (grasp dominates by ~118x)
+- Experiment 9: `antipodal_grasp_bonus` / `ik_guided_path_bonus` = 0.001416 / 0.151246 ≈ **0.0094** (path now dominates by ~107x)
 
-**Peak value ratio**:
-- antipodal_grasp_bonus (max): 0.003008
-- ik_guided_path_bonus (max): 0.151744
-- Ratio: **0.0198** or **1:50.45** (significantly better than final)
+Converting to the *raw* (pre-weight) achievement rate makes the real
+finding clear: Experiment 8's raw contact-magnitude-only signal was
+~16.80/20 ≈ 0.84 (cumulative per episode); Experiment 9's raw antipodal
+signal is ~0.001416/3 ≈ 0.00047 — a **~1800x reduction in how often the
+condition is satisfied**, far more than the ~7x the weight change alone
+(20→3) would explain. **The antipodal geometric check is almost never
+being satisfied**, not just less rewarded.
 
-### Key Observations
+**Root cause found:** the `antipodal_cos_threshold=-0.85` value was an
+approximate guess (~31.8° allowed deviation from perfect 180°
+opposition) that turned out to be *stricter* than what this scene's
+actual friction coefficient permits. The scene sets
+`static_friction=dynamic_friction=1.0` scene-wide
+(`Ar4PickPlaceMirrorEnvCfg.__post_init__`); the classical friction-cone
+half-angle for two-contact force-closure is `arctan(mu)` = `arctan(1.0)`
+= **45°**, corresponding to a cosine threshold of **-0.7071**, not
+-0.85. The reward was demanding a *more precise* grasp geometry than
+what's physically required to actually resist gravity given this
+scene's own friction setting — directly explaining why it almost never
+fired. This is a concrete, physics-derived correction, not another
+guess: `antipodal_cos_threshold` should be `-0.7071`, computed from
+`cos(180° - arctan(mu))` with this scene's actual `mu=1.0`.
 
-1. **Antipodal bonus is active but small**: The new `antipodal_grasp_bonus` term is receiving rewards in some episodes (peak 0.003008 at iteration 869), confirming the grasp detection is working. However, it remains heavily underweighted vs path bonus.
+**Positive finding, not a negative result:** the fact that a
+physically-correct antipodal check almost never fires, while
+`contact_grasp_bonus`'s bare magnitude check fired constantly (raw ~0.84
+cumulative), is itself strong confirmation of the classical-manipulation
+research finding: the grasps the policy learned to form under the old
+reward were **not real force-closure grasps** — both jaws were
+contacting hard enough to pass a magnitude threshold, but not from
+genuinely opposing directions. This matches Senior A's diagnosis
+exactly and is a more concrete confirmation than the research alone
+could provide.
 
-2. **Marginal improvement on final ratio**: The final iteration ratio improved from 118:1 to ~107:1, a reduction of only ~1.1x. This suggests the underlying dynamic (path bonus << grasp bonus) has not been fundamentally corrected.
+### Key Observations (revised)
 
-3. **Peak shows potential**: The peak ratio of 50.45:1 (at iteration 869) is substantially better, suggesting that at certain points in training, the agent does balance grasping and path-following better, but this improvement did not sustain to the end.
-
-4. **No negative values**: All metrics remain non-negative throughout (stillness_penalty is legitimately negative). No reward computation bugs detected.
+1. **Not a reward-balance problem alone — a grasp-quality problem.** The
+   antipodal check being satisfied only ~0.06% as often as the magnitude
+   check suggests the *policy itself* has not learned to form geometrically
+   valid grasps, independent of reward weighting.
+2. **The -0.85 threshold was miscalibrated** relative to this scene's own
+   physics (should be -0.7071 for mu=1.0) — this alone could substantially
+   change the achievement rate once corrected.
+3. **No reward computation bugs**: all metrics non-negative as expected
+   (stillness_penalty correctly negative), confirming the mechanism itself
+   works correctly — the issue is the threshold calibration and/or a real
+   grasp-quality gap in the policy, not a bug in the antipodal math.
 
 ## Next Steps
 
-This run provides baseline behavior for the antipodal grasp bonus. The modest improvement in the ratio (118:1 → 107:1) indicates:
-- The grasp detection logic is working (antipodal_grasp_bonus is being awarded)
-- The fundamental imbalance persists (grasp still heavily dominates over path-following)
+Correcting `antipodal_cos_threshold` to -0.7071 (physically derived from
+this scene's `mu=1.0`, not a guess) and re-testing, bundled with two
+other concrete differences found against Isaac Lab's own proven Franka
+lift-task recipe (action scale, solver iteration counts) — see
+ROADMAP.md and the next experiment's design.
 
-**Note**: Success/failure judgment on object lift behavior requires real evaluation video evidence, not training metrics alone. This report records the training run data only.
+**Note**: Success/failure judgment on object lift behavior requires real
+evaluation video evidence, not training metrics alone. This report
+records the training run data only.

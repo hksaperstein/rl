@@ -82,7 +82,24 @@ repo specifically.
 
 ## Workflow
 
-Brainstorm → spec (`docs/superpowers/specs/`) → plan
+**Every experiment must obey the scientific method: an explicit,
+falsifiable hypothesis, preceded by background research that concretely
+supports both the hypothesis and the chosen methodology.** This is a hard
+gate before spec-writing, not an aspiration — "this seems like a
+reasonable mechanism" from first-principles reasoning alone is not
+sufficient grounding for a new experiment, even when the direction is
+otherwise well-motivated by this repo's own prior results. The research
+step follows this repo's existing research conventions (Principal does it
+directly — Google Scholar/arXiv, real papers, verified citations, not a
+skill-level recall) and the spec document itself must record the
+hypothesis and cite the research that supports it, not just describe the
+mechanism. This applies even to experiments whose reward/methodology
+changes are directly requested by the user — "the user asked for X" is not
+itself the background research; ground X in the literature or in this
+project's own prior verified evidence before designing the exact
+implementation.
+
+Then: Brainstorm → spec (`docs/superpowers/specs/`) → plan
 (`docs/superpowers/plans/`) → execute via
 `superpowers:subagent-driven-development` (controller=Principal,
 implementer=Junior, reviewer=Senior) → `.superpowers/sdd/progress.md` ledger.

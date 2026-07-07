@@ -47,6 +47,12 @@ parser.add_argument(
     default=False,
     help="Evaluate the residual-action scene (see scripts/train.py --residual) instead of the four-object scene.",
 )
+parser.add_argument(
+    "--reachskip",
+    action="store_true",
+    default=False,
+    help="Evaluate the reach-skip curriculum scene (see scripts/train.py --reachskip) instead of the four-object scene.",
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 args_cli.enable_cameras = True  # required for video recording
@@ -79,6 +85,7 @@ from tasks.ar4.agents.rsl_rl_ppo_cfg import Ar4PickPlacePPORunnerCfg  # noqa: E4
 from tasks.ar4.pickplace_env_cfg import GROUND_Z, Ar4PickPlaceEnvCfg, Ar4PickPlacePerceptionEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_ik_guided_env_cfg import Ar4PickPlaceIkGuidedEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_mirror_env_cfg import Ar4PickPlaceMirrorEnvCfg  # noqa: E402
+from tasks.ar4.pickplace_reachskip_env_cfg import Ar4PickPlaceReachskipEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_residual_env_cfg import Ar4PickPlaceResidualEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_taskspace_env_cfg import (  # noqa: E402
     Ar4PickPlaceTaskspaceEnvCfg,
@@ -89,7 +96,9 @@ VIDEO_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file_
 
 
 def main() -> None:
-    if args_cli.residual:
+    if args_cli.reachskip:
+        env_cfg_cls = Ar4PickPlaceReachskipEnvCfg
+    elif args_cli.residual:
         env_cfg_cls = Ar4PickPlaceResidualEnvCfg
     elif args_cli.taskspace:
         env_cfg_cls = Ar4PickPlaceTaskspaceEnvCfg
@@ -105,7 +114,7 @@ def main() -> None:
     env_cfg.scene.num_envs = 1
     env_cfg.sim.device = args_cli.device
 
-    if args_cli.taskspace or args_cli.residual:
+    if args_cli.taskspace or args_cli.residual or args_cli.reachskip:
         agent_cfg = Ar4PickPlaceTaskspacePPORunnerCfg()
     else:
         agent_cfg = Ar4PickPlacePPORunnerCfg()
@@ -126,7 +135,9 @@ def main() -> None:
         # advances and silently merges every episode into one video. 250 = one episode's
         # worth of steps (episode_length_s=5.0 / step_dt=decimation*sim.dt=2*0.01=0.02s),
         # from Ar4PickPlaceEnvCfg - update this if that config changes.
-        if args_cli.residual:
+        if args_cli.reachskip:
+            name_prefix = "ar4_pickplace_reachskip"
+        elif args_cli.residual:
             name_prefix = "ar4_pickplace_residual"
         elif args_cli.taskspace:
             name_prefix = "ar4_pickplace_taskspace"

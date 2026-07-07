@@ -755,6 +755,57 @@ follow-ups below.
          task). Eval/video inspection skipped for this checkpoint since
          the TensorBoard evidence already conclusively shows the same
          failure mode without needing to re-confirm via video.
+     - **Experiment 9 result: reward dominance completely reversed
+       (118:1 grasp-dominant -> ~107:1 path-dominant), not a modest
+       improvement — and the reason is itself informative.** The
+       antipodal geometric check fires ~1800x less often than the old
+       magnitude-only check did, far more than the 6.67x weight
+       reduction (20->3) explains. Root-caused: `antipodal_cos_threshold
+       =-0.85` (~31.8° allowed deviation from perfect opposition) was an
+       approximate guess, stricter than this scene's actual physics
+       permits — the classical friction-cone half-angle for this
+       scene's `mu=1.0` (`static_friction=dynamic_friction=1.0`,
+       scene-wide) is `arctan(1.0)=45°`, giving a correct threshold of
+       `-0.7071`, not `-0.85`. That the physically-correct check almost
+       never fires while the magnitude-only check fired constantly is
+       itself strong confirmation of the classical-manipulation
+       research finding: the grasps the policy learned under the old
+       reward were not real force-closure grasps, just coincidentally
+       hard bilateral contact from non-opposing directions.
+     - **User-directed: systematically reassess all conditions/
+       parameters, not just the reward function.** Directly compared
+       this repo's full PPO config, action space, and object physics
+       against Isaac Lab's own shipped, proven Franka cube-lift recipe
+       (`isaaclab_tasks/manager_based/manipulation/lift/config/franka/`).
+       Findings: (1) PPO hyperparameters and network architecture
+       already match exactly (already adapted from this same recipe,
+       confirmed byte-for-byte) — not the gap; (2) actuator PD gains
+       already tested this session (falsified, no effect) — not
+       re-opening that axis without new evidence; (3) **action scale**:
+       this repo uses `scale=1.0` for arm joint position actions vs.
+       Franka's `scale=0.5` — double the joint-position change per unit
+       of policy output, which may specifically hurt the precise final
+       grasp-closing phase; (4) **cube solver iteration counts**:
+       Franka's own cube explicitly boosts
+       `solver_position_iteration_count=16,
+       solver_velocity_iteration_count=1` (well above PhysX defaults)
+       for stable contact resolution during grasping — this repo's cube
+       used only defaults.
+     - **Experiment 10 (in progress): bundle the physics-derived
+       antipodal-threshold correction with the action-scale and
+       solver-iteration findings.** `antipodal_cos_threshold` corrected
+       to `-0.7071`; new `ActionsCfg` (`scale=0.5`) scoped to
+       `pickplace_mirror_env_cfg.py`/`pickplace_ik_guided_env_cfg.py`
+       only (`env_cfg.py`'s shared `ActionsCfg`, scale=1.0, stays
+       unchanged — still used by the original sphere task,
+       `grasp_demo.py`, `interactive_demo.py`, perception scripts); cube
+       solver iteration counts boosted to match Franka's recipe, scoped
+       via `.replace()` on `CUBE_CFG`'s `spawn`, not touching the shared
+       `objects_cfg.py`. This is the ninth real attempt on this
+       sub-problem's reward/optimization/physics axis, now grounded in
+       both literature research and a direct, systematic comparison
+       against a proven working reference implementation rather than a
+       reward-only guess.
 2. Shape classifier misclassifies cube/rectangular-prism as "sphere" against
    real depth data. Root-caused: `PLANARITY_RESIDUAL_THRESHOLD` (tuned on
    near-noiseless synthetic data) doesn't generalize to real sensor noise.

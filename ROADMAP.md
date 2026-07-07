@@ -1463,6 +1463,130 @@ follow-ups below.
          preserving the design principle that grasp itself earns no direct
          reward. Per this repo's scientific-method requirement, this
          becomes its own hypothesis-driven experiment, not a quick patch.
+     - **Experiment 17: gate `lifting_object`/`object_goal_tracking` on
+       genuine bilateral antipodal jaw contact (reusing
+       `antipodal_grasp_bonus`), fixing Experiment 16's confirmed
+       wedging exploit — the gate works exactly as designed, but the
+       policy never discovers genuine grasp+lift at all within this
+       training budget. A real, informative exploration-difficulty
+       result, not a bug, not a regression to hide.** Hypothesis, grounded
+       in Experiment 16's own confirmed root cause plus Xu et al. 2026
+       ("Stage-Transition Dense Reward Modeling," arXiv:2606.31377, read
+       directly from source — their "stage leakage" term names exactly
+       this failure class, and their ablation shows removing a grasp-
+       verification gate hurts convergence): requiring real force-closure
+       contact before the lift/goal-tracking reward can fire should close
+       the exploit. New `Ar4PickPlaceGraspGatedEnvCfg`
+       (`tasks/ar4/pickplace_graspgated_env_cfg.py`), identical to
+       Experiment 16 except `lifting_object` and `object_goal_tracking`/
+       `object_goal_tracking_fine_grained` now require
+       `antipodal_grasp_bonus`'s existing force-closure check (both jaws
+       exceed `force_threshold=0.05`, force directions within
+       `antipodal_cos_threshold=-0.7071`) in addition to height, at
+       identical weights to Experiment 16 — isolating the gate as the
+       only new variable. Design spec:
+       `docs/superpowers/specs/2026-07-07-ar4-experiment17-grasp-gated-lift-design.md`.
+       Full run data:
+       `docs/superpowers/plans/2026-07-07-ar4-experiment17-report.md`.
+       - **Both formal training-stability gates passed cleanly** — 300-
+         iteration diagnostic and full 1500-iteration run both showed
+         `Loss/value_function` small and bounded throughout (full-run max
+         0.0547, roughly two orders of magnitude below Experiment 16's
+         curriculum-driven peak of 4.588) — directly explained by the
+         gate's own headline finding below: with the reward-composition
+         discontinuity that drove Experiment 16's value-loss spike never
+         occurring (the gate never fires), there's no corresponding
+         instability source either.
+       - **The grasp-gate never fired once across the entire 1500-
+         iteration training run — not "rarely," exactly zero.**
+         `Episode_Reward/lifting_object` and `Episode_Reward/
+         object_goal_tracking` are `0.0` at all 1500/1500 logged
+         iterations (`nonzero: 0/1500` for both), versus Experiment 16's
+         `lifting_object` already 81.3% nonzero by the equivalent
+         150-iteration mark and saturated to 100% shortly after — a
+         difference in kind, not degree. `cube_reached_goal`'s final
+         value (0.002360) is correspondingly the lowest of any experiment
+         since Experiment 11, reported factually and not treated as an
+         independent verdict per this project's established correction
+         protocol.
+       - **A dedicated instrumented investigation (not video, not scalars
+         alone — this experiment's entire purpose was fixing exactly this
+         kind of verification gap) reproduced the gate's sub-conditions
+         separately across ~1,487 rollout steps (~5.9 episodes) of the
+         final checkpoint, and gives a decisive, three-way-disambiguated
+         answer for *why* the gate never fired.** `height_ok` (cube
+         z > 0.03) was true **0 times** in 1,487 steps — the cube's
+         maximum observed height (0.00901) is indistinguishable from its
+         0.009 resting/spawn height. The compound "genuinely grasp AND
+         lift simultaneously" event this gate requires does not merely
+         go mis-gated — it does not occur at all, at any height, by any
+         mechanism, exploit or otherwise. This directly confirms
+         **exploration difficulty, not a gate bug, as the dominant
+         explanation**: a threshold-miscalibration hypothesis was
+         directly refuted (when contact did occur, forces reached 7-20N,
+         150-400x above the 0.05N threshold — magnitude was never the
+         limiting factor), while a real, independently-confirmed asset
+         defect was found as a contributing factor: `gripper_jaw1_joint`
+         tracked its commanded `[0, 0.014]` envelope exactly throughout,
+         while `gripper_jaw2_joint` independently drifted to 0.0168 (20%
+         past its own commanded open limit) under contact load — direct,
+         concrete confirmation that the two jaws are not mechanically
+         coupled (the `mimic` joint constraint flagged as suspect in
+         Experiment 16's correction is confirmed unenforced by the USD
+         import, not just suspected).
+       - **The one real contact event observed (episode 0, 230
+         consecutive steps) is the gate working exactly as intended, not
+         a near-miss the gate wrongly rejected.** The arm drove its
+         already-open gripper directly into the cube, producing a static,
+         non-antipodal wedge/jam (13-20N on jaw1, 7-10N on jaw2, cosine
+         angle frozen at exactly -0.6409/~130° for all 230 steps, versus
+         the required <-0.7071/~135° — five degrees short, never varying).
+         Neither jaw moved toward closed during this window; `cube_z`
+         never rose. This is structurally the same failure family as
+         Experiment 16's wedging exploit, just registering on the jaw
+         sensors directly instead of the wrist — and the antipodal gate
+         correctly refused to credit it for all 230 steps. A separate
+         episode showed the gripper *can* fully close (both joints reach
+         their closed position) — but never within 5.9cm of the cube,
+         confirming the policy has not learned to combine "get close" and
+         "close the gripper around the object" into one coordinated
+         behavior at all, not that it's close and slightly misaligned.
+       - **Net assessment: the fix worked exactly as designed (the
+         exploit is closed, confirmed by the one contact event it
+         correctly rejected), but closing it removed the only reward
+         gradient the policy had ever found, and the compound behavior
+         needed to replace it has not been discovered from scratch in
+         1500 iterations.** This is the direct, structural cost of
+         closing a reward-hacking exploit without providing a new path
+         toward the real behavior it was standing in for — well
+         precedented (Xu et al.'s own ablation shows the same tradeoff
+         in their setting) but now measured concretely in this repo.
+         Recommended next step, discussed and substantially co-designed
+         with the user in this session: add a **dense** shaping signal
+         toward correct pre-grasp positioning — cube proximity to the
+         end-effector/pinch-point frame specifically (this repo's
+         existing `ee_frame`, already offset to the gripper's pinch
+         point via `_EE_OFFSET`, already used by `reaching_object`) —
+         so the policy has *some* gradient pointing it toward "get near
+         the gripper and close around the object," rather than the
+         current all-or-nothing binary gate with zero partial credit.
+         The user's own refinement — checking whether the cube's
+         position *tracks the end-effector's motion* (rigid co-movement
+         with the EE specifically, not just proximity at one instant) —
+         is a stronger, more targeted version of this: it's precisely
+         the test that would have caught Experiment 16's exploit
+         directly, since the wedged cube's distance to the wrist stayed
+         constant because it was rigidly pinned to *that* body, not the
+         EE. Separately, the confirmed mimic-joint asset defect is worth
+         its own investigation (does Isaac Lab support enforcing URDF
+         `mimic` joints, and if not, can the gripper action term command
+         both jaws' targets symmetrically as a workaround) — a genuine,
+         independent asset-fidelity fix, not just a reward-design
+         question. Per this repo's scientific-method requirement, the
+         next experiment needs its own hypothesis and background
+         research (e.g. on dense sub-goal/shaping-toward-precondition
+         techniques in sparse-grasp RL) before a new spec — not a quick
+         patch on this one.
 2. Shape classifier misclassifies cube/rectangular-prism as "sphere" against
    real depth data. Root-caused: `PLANARITY_RESIDUAL_THRESHOLD` (tuned on
    near-noiseless synthetic data) doesn't generalize to real sensor noise.

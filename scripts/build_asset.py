@@ -141,52 +141,6 @@ def _generate_wedge_usd(out_path: str, radius: float = 0.011, height: float = 0.
     stage.GetRootLayer().Save()
 
 
-def _apply_gripper_mimic_joint(usd_path: str) -> None:
-    """Author a PhysxMimicJointAPI on gripper_jaw2_joint, referencing
-    gripper_jaw1_joint, so the two prismatic jaw joints move as one
-    physically-coupled unit (gearing=1, offset=0) - matching the source
-    URDF's <mimic joint="gripper_jaw1_joint" multiplier="1" offset="0"/>
-    on gripper_jaw2_joint (ar_gripper_macro.xacro:89), which the URDF
-    importer's parse_mimic=True flag does not reliably reproduce (confirmed
-    empirically: Experiment 17's Task 6 diagnostic found gripper_jaw2_joint
-    drifting 20% past its own commanded position under contact load, while
-    gripper_jaw1_joint tracked exactly).
-
-    Applied as a stage-editing post-process on the already-written USD
-    (rather than relying further on the importer's own mimic handling,
-    the exact mechanism under suspicion). Idempotent: safe to call on a
-    USD that already has this API applied (replaces rather than
-    duplicates it), so re-running build_asset.py repeatedly is safe.
-    """
-    from pxr import PhysxSchema, Usd, UsdPhysics
-
-    stage = Usd.Stage.Open(usd_path)
-    jaw1_prim = None
-    jaw2_prim = None
-    for prim in stage.Traverse():
-        if prim.GetName() == "gripper_jaw1_joint":
-            jaw1_prim = prim
-        elif prim.GetName() == "gripper_jaw2_joint":
-            jaw2_prim = prim
-    if jaw1_prim is None or jaw2_prim is None:
-        sys.exit(
-            f"Could not find gripper_jaw1_joint/gripper_jaw2_joint prims in {usd_path} "
-            f"(found jaw1={jaw1_prim}, jaw2={jaw2_prim}) - URDF joint naming may have changed."
-        )
-
-    if jaw2_prim.HasAPI(PhysxSchema.PhysxMimicJointAPI, "rotX"):
-        jaw2_prim.RemoveAPI(PhysxSchema.PhysxMimicJointAPI, "rotX")
-
-    mimic_api = PhysxSchema.PhysxMimicJointAPI.Apply(jaw2_prim, UsdPhysics.Tokens.rotX)
-    mimic_api.GetReferenceJointRel().AddTarget(jaw1_prim.GetPath())
-    mimic_api.GetReferenceJointAxisAttr().Set(UsdPhysics.Tokens.rotX)
-    mimic_api.GetGearingAttr().Set(1.0)
-    mimic_api.GetOffsetAttr().Set(0.0)
-
-    stage.GetRootLayer().Save()
-    print(f"Applied PhysxMimicJointAPI to gripper_jaw2_joint (reference: gripper_jaw1_joint) in {usd_path}")
-
-
 def main() -> None:
     description_path = _resolve_description_path()
 
@@ -246,8 +200,6 @@ def main() -> None:
             f.write(output_usd)
 
         print(f"AR4 mk5 USD asset written to: {output_usd}")
-
-        _apply_gripper_mimic_joint(output_usd)
 
         _generate_wedge_usd(WEDGE_USD_PATH)
         print(f"Wedge (triangular prism) USD asset written to: {WEDGE_USD_PATH}")

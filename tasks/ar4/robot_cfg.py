@@ -65,16 +65,8 @@ AR4_MK5_CFG = ArticulationCfg(
             damping=4.0,
             armature=1e-3,
         ),
-        "gripper_jaw1": ImplicitActuatorCfg(
-            joint_names_expr=["gripper_jaw1_joint"],
-            effort_limit_sim=20.0,
-            velocity_limit_sim=1.0,
-            stiffness=1000.0,
-            damping=50.0,
-            armature=1e-3,
-        ),
-        "gripper_jaw2": ImplicitActuatorCfg(
-            joint_names_expr=["gripper_jaw2_joint"],
+        "gripper": ImplicitActuatorCfg(
+            joint_names_expr=["gripper_jaw[12]_joint"],
             effort_limit_sim=20.0,
             velocity_limit_sim=1.0,
             stiffness=1000.0,

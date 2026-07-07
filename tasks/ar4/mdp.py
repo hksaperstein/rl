@@ -14,7 +14,10 @@ import torch
 
 from isaaclab.controllers import DifferentialIKController, DifferentialIKControllerCfg
 from isaaclab.managers import SceneEntityCfg
+from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
 from isaaclab.utils.math import combine_frame_transforms, quat_apply, sample_uniform, subtract_frame_transforms
+
+import isaaclab.sim as sim_utils
 
 if TYPE_CHECKING:
     from isaaclab.assets import Articulation, RigidObject
@@ -176,6 +179,29 @@ def set_mirrored_goal(
     if not hasattr(env, "_target_pos_w"):
         env._target_pos_w = torch.zeros(env.num_envs, 3, device=env.device)
 
+    if not hasattr(env, "_goal_marker"):
+        # Lazily construct once (same convention as ik_guided_path_bonus's
+        # env._ik_controller): a single VisualizationMarkers instance is a
+        # UsdGeom.PointInstancer that manages one marker per env itself, so
+        # prim_path is a plain path, not {ENV_REGEX_NS}-templated. The
+        # marker's own _process_prototype_prim sets
+        # primvars:invisibleToSecondaryRays=True on its geometry, which is
+        # Isaac Lab's built-in mechanism for keeping a marker out of camera
+        # sensor render products (e.g. this repo's perception pipeline)
+        # while still showing it in the interactive viewport and in
+        # RecordVideo/eval clips.
+        marker_cfg = VisualizationMarkersCfg(
+            prim_path="/Visuals/dropZoneMarker",
+            markers={
+                "goal": sim_utils.CylinderCfg(
+                    radius=0.03,
+                    height=0.002,
+                    visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.2, 0.9, 0.3)),
+                ),
+            },
+        )
+        env._goal_marker = VisualizationMarkers(marker_cfg)
+
     origins = env.scene.env_origins[env_ids]
     object_local_x = object.data.root_pos_w[env_ids, 0] - origins[:, 0]
 
@@ -187,6 +213,12 @@ def set_mirrored_goal(
     env._target_pos_w[env_ids, 0] = origins[:, 0] + goal_local_x
     env._target_pos_w[env_ids, 1] = origins[:, 1] + goal_local_y
     env._target_pos_w[env_ids, 2] = origins[:, 2] + goal_local_z
+
+    # Pass the FULL (num_envs, 3) buffer every call, not just env_ids' rows -
+    # VisualizationMarkers.visualize() updates ALL marker instances from
+    # whatever is passed to it, and env._target_pos_w already persists the
+    # correct full-array state across resets.
+    env._goal_marker.visualize(translations=env._target_pos_w)
 
 
 def mirrored_target_position_in_robot_root_frame(

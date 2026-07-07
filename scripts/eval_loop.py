@@ -35,6 +35,12 @@ parser.add_argument(
     default=False,
     help="Evaluate the classical-IK-guided scene (see scripts/train.py --ik_guided) instead of the four-object scene.",
 )
+parser.add_argument(
+    "--taskspace",
+    action="store_true",
+    default=False,
+    help="Evaluate the task-space IK-driven-action scene (see scripts/train.py --taskspace) instead of the four-object scene.",
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 args_cli.enable_cameras = True  # required for video recording
@@ -67,12 +73,15 @@ from tasks.ar4.agents.rsl_rl_ppo_cfg import Ar4PickPlacePPORunnerCfg  # noqa: E4
 from tasks.ar4.pickplace_env_cfg import GROUND_Z, Ar4PickPlaceEnvCfg, Ar4PickPlacePerceptionEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_ik_guided_env_cfg import Ar4PickPlaceIkGuidedEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_mirror_env_cfg import Ar4PickPlaceMirrorEnvCfg  # noqa: E402
+from tasks.ar4.pickplace_taskspace_env_cfg import Ar4PickPlaceTaskspaceEnvCfg  # noqa: E402
 
 VIDEO_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs", "videos")
 
 
 def main() -> None:
-    if args_cli.ik_guided:
+    if args_cli.taskspace:
+        env_cfg_cls = Ar4PickPlaceTaskspaceEnvCfg
+    elif args_cli.ik_guided:
         env_cfg_cls = Ar4PickPlaceIkGuidedEnvCfg
     elif args_cli.mirror:
         env_cfg_cls = Ar4PickPlaceMirrorEnvCfg
@@ -102,7 +111,9 @@ def main() -> None:
         # advances and silently merges every episode into one video. 250 = one episode's
         # worth of steps (episode_length_s=5.0 / step_dt=decimation*sim.dt=2*0.01=0.02s),
         # from Ar4PickPlaceEnvCfg - update this if that config changes.
-        if args_cli.ik_guided:
+        if args_cli.taskspace:
+            name_prefix = "ar4_pickplace_taskspace"
+        elif args_cli.ik_guided:
             name_prefix = "ar4_pickplace_ik_guided"
         elif args_cli.mirror:
             name_prefix = "ar4_pickplace_mirror"

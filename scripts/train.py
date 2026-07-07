@@ -57,6 +57,17 @@ parser.add_argument(
         "docs/superpowers/specs/2026-07-06-ar4-ik-guided-path-design.md."
     ),
 )
+parser.add_argument(
+    "--taskspace",
+    action="store_true",
+    default=False,
+    help=(
+        "Train on the task-space IK-driven-action variant of the mirror-goal scene: the arm's action "
+        "is a Cartesian end-effector delta converted to joint targets by a live differential-IK "
+        "controller in the control loop, instead of direct joint-position deltas. See "
+        "docs/superpowers/specs/2026-07-06-ar4-taskspace-ik-action-design.md."
+    ),
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
@@ -90,12 +101,15 @@ from tasks.ar4.pickplace_env_cfg import GROUND_Z, Ar4PickPlaceEnvCfg  # noqa: E4
 from tasks.ar4.pickplace_ik_guided_env_cfg import Ar4PickPlaceIkGuidedEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_mirror_env_cfg import Ar4PickPlaceMirrorEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_single_object_env_cfg import Ar4PickPlaceSingleObjectEnvCfg  # noqa: E402
+from tasks.ar4.pickplace_taskspace_env_cfg import Ar4PickPlaceTaskspaceEnvCfg  # noqa: E402
 
 LOG_ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs", "train")
 
 
 def main() -> None:
-    if args_cli.ik_guided:
+    if args_cli.taskspace:
+        env_cfg_cls = Ar4PickPlaceTaskspaceEnvCfg
+    elif args_cli.ik_guided:
         env_cfg_cls = Ar4PickPlaceIkGuidedEnvCfg
     elif args_cli.mirror:
         env_cfg_cls = Ar4PickPlaceMirrorEnvCfg

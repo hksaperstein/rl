@@ -594,3 +594,59 @@ def antipodal_grasp_bonus(
     antipodal_ok = cos_angle < antipodal_cos_threshold
 
     return (both_magnitude_ok & antipodal_ok).float()
+
+
+def path_proximity_bonus(
+    env: ManagerBasedRLEnv,
+    ee_frame_cfg: SceneEntityCfg,
+    proximity_std: float,
+    advance_tolerance: float,
+) -> torch.Tensor:
+    """Undiscounted running-max bonus (same corrected pattern as
+    staged_milestone_bonus/ik_guided_path_bonus - see those functions'
+    docstrings for the decay bug this avoids) for Cartesian proximity to
+    the current path waypoint (env._path_waypoints_w[:, env._path_waypoint_idx]),
+    weighted so later waypoints dominate.
+
+    Unlike ik_guided_path_bonus, this drops the IK-action-matching
+    sub-signal entirely: this task's arm action is driven by a live
+    DifferentialInverseKinematicsAction (see pickplace_taskspace_env_cfg.py's
+    ActionsCfg), so the arm tracks IK's suggestion by construction -
+    scoring "does the joint configuration match what IK suggests" would
+    be close to tautological here. See
+    docs/superpowers/specs/2026-07-06-ar4-taskspace-ik-action-design.md.
+
+    The waypoint index itself advances (monotonically, capped at 4)
+    whenever the end-effector comes within advance_tolerance of the
+    current waypoint - identical mechanism to ik_guided_path_bonus.
+    Reuses env._ik_milestone_max (initialized/reset by
+    compute_path_waypoints, unchanged) as its running-max buffer rather
+    than introducing a new one, since compute_path_waypoints already
+    owns that buffer's lazy-init and per-episode reset.
+    """
+    ee_frame: FrameTransformer = env.scene[ee_frame_cfg.name]
+
+    if not hasattr(env, "_path_waypoints_w"):
+        env._path_waypoints_w = torch.zeros(env.num_envs, 5, 3, device=env.device)
+        env._path_waypoint_idx = torch.zeros(env.num_envs, dtype=torch.long, device=env.device)
+        env._ik_milestone_max = torch.zeros(env.num_envs, device=env.device)
+
+    current_waypoint = torch.gather(
+        env._path_waypoints_w, 1, env._path_waypoint_idx.view(-1, 1, 1).expand(-1, 1, 3)
+    ).squeeze(1)
+
+    ee_pos_w = ee_frame.data.target_pos_w[:, 0, :]
+    dist_to_waypoint = torch.norm(ee_pos_w - current_waypoint, dim=-1)
+
+    reached = dist_to_waypoint < advance_tolerance
+    env._path_waypoint_idx = torch.where(
+        reached & (env._path_waypoint_idx < 4), env._path_waypoint_idx + 1, env._path_waypoint_idx
+    )
+
+    proximity_term = (1.0 - torch.tanh(dist_to_waypoint / proximity_std)) * (
+        env._path_waypoint_idx.float() + 1.0
+    ) / 5.0
+
+    prev = env._ik_milestone_max.clone()
+    env._ik_milestone_max = torch.maximum(env._ik_milestone_max, proximity_term)
+    return env._ik_milestone_max - prev

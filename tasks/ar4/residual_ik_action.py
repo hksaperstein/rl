@@ -19,6 +19,7 @@ import torch
 import isaaclab.envs.mdp as isaaclab_mdp
 from isaaclab.envs.mdp.actions.task_space_actions import DifferentialInverseKinematicsAction
 from isaaclab.managers import ActionTerm
+from isaaclab.utils.configclass import configclass
 from isaaclab.utils.math import subtract_frame_transforms
 
 _BASE_MAX_STEP = 0.05
@@ -72,6 +73,7 @@ class ResidualDifferentialIKAction(DifferentialInverseKinematicsAction):
         return direction / (dist + 1e-8) * step
 
 
+@configclass
 class ResidualDifferentialIKActionCfg(isaaclab_mdp.DifferentialInverseKinematicsActionCfg):
     """Same fields as DifferentialInverseKinematicsActionCfg - only
     class_type differs, pointing to ResidualDifferentialIKAction instead of

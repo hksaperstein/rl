@@ -8,6 +8,18 @@ this means multiple manipulation tasks, multiple objects, multiple robot
 arms, and eventually mobility, all sharing the same research approach and
 infrastructure patterns.
 
+**The bar for "generalizes" is high: drop in a new arm, or a new task, and
+training should succeed immediately, without arm-specific or task-specific
+retuning.** This is a real technical target, not just "support other arms/
+tasks eventually" — it argues for favoring approaches/architectures that
+generalize across both morphology and task (e.g. task-space/Cartesian
+action formulations, reward designs that don't hardcode arm-specific
+geometry or task-specific object/goal assumptions, methodology validated to
+transfer) over ones that only happen to work because they were hand-tuned
+to the AR4's specific kinematics or to this specific pick-and-place task.
+Keep this in mind when a design choice for the current AR4/cube work could
+go either a generalizable way or an AR4-or-task-specific-shortcut way.
+
 **Scope discipline: one thing at a time, in sequence, not in parallel.**
 Current focus is narrow and explicit: one AR4 arm, one cube, pick it up and
 move it to a goal location. Multi-object and multi-arm generalization are

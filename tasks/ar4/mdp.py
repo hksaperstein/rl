@@ -736,3 +736,30 @@ def reset_arm_to_pregrasp_pose(
     robot.set_joint_position_target(
         joint_pos_des, joint_ids=env._reachskip_robot_entity_cfg.joint_ids, env_ids=env_ids
     )
+
+
+def base_proximity_penalty(
+    env: ManagerBasedRLEnv,
+    object_cfg: SceneEntityCfg,
+    robot_cfg: SceneEntityCfg,
+    base_xy_threshold: float,
+) -> torch.Tensor:
+    """Penalty for the cube being horizontally close to the robot's own
+    base, independent of height - unlike ground_penalty (z-height only,
+    fires for any low cube position anywhere in the workspace), this
+    specifically targets the cube sitting at or sliding into the base
+    column, a distinct failure mode from "not yet lifted." Direct user
+    request (2026-07-07): "negative reward for the cube contacting the
+    base of the robot" - explicitly requested as a new function, separate
+    from ground_penalty. x/y distance only (not z): a cube directly above
+    the base at carry height should not be penalized by this term, only
+    one sitting/sliding into the base footprint itself. See
+    docs/superpowers/specs/2026-07-07-ar4-experiment15-reward-shaping-design.md.
+    """
+    object: RigidObject = env.scene[object_cfg.name]
+    robot: RigidObject = env.scene[robot_cfg.name]
+    object_xy = object.data.root_pos_w[:, :2]
+    robot_xy = robot.data.root_pos_w[:, :2]
+    xy_dist = torch.norm(object_xy - robot_xy, dim=-1)
+    too_close = xy_dist < base_xy_threshold
+    return -too_close.float()

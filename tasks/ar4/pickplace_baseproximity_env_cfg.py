@@ -228,7 +228,7 @@ class RewardsCfg:
         weight=0.1,
         params={
             "object_cfg": SceneEntityCfg("cube"),
-            "ground_height_threshold": 0.015,
+            "ground_height_threshold": 0.01,
         },
     )
 

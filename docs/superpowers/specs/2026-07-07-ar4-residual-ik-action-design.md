@@ -137,9 +137,14 @@ today; only the *Cartesian delta fed into it* changes from "raw policy
 output only" to "base pursuit step + raw policy output."
 
 `ResidualDifferentialIKActionCfg` subclasses
-`isaaclab_mdp.DifferentialInverseKinematicsActionCfg` with
+`isaaclab_mdp.DifferentialInverseKinematicsActionCfg`, **must be
+re-decorated with `@configclass`** (not inherited implicitly — `configclass`
+wraps `dataclasses.dataclass`, which regenerates `__init__` with fresh
+field defaults at decoration time; skipping the re-decoration silently
+keeps the parent's original `class_type` default with no exception, caught
+by Task 1's review during implementation), with
 `class_type: type[ActionTerm] = ResidualDifferentialIKAction` as its only
-override — same fields otherwise (`asset_name`, `joint_names`,
+field override — same fields otherwise (`asset_name`, `joint_names`,
 `body_name`, `body_offset`, `scale=0.05`, `controller` with
 `use_relative_mode=True`, `ik_method="dls"`), all copied verbatim from
 `pickplace_taskspace_env_cfg.py`'s `ActionsCfg`.

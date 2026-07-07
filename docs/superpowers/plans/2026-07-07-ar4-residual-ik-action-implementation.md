@@ -56,6 +56,7 @@ import torch
 import isaaclab.envs.mdp as isaaclab_mdp
 from isaaclab.envs.mdp.actions.task_space_actions import DifferentialInverseKinematicsAction
 from isaaclab.managers import ActionTerm
+from isaaclab.utils.configclass import configclass
 from isaaclab.utils.math import subtract_frame_transforms
 
 _BASE_MAX_STEP = 0.05
@@ -109,10 +110,19 @@ class ResidualDifferentialIKAction(DifferentialInverseKinematicsAction):
         return direction / (dist + 1e-8) * step
 
 
+@configclass
 class ResidualDifferentialIKActionCfg(isaaclab_mdp.DifferentialInverseKinematicsActionCfg):
     """Same fields as DifferentialInverseKinematicsActionCfg - only
     class_type differs, pointing to ResidualDifferentialIKAction instead of
-    the base DifferentialInverseKinematicsAction."""
+    the base DifferentialInverseKinematicsAction. @configclass is REQUIRED
+    here (not optional/cosmetic): configclass wraps dataclasses.dataclass,
+    which regenerates __init__ with fresh field defaults at decoration
+    time - without re-decorating this subclass, the inherited __init__
+    would silently keep the PARENT's original class_type default
+    (DifferentialInverseKinematicsAction), not this override, with no
+    exception. Caught by Task 1's review (Experiment 13); every other
+    class_type-overriding *ActionCfg in Isaac Lab's own actions_cfg.py is
+    @configclass-decorated for exactly this reason."""
 
     class_type: type[ActionTerm] = ResidualDifferentialIKAction
 ```

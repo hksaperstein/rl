@@ -34,6 +34,7 @@ from isaaclab.utils.configclass import configclass
 from isaaclab_tasks.manager_based.manipulation.lift import mdp
 
 from . import mdp as ar4_mdp
+from .agents.rsl_rl_ppo_cfg import Ar4PickPlacePPORunnerCfg
 from .pickplace_env_cfg import _EE_OFFSET
 from .pickplace_mirror_env_cfg import Ar4PickPlaceMirrorSceneCfg
 from .robot_cfg import ARM_JOINT_NAMES, GRIPPER_CLOSED_POS, GRIPPER_JOINT_NAMES, GRIPPER_OPEN_POS
@@ -279,3 +280,23 @@ class Ar4PickPlaceTaskspaceEnvCfg(ManagerBasedRLEnvCfg):
         self.sim.physics_material = sim_utils.RigidBodyMaterialCfg(static_friction=1.0, dynamic_friction=1.0)
         self.viewer.eye = (1.5, 1.5, 1.2)
         self.viewer.lookat = (0.0, 0.0, 0.4)
+
+
+@configclass
+class Ar4PickPlaceTaskspacePPORunnerCfg(Ar4PickPlacePPORunnerCfg):
+    """Identical to Ar4PickPlacePPORunnerCfg except clip_actions=5.0 (~3.4x
+    the observed Mean action noise std of ~1.46), added specifically for the
+    task-space IK-driven action term after a real, confirmed critic
+    (Mean value_function loss) divergence starting at iteration 67/1500 of
+    the first full training run under this action space - never seen in any
+    joint-space experiment using the unmodified Ar4PickPlacePPORunnerCfg. An
+    outlier raw action, previously harmless under JointPositionActionCfg
+    (which just saturates at joint limits), can drive the new differential-
+    IK action term's solve into a discontinuous joint-space jump; bounding
+    the raw action before it reaches the IK controller is a standard,
+    minimal defensive measure (RSL_RL's own built-in clip_actions mechanism,
+    applied in RslRlVecEnvWrapper.step() before scale/IK). See
+    docs/superpowers/plans/2026-07-06-ar4-experiment11-report.md's
+    "Controller correction" section for the full trace."""
+
+    clip_actions: float = 5.0

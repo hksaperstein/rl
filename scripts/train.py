@@ -101,7 +101,10 @@ from tasks.ar4.pickplace_env_cfg import GROUND_Z, Ar4PickPlaceEnvCfg  # noqa: E4
 from tasks.ar4.pickplace_ik_guided_env_cfg import Ar4PickPlaceIkGuidedEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_mirror_env_cfg import Ar4PickPlaceMirrorEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_single_object_env_cfg import Ar4PickPlaceSingleObjectEnvCfg  # noqa: E402
-from tasks.ar4.pickplace_taskspace_env_cfg import Ar4PickPlaceTaskspaceEnvCfg  # noqa: E402
+from tasks.ar4.pickplace_taskspace_env_cfg import (  # noqa: E402
+    Ar4PickPlaceTaskspaceEnvCfg,
+    Ar4PickPlaceTaskspacePPORunnerCfg,
+)
 
 LOG_ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs", "train")
 
@@ -121,7 +124,10 @@ def main() -> None:
     env_cfg.scene.num_envs = args_cli.num_envs
     env_cfg.sim.device = args_cli.device
 
-    agent_cfg = Ar4PickPlacePPORunnerCfg()
+    if args_cli.taskspace:
+        agent_cfg = Ar4PickPlaceTaskspacePPORunnerCfg()
+    else:
+        agent_cfg = Ar4PickPlacePPORunnerCfg()
     agent_cfg.device = args_cli.device
     if args_cli.max_iterations is not None:
         agent_cfg.max_iterations = args_cli.max_iterations

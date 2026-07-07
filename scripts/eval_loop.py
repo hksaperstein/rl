@@ -73,7 +73,10 @@ from tasks.ar4.agents.rsl_rl_ppo_cfg import Ar4PickPlacePPORunnerCfg  # noqa: E4
 from tasks.ar4.pickplace_env_cfg import GROUND_Z, Ar4PickPlaceEnvCfg, Ar4PickPlacePerceptionEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_ik_guided_env_cfg import Ar4PickPlaceIkGuidedEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_mirror_env_cfg import Ar4PickPlaceMirrorEnvCfg  # noqa: E402
-from tasks.ar4.pickplace_taskspace_env_cfg import Ar4PickPlaceTaskspaceEnvCfg  # noqa: E402
+from tasks.ar4.pickplace_taskspace_env_cfg import (  # noqa: E402
+    Ar4PickPlaceTaskspaceEnvCfg,
+    Ar4PickPlaceTaskspacePPORunnerCfg,
+)
 
 VIDEO_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs", "videos")
 
@@ -93,7 +96,10 @@ def main() -> None:
     env_cfg.scene.num_envs = 1
     env_cfg.sim.device = args_cli.device
 
-    agent_cfg = Ar4PickPlacePPORunnerCfg()
+    if args_cli.taskspace:
+        agent_cfg = Ar4PickPlaceTaskspacePPORunnerCfg()
+    else:
+        agent_cfg = Ar4PickPlacePPORunnerCfg()
     agent_cfg.device = args_cli.device
 
     env = ManagerBasedRLEnv(cfg=env_cfg, render_mode="rgb_array")

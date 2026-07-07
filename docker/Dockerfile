@@ -34,8 +34,15 @@
 # instance images), push this image to a registry the instance can pull
 # from (Docker Hub, AWS ECR, GCP Artifact Registry) and run the same
 # command there. See docker/README.md for the full per-provider walkthrough.
+#
+# BASE_IMAGE defaults to the local tag (fast, no pull, for building on
+# this workstation where isaac-lab-base already exists locally) - CI
+# (GitHub-hosted runners have no GPU to build isaac-lab-base themselves)
+# overrides it to the pushed Docker Hub reference:
+# --build-arg BASE_IMAGE=hsaperstein/rl:isaac-lab-base
 
-FROM isaac-lab-base:latest
+ARG BASE_IMAGE=isaac-lab-base:latest
+FROM ${BASE_IMAGE}
 
 ENV DEBIAN_FRONTEND=noninteractive
 

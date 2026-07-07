@@ -116,17 +116,45 @@ docker run --rm -it --gpus all --network host \
     ./isaaclab.sh -p scripts/train.py --pregrasp --num_envs 4096 --headless
 ```
 
+## GPU compatibility (verified against Isaac Sim's own requirements docs)
+
+**Isaac Sim requires RT (ray-tracing) cores specifically, not just CUDA
+cores.** Confirmed directly from
+[Isaac Sim's requirements documentation](https://docs.isaacsim.omniverse.nvidia.com/5.1.0/installation/requirements.html):
+minimum GPU tier is RTX 4080-class, recommended RTX 5080-class, ideal
+RTX PRO 6000 Blackwell-class; minimum 16GB VRAM. **A100 and H100 are
+explicitly listed as NOT supported** — they're datacenter compute GPUs
+with no ray-tracing pipeline at all. This matters directly for cloud
+GPU selection: A100 instances (common on Lambda/RunPod/GCP, and often
+the cheapest-looking "big GPU" option) will not run Isaac Sim regardless
+of price.
+
+| GPU | Architecture | RT cores | VRAM | Isaac Sim viable? |
+|---|---|---|---|---|
+| GCP L4 | Ada Lovelace | yes | 24GB | yes — cheapest viable option, ~$0.70/hr |
+| RTX PRO 6000 (GCP) | Blackwell | yes | high | yes — NVIDIA's own "ideal" tier |
+| Lambda A10 | Ampere (RT-capable) | yes | 24GB | yes, ~$1.29/hr |
+| RunPod L40S | Ada Lovelace | yes | 48GB | yes, ~$0.86/hr |
+| A100 (any provider) | Ampere, datacenter | **no** | 40-80GB | **not supported** |
+| H100 (any provider) | Hopper, datacenter | **no** | 80GB | **not supported** |
+
+This workstation's own RTX 5070 Ti (confirmed already running Isaac Sim
+natively) is well above the minimum tier.
+
 ## Per-provider cloud account setup (manual — needs your own payment method/identity)
 
 - **GCP**: console.cloud.google.com → create project → enable Compute
-  Engine API → request GPU quota (often starts at 0) — IsaacAutomator
-  supports this directly.
+  Engine API → request GPU quota for an **L4 or RTX PRO 6000** instance
+  specifically (often starts at 0) — IsaacAutomator supports this
+  directly. Do not request A100 quota for this purpose.
 - **Lambda Labs**: cloud.lambdalabs.com → sign up → add payment method →
-  on-demand instances available immediately, no quota request typically
-  needed. (Not IsaacAutomator-supported — build the image manually on
-  the instance per the "cloud GPU deployment" section above.)
-- **RunPod**: runpod.io → sign up → add payment method → Community Cloud
-  pods available immediately. (Same manual-build note as Lambda.)
+  request an **A10** instance specifically, not A100 — on-demand
+  instances available immediately, no quota request typically needed.
+  (Not IsaacAutomator-supported — build the image manually on the
+  instance per the "cloud GPU deployment" section above.)
+- **RunPod**: runpod.io → sign up → add payment method → select an
+  **L40S** pod specifically, not A100 — Community Cloud pods available
+  immediately. (Same manual-build note as Lambda.)
 
 AWS deliberately out of scope (SageMaker's managed-training premium buys
 nothing this repo's single-researcher workflow needs, and plain EC2 was

@@ -82,27 +82,56 @@ repo specifically.
 
 ## Workflow
 
-**Every experiment must obey the scientific method: an explicit,
+Two tiers, by what kind of change is being made — not every change needs
+the same weight of process (2026-07-07 decision, reconciling scientific-
+method discipline with a deliberate pull toward Karpathy-`autoresearch`-
+style fast unattended loops — see `kb/wiki/concepts/` for a fuller writeup
+once one exists).
+
+**Tier 1 — structural experiments** (a new action space, a new curriculum/
+reset mechanism, a genuinely new reward *term*, anything changing what the
+policy can perceive/do/be scored on): full heavy process, unchanged.
+**Every such experiment must obey the scientific method: an explicit,
 falsifiable hypothesis, preceded by background research that concretely
 supports both the hypothesis and the chosen methodology.** This is a hard
 gate before spec-writing, not an aspiration — "this seems like a
 reasonable mechanism" from first-principles reasoning alone is not
-sufficient grounding for a new experiment, even when the direction is
-otherwise well-motivated by this repo's own prior results. The research
-step follows this repo's existing research conventions (Principal does it
-directly — Google Scholar/arXiv, real papers, verified citations, not a
-skill-level recall) and the spec document itself must record the
-hypothesis and cite the research that supports it, not just describe the
-mechanism. This applies even to experiments whose reward/methodology
-changes are directly requested by the user — "the user asked for X" is not
-itself the background research; ground X in the literature or in this
-project's own prior verified evidence before designing the exact
-implementation.
+sufficient grounding, even when the direction is otherwise well-motivated
+by this repo's own prior results. The research step follows this repo's
+existing research conventions (Principal does it directly — Google
+Scholar/arXiv, real papers, verified citations) and the spec document
+itself must record the hypothesis and cite the research that supports it.
+This applies even to experiments whose content is directly requested by
+the user — "the user asked for X" is not itself the background research;
+ground X in the literature or this project's own prior verified evidence
+before designing the exact implementation. Then: Brainstorm → spec
+(`docs/superpowers/specs/`) → plan (`docs/superpowers/plans/`) → execute
+via `superpowers:subagent-driven-development` (controller=Principal,
+implementer=Junior, reviewer=Senior) → `.superpowers/sdd/progress.md`
+ledger. Full 1500-iteration run + video review before any verdict — this
+repo's own evidence (most sharply, Experiment 15) shows shaped reward
+scalars can improve while real behavior doesn't, so this tier's depth is
+load-bearing, not overhead to trim.
 
-Then: Brainstorm → spec (`docs/superpowers/specs/`) → plan
-(`docs/superpowers/plans/`) → execute via
-`superpowers:subagent-driven-development` (controller=Principal,
-implementer=Junior, reviewer=Senior) → `.superpowers/sdd/progress.md` ledger.
+**Tier 2 — parameter tuning within an already-validated mechanism**
+(reward term *weights*/*thresholds* only, no new terms/mechanisms): the
+fast, unattended, git-based hill-climbing loop
+(`scripts/hillclimb_rewards.py`, see its own docstring for exact
+mechanics) — one bounded single-parameter mutation per round, evaluated
+against a cheap fixed proxy (the existing 300-iteration diagnostic scale,
+scored on `Episode_Termination/cube_reached_goal`'s rate — the real
+success metric, not a shaped/hackable bonus term — with the existing
+`Loss/value_function` stability check as an automatic reject), committed
+if better / `git checkout --`-reverted if worse, run for a bounded batch
+(~15-20 rounds) with no per-round human or Principal review, mirroring
+Karpathy's `autoresearch` design. Every attempt is logged to a running
+results table regardless of outcome. Research output isn't skipped, only
+deferred: one consolidated spec+ROADMAP write-up per *batch*, written by
+Principal after the batch completes, not one per individual weight tweak.
+No hypothesis-per-tweak requirement — the one-time act of choosing the
+search space, proxy metric, and safety bounds is this tier's equivalent of
+Tier 1's research-grounding step, the same way Karpathy's `program.md` is
+authored once and then the loop runs freely inside it.
 
 ## Verification standard
 

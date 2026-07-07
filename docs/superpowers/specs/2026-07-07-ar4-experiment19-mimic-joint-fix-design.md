@@ -72,37 +72,64 @@ rather than one cleanly determining the other.
 
 ## Design
 
-**Step 1 — diagnose which failure mode this actually is**, before writing
-any fix: inspect the built `assets/ar4_mk5/ar4_mk5.usd` directly (via a
-small standalone script, Isaac Sim Python, `Usd.Stage.Open` +
-`prim.GetAppliedSchemas()` on the `gripper_jaw2_joint` prim) to determine
-whether `PhysxMimicJointAPI` is present at all. Two distinct cases, two
-distinct fixes:
+**Resolved directly from PhysX's own reference implementation** (Isaac
+Sim 107.3.26's own test suite,
+`omni.physx.tests/.../tests/PhysxMimicJointAPI.py`, read directly): the
+canonical mimic-joint pattern applies `UsdPhysics.DriveAPI` (an
+independent PD actuator) *only* to the reference joint — the mimicking
+joint itself receives no independent drive at all, purely passive,
+its position determined solely by the mimic constraint's gearing
+relationship to the reference joint. This directly explains the observed
+divergence: this repo's current `robot_cfg.py` actuates *both* jaws
+independently (`ImplicitActuatorCfg(joint_names_expr=["gripper_jaw[12]_joint"],
+stiffness=1000.0, damping=50.0)`, one shared config applied to both) —
+under symmetric load the two independent drives and the mimic constraint
+agree, but under asymmetric contact (jaw1 blocked at a different point
+than jaw2's own local contact), jaw2's own drive pulls it toward its own
+commanded target while the mimic constraint simultaneously pulls it
+toward jaw1's actual (blocked) position — exactly the tug-of-war Task 6's
+data shows losing in favor of jaw2's own drive.
 
-- **Case A — API absent (import silently dropped it despite
-  `parse_mimic=True`):** add a post-import authoring step to
-  `build_asset.py` that explicitly applies `PhysxMimicJointAPI` to the
-  `gripper_jaw2_joint` prim via `omni.kit.commands.execute("ApplyAPISchema",
-  api=PhysxSchema.PhysxMimicJointAPI, prim=jaw2_prim,
-  api_prefix=PhysxSchema.Tokens.physxMimicJoint,
-  multiple_api_token=<correct axis token, determined empirically for a
-  prismatic joint during this task>)`, then sets the `referenceJoint`
-  relationship to `gripper_jaw1_joint`, `gearing=1`, `offset=0` — an exact
-  match to the source URDF's `<mimic multiplier="1" offset="0"/>`.
-- **Case B — API present but still diverges under load:** the actuator-
-  competition hypothesis above is the diagnosis. Fix by reducing
-  `gripper_jaw2_joint`'s independent actuator authority so the mimic
-  constraint is not fighting an equally-stiff independent PD drive —
-  concretely, lower jaw2's `ImplicitActuatorCfg` stiffness/damping
-  substantially (e.g. toward zero) so jaw2 is effectively passive and
-  determined by the mimic coupling to jaw1, while jaw1 keeps its current
-  stiffness and remains the RL action term's real controlled DOF. The
-  action term itself is not touched (still commands both joint names, per
-  Isaac Lab's existing pattern) — jaw2's commanded target becomes
-  effectively irrelevant once its own actuator can no longer meaningfully
-  resist the mimic constraint under load.
+**Two changes, both required, applied together in one task** (not an
+either/or — both are necessary per the mechanism above, and each alone is
+insufficient: the mimic API alone still fights jaw2's independent drive;
+removing jaw2's drive alone with no mimic constraint leaves jaw2
+completely unconstrained/free):
 
-Both cases converge on the same acceptance test: **an instrumented
+1. **`build_asset.py`**: add a post-import authoring step that applies
+   `PhysxMimicJointAPI` to the `gripper_jaw2_joint` prim, exactly matching
+   the confirmed-working test pattern:
+   ```python
+   from pxr import PhysxSchema, UsdPhysics
+   mimic_api = PhysxSchema.PhysxMimicJointAPI.Apply(jaw2_joint_prim, UsdPhysics.Tokens.rotX)
+   mimic_api.GetReferenceJointRel().AddTarget(jaw1_joint_prim.GetPath())
+   mimic_api.GetReferenceJointAxisAttr().Set(UsdPhysics.Tokens.rotX)
+   mimic_api.GetGearingAttr().Set(1.0)
+   mimic_api.GetOffsetAttr().Set(0.0)
+   ```
+   (`gearing=1.0`, `offset=0.0` is an exact match to the source URDF's
+   `<mimic multiplier="1" offset="0"/>`; the schema's own docs confirm
+   `referenceJointAxis` is ignored for single-DOF joint types like
+   `PhysicsPrismaticJoint`, so `rotX` is used as the required-but-inert
+   instance token, per the test suite's own convention for this case.)
+   First inspect whether `PhysxMimicJointAPI` is already present (in case
+   `parse_mimic=True` already partially authored it) — apply idempotently
+   (skip if already correctly configured, overwrite if present but wrong)
+   rather than assuming either state.
+2. **`robot_cfg.py`**: split the single shared `"gripper"`
+   `ImplicitActuatorCfg` entry into two — `gripper_jaw1` keeps the current
+   `stiffness=1000.0, damping=50.0` (jaw1 remains the real actuated DOF,
+   matching the reference-joint role in the pattern above), `gripper_jaw2`
+   drops to `stiffness=0.0, damping=0.0` (no independent drive at all,
+   purely passive — matching the mimicking-joint role, which per the test
+   pattern receives no `DriveAPI`). The RL action term
+   (`BinaryJointPositionActionCfg`, `tasks/ar4/pickplace_env_cfg.py`) is
+   *not* modified — it still commands both joint names identically, but
+   jaw2's commanded target becomes physically inert once its actuator has
+   zero stiffness/damping, which is fine: the mimic constraint alone now
+   determines jaw2's position from jaw1's actual position.
+
+This converges on a single acceptance test: **an instrumented
 rollout, structurally identical to Experiment 17 Task 6's diagnostic
 script, logging `jaw1_joint_pos`/`jaw2_joint_pos` every step through at
 least one episode with real contact** (reuse the existing checkpoint at

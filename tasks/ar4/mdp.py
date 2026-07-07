@@ -650,3 +650,89 @@ def path_proximity_bonus(
     prev = env._ik_milestone_max.clone()
     env._ik_milestone_max = torch.maximum(env._ik_milestone_max, proximity_term)
     return env._ik_milestone_max - prev
+
+
+def reset_arm_to_pregrasp_pose(
+    env: ManagerBasedRLEnv,
+    env_ids: torch.Tensor,
+    object_cfg: SceneEntityCfg,
+    robot_cfg: SceneEntityCfg,
+    pregrasp_hover: float,
+    gripper_tool_offset: tuple[float, float, float],
+) -> None:
+    """Event term (mode="reset"): one-shot IK solve that teleports the
+    arm's joints so the gripper's pinch point starts AT the pregrasp
+    waypoint (this episode's randomized cube position + pregrasp_hover in
+    z), instead of starting from a fixed home pose every episode. Must be
+    registered AFTER the cube's position has been randomized (reads
+    object.data.root_pos_w) and BEFORE compute_path_waypoints - the full
+    5-waypoint path is still computed unchanged; since the arm now starts
+    already at/near waypoint 0, path_proximity_bonus's own
+    advance-tolerance check naturally credits it almost immediately, with
+    no reward-function change needed.
+
+    Reuses the same live-DifferentialIKController construction and
+    gripper-tool-offset correction ik_guided_path_bonus already uses
+    (same file, above), but as a single one-shot solve for only env_ids
+    at reset time - NOT cached across calls, since env_ids' length varies
+    between calls (all envs on the very first reset, a smaller subset on
+    later per-env resets during training), and DifferentialIKController
+    allocates internal buffers sized to whatever num_envs it's
+    constructed with. Only the env-agnostic SceneEntityCfg/jacobian-index
+    lookups are cached; the controller itself is constructed fresh each
+    call, sized to len(env_ids). See
+    docs/superpowers/specs/2026-07-07-ar4-reachskip-curriculum-design.md.
+    """
+    robot: Articulation = env.scene[robot_cfg.name]
+    object: RigidObject = env.scene[object_cfg.name]
+
+    if not hasattr(env, "_reachskip_robot_entity_cfg"):
+        env._reachskip_robot_entity_cfg = SceneEntityCfg(
+            robot_cfg.name, joint_names=robot_cfg.joint_names, body_names=["link_6"]
+        )
+        env._reachskip_robot_entity_cfg.resolve(env.scene)
+        env._reachskip_jacobi_idx = (
+            env._reachskip_robot_entity_cfg.body_ids[0] - 1
+            if robot.is_fixed_base
+            else env._reachskip_robot_entity_cfg.body_ids[0]
+        )
+
+    ik_cfg = DifferentialIKControllerCfg(command_type="position", use_relative_mode=False, ik_method="dls")
+    ik_controller = DifferentialIKController(ik_cfg, num_envs=len(env_ids), device=env.device)
+
+    object_pos_w = object.data.root_pos_w[env_ids]
+    pregrasp_w = object_pos_w.clone()
+    pregrasp_w[:, 2] += pregrasp_hover
+
+    root_pose_w = robot.data.root_pose_w[env_ids]
+    ee_pose_w = robot.data.body_pose_w[env_ids, env._reachskip_robot_entity_cfg.body_ids[0]]
+
+    # Same gripper-tool-offset correction as ik_guided_path_bonus: the
+    # waypoint targets the pinch point, but the IK controller/Jacobian
+    # operate on the raw link_6 body - subtract the offset (rotated into
+    # world frame by link_6's current orientation) before commanding IK.
+    offset_vec = torch.tensor(gripper_tool_offset, device=env.device).expand(len(env_ids), 3)
+    offset_w = quat_apply(ee_pose_w[:, 3:7], offset_vec)
+    ik_target_w = pregrasp_w - offset_w
+    waypoint_command_b, _ = subtract_frame_transforms(root_pose_w[:, 0:3], root_pose_w[:, 3:7], ik_target_w)
+
+    ee_pos_b, ee_quat_b = subtract_frame_transforms(
+        root_pose_w[:, 0:3], root_pose_w[:, 3:7], ee_pose_w[:, 0:3], ee_pose_w[:, 3:7]
+    )
+
+    jacobian_all = robot.root_physx_view.get_jacobians()[env_ids]
+    jacobian = jacobian_all[:, env._reachskip_jacobi_idx, :, env._reachskip_robot_entity_cfg.joint_ids]
+    joint_pos = robot.data.joint_pos[env_ids][:, env._reachskip_robot_entity_cfg.joint_ids]
+
+    ik_controller.set_command(waypoint_command_b, ee_pos=ee_pos_b, ee_quat=ee_quat_b)
+    joint_pos_des = ik_controller.compute(ee_pos_b, ee_quat_b, jacobian, joint_pos)
+
+    # Teleport the actual physics state AND set the PD drive's target to
+    # the same value, so the drive doesn't immediately fight to move away
+    # from the teleported pose on the very first control step.
+    robot.write_joint_position_to_sim(
+        joint_pos_des, joint_ids=env._reachskip_robot_entity_cfg.joint_ids, env_ids=env_ids
+    )
+    robot.set_joint_position_target(
+        joint_pos_des, joint_ids=env._reachskip_robot_entity_cfg.joint_ids, env_ids=env_ids
+    )

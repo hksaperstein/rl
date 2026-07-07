@@ -115,6 +115,18 @@ parser.add_argument(
         "docs/superpowers/specs/2026-07-07-ar4-experiment16-proven-recipe-replication-design.md."
     ),
 )
+parser.add_argument(
+    "--graspgated",
+    action="store_true",
+    default=False,
+    help=(
+        "Train on the grasp-verification-gated variant of the proven-recipe scene: identical to "
+        "--provenrecipe except the lift and goal-tracking reward terms now require genuine bilateral "
+        "antipodal jaw contact, not just object height, fixing a confirmed 'stage leakage' exploit "
+        "where the policy wedged the cube against its own wrist geometry instead of grasping it. See "
+        "docs/superpowers/specs/2026-07-07-ar4-experiment17-grasp-gated-lift-design.md."
+    ),
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
@@ -149,6 +161,7 @@ from tasks.ar4.pickplace_ik_guided_env_cfg import Ar4PickPlaceIkGuidedEnvCfg  # 
 from tasks.ar4.pickplace_mirror_env_cfg import Ar4PickPlaceMirrorEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_single_object_env_cfg import Ar4PickPlaceSingleObjectEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_baseproximity_env_cfg import Ar4PickPlaceBaseProximityEnvCfg  # noqa: E402
+from tasks.ar4.pickplace_graspgated_env_cfg import Ar4PickPlaceGraspGatedEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_provenrecipe_env_cfg import Ar4PickPlaceProvenRecipeEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_reachskip_env_cfg import Ar4PickPlaceReachskipEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_residual_env_cfg import Ar4PickPlaceResidualEnvCfg  # noqa: E402
@@ -161,7 +174,9 @@ LOG_ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 
 
 def main() -> None:
-    if args_cli.provenrecipe:
+    if args_cli.graspgated:
+        env_cfg_cls = Ar4PickPlaceGraspGatedEnvCfg
+    elif args_cli.provenrecipe:
         env_cfg_cls = Ar4PickPlaceProvenRecipeEnvCfg
     elif args_cli.baseproximity:
         env_cfg_cls = Ar4PickPlaceBaseProximityEnvCfg

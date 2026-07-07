@@ -62,6 +62,14 @@ Work follows a three-tier delegation model, already reflected in this repo's
 - **Principal** (top-level session): does the bulk of technical/literature
   research directly — reads papers, searches Google Scholar/arXiv, verifies
   citations itself — rather than delegating research to a junior subagent.
+  Sources aren't limited to formal academic literature: GitHub repos/READMEs
+  (real implementation detail papers often omit), engineering blog posts,
+  and reputable tech-news coverage are all legitimate for grounding
+  *methodology/implementation practice* specifically — academic papers
+  remain the standard for citing a formal claim/result, but "how this is
+  actually built/tuned in practice" is frequently only documented outside
+  academic venues, and background research shouldn't be artificially
+  restricted to Scholar/arXiv when the question calls for the former.
   Uses that research to design experiments and methodology (reward design,
   architecture, algorithm choices), owns spec/plan authorship (brainstorm →
   spec → plan), and decides when work is done. Does not do hands-on

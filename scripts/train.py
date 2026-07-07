@@ -127,6 +127,19 @@ parser.add_argument(
         "docs/superpowers/specs/2026-07-07-ar4-experiment17-grasp-gated-lift-design.md."
     ),
 )
+parser.add_argument(
+    "--pregrasp",
+    action="store_true",
+    default=False,
+    help=(
+        "Train on the dense pre-grasp-readiness shaping variant: adds one new reward term (proximity "
+        "x gripper-closedness) on top of --graspgated's unchanged binary antipodal grasp gate, giving "
+        "the policy a discoverable gradient toward combining 'get close' and 'close the gripper' - the "
+        "two halves Experiment 17's own instrumented investigation found being explored independently "
+        "but never together. See "
+        "docs/superpowers/specs/2026-07-07-ar4-experiment18-pregrasp-readiness-shaping-design.md."
+    ),
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
@@ -162,6 +175,7 @@ from tasks.ar4.pickplace_mirror_env_cfg import Ar4PickPlaceMirrorEnvCfg  # noqa:
 from tasks.ar4.pickplace_single_object_env_cfg import Ar4PickPlaceSingleObjectEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_baseproximity_env_cfg import Ar4PickPlaceBaseProximityEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_graspgated_env_cfg import Ar4PickPlaceGraspGatedEnvCfg  # noqa: E402
+from tasks.ar4.pickplace_pregrasp_env_cfg import Ar4PickPlacePregraspEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_provenrecipe_env_cfg import Ar4PickPlaceProvenRecipeEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_reachskip_env_cfg import Ar4PickPlaceReachskipEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_residual_env_cfg import Ar4PickPlaceResidualEnvCfg  # noqa: E402
@@ -174,7 +188,9 @@ LOG_ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 
 
 def main() -> None:
-    if args_cli.graspgated:
+    if args_cli.pregrasp:
+        env_cfg_cls = Ar4PickPlacePregraspEnvCfg
+    elif args_cli.graspgated:
         env_cfg_cls = Ar4PickPlaceGraspGatedEnvCfg
     elif args_cli.provenrecipe:
         env_cfg_cls = Ar4PickPlaceProvenRecipeEnvCfg

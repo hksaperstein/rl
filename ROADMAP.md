@@ -696,6 +696,65 @@ follow-ups below.
        scale (4096 parallel envs). Retrying once to check whether it
        recurs (same/different env index, similar/different iteration)
        before deciding whether deeper investigation is warranted.
+     - **Retry succeeded (no crash recurrence — likely a rare fluke, not
+       systematic): full 1500-iteration cube training run completed**
+       (`logs/train/2026-07-06_19-45-06/`, 31/31 checkpoints verified,
+       `model_1499.pt` confirmed). Final episode-cumulative scalars:
+       `ik_guided_path_bonus=0.1428`, `gripper_schedule_bonus=0.0142`,
+       `contact_grasp_bonus=16.7976`, `stillness_penalty=-0.2318`,
+       `cube_reached_goal=0.0072`.
+     - **Two senior-tier literature research passes commissioned in
+       parallel (direct user request), both independently converging on
+       real, actionable problems with `contact_grasp_bonus`** — full
+       writeups at
+       `docs/superpowers/specs/research/2026-07-06-rl-manipulation-senior-b.md`
+       and `2026-07-06-classical-manipulation-senior-a.md`:
+       - **RL-manipulation finding**: `contact_grasp_bonus` (weight 20)
+         is ungated — it pays out every step regardless of downstream
+         lift/path progress, opposed only by `stillness_penalty` (net
+         −2/step once triggered), a ~9:1 reward-rate advantage for
+         freezing after grasp. Externally verified against Isaac Lab's
+         own shipped lift task, IsaacGymEnvs `FrankaCubeStack`, and
+         ManiSkill3 `PickCube-v1` source (read directly, not just
+         cited) — all three gate downstream reward behind grasp/lift
+         state; this repo's reward is the structural outlier. Mao et
+         al. 2025 (arXiv:2502.15442) independently names this exact
+         "reach then freeze" local optimum in unrelated work (quote
+         verified against primary text).
+       - **Classical-manipulation finding**: `contact_grasp_bonus`
+         checks bilateral force *magnitude* only, discarding the force
+         *direction* `force_matrix_w` already provides. Every classical
+         grasp-mechanics source surveyed (Nguyen 1988; Ponce & Faverjon
+         1991/93; Ferrari & Canny 1992; GraspIt! 2004; modern
+         data-driven planners Dex-Net/GPD/QuickGrasp) treats a
+         geometric/antipodal force-closure check as mandatory and never
+         substitutable by contact-force magnitude alone — a real
+         bilateral force could register from a non-antipodal, unstable
+         pinch that isn't actually resistant to gravity's wrench.
+       - **This run's own data directly confirms both findings
+         simultaneously and more starkly than predicted**:
+         `contact_grasp_bonus` (16.80) outweighs `ik_guided_path_bonus`
+         (0.14) by **~118:1** in the actual trained policy's episode-
+         cumulative behavior — the policy learned to hold a grasp
+         indefinitely while making almost no lift/path progress, the
+         "reach, grip, freeze" pattern confirmed quantitatively, not
+         just via video inspection, for the first time this session.
+       - **Decision: implement both fixes together as one evidence-based
+         redesign (Experiment 9), not sequential single-variable
+         guesses** — this is fixing two independently-verified real
+         problems in the same reward term, not stacking unvalidated
+         guesses. New function `antipodal_grasp_bonus` (requires jaw1/
+         jaw2 contact-force directions within ~30° of anti-parallel,
+         dot product < -0.85, in addition to the existing magnitude
+         check) replaces `contact_grasp_bonus` in
+         `Ar4PickPlaceIkGuidedEnvCfg`'s `RewardsCfg`, at a substantially
+         reduced weight (20.0 -> 3.0) to close the reward-rate gap
+         rather than relying on `stillness_penalty` alone to outweigh
+         it. `contact_grasp_bonus` itself stays unchanged in `mdp.py`
+         (still used by the original sphere-based `pickplace_env_cfg.py`
+         task). Eval/video inspection skipped for this checkpoint since
+         the TensorBoard evidence already conclusively shows the same
+         failure mode without needing to re-confirm via video.
 2. Shape classifier misclassifies cube/rectangular-prism as "sphere" against
    real depth data. Root-caused: `PLANARITY_RESIDUAL_THRESHOLD` (tuned on
    near-noiseless synthetic data) doesn't generalize to real sensor noise.

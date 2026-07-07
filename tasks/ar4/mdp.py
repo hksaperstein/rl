@@ -890,3 +890,45 @@ def mirrored_goal_distance_grasp_gated(
         env, object_cfg, jaw1_contact_cfg, jaw2_contact_cfg, force_threshold, antipodal_cos_threshold, minimal_height
     )
     return gate * (1.0 - torch.tanh(distance / std))
+
+
+def pregrasp_readiness_bonus(
+    env: ManagerBasedRLEnv,
+    std: float,
+    object_cfg: SceneEntityCfg,
+    ee_frame_cfg: SceneEntityCfg,
+    robot_cfg: SceneEntityCfg,
+    gripper_joint_names: list[str],
+    open_pos: float,
+    closed_pos: float,
+) -> torch.Tensor:
+    """Dense reward for combining proximity AND gripper closure - the two
+    halves Task 6's instrumented rollout showed being explored
+    independently but never together (Experiment 17: one event showed
+    the gripper fully closed nowhere near the cube; another showed the
+    arm within 2.6cm of the cube with the gripper pinned open). Reward is
+    the product of a proximity term (same tanh-kernel shape as
+    reaching_object) and a normalized "closedness" term (1.0 when the
+    gripper is fully closed, 0.0 when fully open) - maximized only when
+    both are true simultaneously, giving zero credit for closing far
+    from the object or approaching without closing. Does NOT reward
+    antipodal alignment or contact force - purely a positional/
+    configuration signal, kept deliberately weaker/less specific than
+    antipodal_grasp_bonus's own force-closure check, which remains the
+    only gate for lifting_object/object_goal_tracking, unchanged from
+    Experiment 17. See
+    docs/superpowers/specs/2026-07-07-ar4-experiment18-pregrasp-readiness-shaping-design.md.
+    """
+    object: RigidObject = env.scene[object_cfg.name]
+    ee_frame: FrameTransformer = env.scene[ee_frame_cfg.name]
+    robot: Articulation = env.scene[robot_cfg.name]
+
+    ee_pos_w = ee_frame.data.target_pos_w[:, 0, :]
+    dist = torch.norm(object.data.root_pos_w - ee_pos_w, dim=-1)
+    proximity_term = 1.0 - torch.tanh(dist / std)
+
+    gripper_joint_ids, _ = robot.find_joints(gripper_joint_names)
+    gripper_pos = robot.data.joint_pos[:, gripper_joint_ids].mean(dim=-1)
+    closedness_term = torch.clamp((open_pos - gripper_pos) / (open_pos - closed_pos), 0.0, 1.0)
+
+    return proximity_term * closedness_term

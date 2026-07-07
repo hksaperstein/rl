@@ -1,0 +1,13 @@
+# Deliberately does NOT exclude assets/ - the pre-built AR4 USD needs to
+# be in the image so cloud instances never need this repo's external
+# ROS2/xacro build dependency (see scripts/build_asset.py).
+
+.git/
+.gitignore
+logs/
+.superpowers/sdd/
+__pycache__/
+*.py[cod]
+*$py.class
+.vscode/
+kb/.obsidian/

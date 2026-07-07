@@ -1,0 +1,45 @@
+name: Build and publish Docker image
+
+# Manual trigger only, deliberately - this image is large (built on
+# NVIDIA's proprietary Isaac Sim runtime, ~20GB+) and bundles the
+# pre-built AR4 USD asset. Not run on every push, since most commits to
+# this repo don't touch anything the image needs to reflect (reward/env
+# cfg changes only matter to the Isaac Lab process running inside the
+# container at runtime, not the image build itself, and CI runners don't
+# have the GPU needed to actually build isaac-lab-base's own image
+# locally in this workflow the way this repo's own workstation does -
+# see the note below on isaac-lab-base).
+on:
+  workflow_dispatch:
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # NOTE: this workflow assumes isaac-lab-base:latest already exists
+      # as a pushed image this job can pull FROM (built once on a real
+      # workstation via /home/saps/IsaacLab/docker/container.py start base
+      # and pushed manually - GitHub-hosted runners have no NVIDIA GPU,
+      # so they cannot build Isaac Sim's own base image themselves; this
+      # job only rebuilds the *this-repo* layer on top of it). Point
+      # docker/Dockerfile's FROM line at the pushed isaac-lab-base image
+      # reference (not the bare local tag "isaac-lab-base:latest") before
+      # this workflow can run successfully - see docker/README.md.
+      - name: Build image
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: docker build -f docker/Dockerfile -t "$DOCKERHUB_USERNAME/ar4-pickplace:latest" .
+
+      - name: Push image
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: docker push "$DOCKERHUB_USERNAME/ar4-pickplace:latest"

@@ -1667,6 +1667,130 @@ follow-ups below.
          (see `feedback_ar4-episode-length-and-staged-decomposition`
          memory) now has stronger direct motivation than when first
          proposed.
+     - **Experiment 19: fix the confirmed mimic-joint asset defect (candidate
+       (a) above), then re-run Experiment 18's exact reward config unchanged
+       to isolate whether that defect alone explains three consecutive
+       null results. Two independently-tested fix configurations both made
+       jaw synchronization measurably WORSE than the pre-fix baseline —
+       a clean, decisive falsification, not an inconclusive result.**
+       Hypothesis, grounded in Experiment 17 Task 6's own confirmed
+       root cause (jaw2 drifted 20% past its commanded position under
+       contact load while jaw1 tracked exactly) and the source URDF's
+       own `<mimic joint="gripper_jaw1_joint" multiplier="1" offset="0"/>`
+       constraint on `gripper_jaw2_joint` (confirmed present in source,
+       confirmed NOT enforced by the built USD): authoring a real
+       PhysX-level `PhysxMimicJointAPI` coupling between the two jaw
+       joints, so they genuinely move as one physically-coupled unit,
+       should close enough of the gap to make antipodal grasps physically
+       reachable. Design spec:
+       `docs/superpowers/specs/2026-07-07-ar4-experiment19-mimic-joint-fix-design.md`.
+       Plan: `docs/superpowers/plans/2026-07-07-ar4-experiment19-mimic-joint-fix-implementation.md`.
+       - **Technical grounding, read directly from source before
+         implementation** (not reasoned from memory): the installed
+         Isaac Sim 107.3.26 PhysX schema confirms `PhysxMimicJointAPI`
+         explicitly supports `PhysicsPrismaticJoint` (the gripper jaws'
+         actual joint type); `build_asset.py` already passed
+         `parse_mimic=True` to the URDF importer, confirming the intent
+         was already present but not working; PhysX's own official
+         mimic-joint test suite
+         (`omni.physx.tests/.../PhysxMimicJointAPI.py`) was read directly
+         and used as the reference implementation for the exact Python
+         API calls (`PhysxMimicJointAPI.Apply`,
+         `GetReferenceJointRel().AddTarget`, `GetGearingAttr().Set(1.0)`,
+         `GetOffsetAttr().Set(0.0)`) — this is not a guess, it matches
+         PhysX's own canonical example exactly.
+       - **Fix iteration 1 (zero `gripper_jaw2`'s independent PD drive,
+         `stiffness=0.0, damping=0.0`, reasoning that the mimic
+         constraint alone should determine jaw2's position, matching the
+         PhysX test suite's own reference pattern of only driving the
+         "reference" joint): FAILED, and made things worse.** Instrumented
+         rollout (`scripts/mimic_joint_verify.py`, reusing Experiment 18's
+         trained checkpoint against the rebuilt asset) measured
+         `max_jaw_pos_diff_during_contact=0.00548m` — 3.9x over the
+         0.0014m pass threshold, and **worse than the pre-fix baseline of
+         0.0028m** (Experiment 17 Task 6), not an improvement.
+       - **Mid-investigation research** (Google search + direct GitHub
+         API fetches, not just the initial web-search summaries, which
+         were independently re-verified after one contained an apparently
+         fabricated claim — see below): an Isaac Lab maintainer
+         (`isaac-sim/IsaacLab` discussion #2626, comment fetched directly
+         via `gh api`) confirms "Isaac Lab does support mimic joints...
+         we currently don't have an example for this type of joint" — a
+         genuine, admitted maturity gap, not settled practice. A real
+         community member's only reported *working* mimic-jointed
+         gripper setup (UR10e + Robotiq 2F-85) keeps **every** joint,
+         including mimic-coupled ones, independently actuated at full
+         stiffness — the opposite of fix iteration 1's design.
+       - **A WebFetch-tool paraphrase of the same discussion thread
+         claimed an "unmerged `feature/unactuated-joints` branch"
+         suggesting mimic-joint support was still work-in-progress — this
+         claim could NOT be reproduced when the actual comment thread was
+         re-fetched directly via `gh api` and read verbatim, and is not
+         relied on anywhere in this entry.** Flagged here as a concrete,
+         caught instance of an AI web-summarization tool fabricating a
+         specific technical detail not present in the primary source —
+         a reminder that even a tool's *paraphrase* of a fetched page
+         needs the same "don't trust, verify against the primary source"
+         treatment as any other subagent claim, not just subagent
+         self-reports.
+       - **Fix iteration 2 (restore `gripper_jaw2`'s actuator to match
+         `gripper_jaw1` exactly, `stiffness=1000.0, damping=50.0` —
+         following the community's actually-tested pattern, keeping the
+         mimic constraint as reinforcement rather than a replacement for
+         independent driving): FAILED, and made things worse again.**
+         `max_jaw_pos_diff_during_contact=0.00647m` — 18% worse than
+         fix iteration 1, and more than double the pre-fix baseline. This
+         is the single most decisive data point in the whole experiment:
+         iteration 2's configuration is **identical to the pre-fix
+         baseline in every respect except the mimic joint's presence**
+         (both jaws independently driven at the same stiffness/damping in
+         both cases) — a clean, isolated A/B comparison confirming the
+         mimic constraint itself is actively interfering under real
+         contact load, not merely failing to help. Consistent with the
+         PhysX schema's own documented behavior that a mimic joint is a
+         genuine **two-way** interaction (it applies a corrective impulse
+         to the *reference* joint too, not just the mimicking one),
+         which can plausibly increase net system compliance under load
+         when combined with two already-independently-driven joints,
+         rather than rigidly locking them together as intended.
+       - **Reverted, not iterated a third time.** Two independently-tested
+         configurations both made synchronization measurably worse (not
+         merely "no better") — a pattern systematic-debugging discipline
+         treats as diagnostic of an architectural mismatch, not a
+         parameter-tuning problem, even short of the formal 3-strikes
+         threshold. `scripts/build_asset.py` and `tasks/ar4/robot_cfg.py`
+         reverted to their exact pre-Experiment-19 state (commit
+         `255b9b2`); the asset was rebuilt from the reverted script,
+         restoring the known-good baseline for all future work.
+         `scripts/mimic_joint_verify.py` (the instrumented jaw-tracking
+         diagnostic itself) was kept — independently useful tooling for
+         any future asset-fidelity investigation, regardless of this
+         outcome. Tasks 3/4 of the plan (the full training re-run) were
+         never reached — the hard gate correctly stopped the experiment
+         before spending that compute on an unverified fix.
+       - **Net assessment: this experiment does not resolve whether the
+         mimic-joint mechanical defect blocks genuine antipodal grasps —
+         it specifically shows that fixing it via `PhysxMimicJointAPI` in
+         this Isaac Sim version, at least in the two configurations
+         tested, is not a viable mechanism.** The underlying defect
+         (the two jaws are not mechanically coupled, contrary to the real
+         robot's design) remains real and unresolved, but is no longer
+         this repo's most promising next lever — candidate (a) from
+         Experiment 18's own list is now closed out as tried-and-failed,
+         not merely deferred. Per the session's own prior sequencing
+         decision (confirmed directly with the user before this
+         experiment began), the next research direction is candidate
+         from a related, independently-raised idea: **use IK to
+         constrain the gripper to a fixed vertical/top-down approach
+         orientation during the reach phase**, rather than leaving
+         orientation fully unconstrained across all 6 joint-space DOF as
+         every experiment since Experiment 16 has done. This directly
+         reduces the geometric burden of ever finding an antipodal grasp
+         in the first place (a top-down, jaw-aligned approach to a cube
+         on a table is the standard assumption in classical grasp
+         planning — Dex-Net, GPD, both already in this repo's research
+         record) — independent of, and not blocked by, this experiment's
+         negative result on jaw-coupling fidelity specifically.
 2. Shape classifier misclassifies cube/rectangular-prism as "sphere" against
    real depth data. Root-caused: `PLANARITY_RESIDUAL_THRESHOLD` (tuned on
    near-noiseless synthetic data) doesn't generalize to real sensor noise.

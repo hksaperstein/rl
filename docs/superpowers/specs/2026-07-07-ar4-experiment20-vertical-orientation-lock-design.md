@@ -146,3 +146,93 @@ gate would be a clean falsification of the orientation-discovery
 bottleneck hypothesis specifically, narrowing rather than repeating the
 open question toward the remaining candidates (demonstration/imitation
 bootstrapping, or a deeper structural rethink).
+
+## Revision: hard IK-lock mechanism abandoned, pivoting to a soft reward bias
+
+**The hypothesis above is unchanged. The mechanism designed to test it —
+a hard, absolute-pose differential-IK action term — turned out not to be
+mechanically viable, discovered via direct instrumented verification
+before any training compute was spent, per this spec's own verification
+plan working exactly as intended.**
+
+Task 2's implementation (`tasks/ar4/pickplace_verticallock_env_cfg.py`,
+`tasks/ar4/actions.py`'s `VerticalLockDifferentialIKAction`) was built
+and code-reviewed clean, but the task reviewer flagged that
+`_FIXED_DOWNWARD_QUAT` had no reproducible measurement artifact — echoing
+Experiment 16's exact lesson (an unverified claim later found wrong under
+real instrumentation). Independently re-verifying against the live
+simulated system (not isolated quaternion math) found the real
+end-effector orientation converges to within ~9-10 degrees of the target
+by step ~30, then **diverges to 75-99 degrees off target within the same
+episode under zero commanded policy action**, before resetting and
+reproducing the identical pattern next episode.
+
+Three genuinely different fix attempts were tried and instrumented,
+per this repo's systematic-debugging discipline:
+
+1. **Tilting the target 5/10/15/20 degrees off exact-vertical** (testing
+   whether the instability was specific to a wrist singularity at exactly
+   straight-down). Result: all tilts diverge similarly — rules out "one
+   specific singular target" as the sole cause.
+2. **Giving the action term's position target persistent state** instead
+   of the stock Isaac Lab convention of recomputing it fresh each step as
+   `current_position + delta` (which, for a zero action, is self-
+   referential and provides zero restoring force — harmless for
+   Experiment 11's position-only 3-DOF action, which has 3 redundant
+   joint DOF to absorb drift, but with this experiment's fully-
+   constrained 6-DOF pose lock — zero redundant DOF — nothing anchors the
+   solve). This is a real, independently-motivated correctness fix, kept
+   in `tasks/ar4/actions.py` regardless of the outcome below. Result:
+   reduced peak drift (~52-59 degrees vs. ~77-99 degrees) but did not
+   achieve stability.
+3. **Sweeping the DLS damping coefficient** (`lambda_val`, default 0.01)
+   from 0.01 to 1.0. Result: no monotonic relationship (0.1 comes
+   closest to the 15-degree stability threshold; 0.3/0.5/1.0 are worse
+   again) — not a simple tuning fix.
+
+**Conclusion: hard-locking full 6-DOF pose via a single-Newton-step-per-
+env-step differential-IK controller is not a stable mechanism for
+sustained pose-holding on this arm**, independent of target orientation,
+position-target formulation, or damping tuning. This is an architecture-
+level finding, not an implementation bug — per this repo's systematic-
+debugging discipline (3 failed fixes means question the architecture),
+continuing to patch this specific mechanism is not warranted.
+
+**Revised design: a soft reward term, not a hard action-space
+constraint.** Add `orientation_alignment_bonus` to `tasks/ar4/mdp.py` —
+rewards the policy for keeping the gripper's approach axis close to
+vertical, computed from the same `ee_frame` orientation reading and the
+same (already core-verified, single-digit-degree-accurate)
+`_FIXED_DOWNWARD_QUAT` reference direction, but as a dense reward signal
+layered onto the **already-proven joint-space action** (Experiment 18's
+exact `ActionsCfg`, `tasks/ar4/pickplace_pregrasp_env_cfg.py`), not a new
+action-space mechanism. This tests the identical underlying hypothesis
+(reduce the policy's orientation-discovery burden) without the IK-
+stability problem class — the policy is free to use any joint
+configuration reachable via ordinary joint-space control, no fully-
+constrained IK solve required at every step. `tasks/ar4/actions.py` and
+`pickplace_verticallock_env_cfg.py` are kept, not deleted — real, working,
+independently-verified code for a mechanism that may be worth revisiting
+later with a fundamentally different control approach (e.g. multiple IK
+substeps per env step), just not pursued further under this experiment.
+
+**Reward design**: `orientation_alignment_bonus(env, ee_frame_cfg,
+target_quat)` computes the gripper's approach axis in world frame
+(`quat_apply(ee_quat_w, [0, 0, 1])`, matching the verification scripts'
+own convention) and returns `(dot(approach_dir, [0, 0, -1]) + 1.0) / 2.0`
+— a natural [0, 1] alignment measure, maximized at perfect vertical
+approach, 0.5 at horizontal, 0 pointing straight up. No tanh kernel
+needed; the dot product is already a smooth, bounded measure of angular
+alignment. Weight to be set well below `lifting_object`'s (15.0) and in
+the same range as `pregrasp_readiness`'s (2.0) — a stepping-stone signal,
+not a replacement for the real grasp/lift objective.
+
+New file `tasks/ar4/pickplace_orientationbias_env_cfg.py`
+(`Ar4PickPlaceOrientationBiasEnvCfg`): identical to
+`Ar4PickPlacePregraspEnvCfg` (Experiment 18) in every respect — same
+`ActionsCfg` (plain joint-space), same scene, same
+`lifting_object`/`object_goal_tracking` grasp gate, same
+`pregrasp_readiness` term — plus the one new `orientation_alignment_bonus`
+reward term. Isolates the orientation bias as the only new variable
+relative to Experiment 18, per this repo's own established one-variable-
+at-a-time discipline.

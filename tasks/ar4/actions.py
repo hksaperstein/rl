@@ -18,6 +18,7 @@ created.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import MISSING
 from typing import TYPE_CHECKING
 
@@ -42,6 +43,23 @@ class VerticalLockDifferentialIKAction(DifferentialInverseKinematicsAction):
     the fixed orientation is actively re-targeted every step, not just
     left alone (which a relative/delta command would do, allowing drift
     to accumulate under contact forces without correction).
+
+    Maintains a persistent position target (self._target_pos, seeded from
+    the actual end-effector position on each reset, then accumulated by
+    the policy's own deltas) rather than the stock action term's
+    ee_pos_curr + delta convention. That stock convention is a
+    self-referential target - with a zero action it silently means
+    "wherever you currently are," providing zero restoring force if the
+    actual pose drifts. Harmless for the stock 3-DOF position-only
+    action (3 redundant joint DOF absorb any drift), but combined with
+    this class's own fully-constrained 6-DOF pose lock (0 redundant DOF)
+    it left nothing anchoring the solve - confirmed by direct
+    instrumented testing: the real end-effector orientation converged to
+    within ~9 degrees of several different fixed targets (including
+    tilted ones, ruling out one specific singular target as the cause)
+    and then drifted to 75-99 degrees off target within a single
+    episode, under zero commanded action. A persistent, non-self-
+    referential target removes that failure mode at its source.
     """
 
     cfg: VerticalLockDifferentialIKActionCfg
@@ -49,10 +67,19 @@ class VerticalLockDifferentialIKAction(DifferentialInverseKinematicsAction):
     def __init__(self, cfg: VerticalLockDifferentialIKActionCfg, env: ManagerBasedEnv) -> None:
         super().__init__(cfg, env)
         self._fixed_quat = torch.tensor(cfg.fixed_orientation, device=self.device).repeat(self.num_envs, 1)
+        self._target_pos = torch.zeros(self.num_envs, 3, device=self.device)
 
     @property
     def action_dim(self) -> int:
         return 3
+
+    def reset(self, env_ids: Sequence[int] | None = None) -> None:
+        super().reset(env_ids)
+        ee_pos_curr, _ = self._compute_frame_pose()
+        if env_ids is None:
+            self._target_pos[:] = ee_pos_curr
+        else:
+            self._target_pos[env_ids] = ee_pos_curr[env_ids]
 
     def process_actions(self, actions: torch.Tensor) -> None:
         self._raw_actions[:] = actions
@@ -61,9 +88,9 @@ class VerticalLockDifferentialIKAction(DifferentialInverseKinematicsAction):
             self._processed_actions = torch.clamp(
                 self._processed_actions, min=self._clip[:, :, 0], max=self._clip[:, :, 1]
             )
+        self._target_pos += self._processed_actions
         ee_pos_curr, ee_quat_curr = self._compute_frame_pose()
-        desired_pos = ee_pos_curr + self._processed_actions
-        command = torch.cat([desired_pos, self._fixed_quat], dim=1)
+        command = torch.cat([self._target_pos, self._fixed_quat], dim=1)
         self._ik_controller.set_command(command, ee_pos_curr, ee_quat_curr)
 
 

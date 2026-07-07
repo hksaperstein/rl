@@ -1,32 +1,32 @@
-# Cloud/headless training image for this repo's AR4 pick-and-place work.
+# Cloud/headless training image for this repo (a general, reusable
+# Isaac Lab manipulation research platform - see CLAUDE.md's North Star;
+# not permanently scoped to any one arm/task, even though AR4
+# pick-and-place is the only work in progress today).
 #
 # Builds on Isaac Lab's own official base image (isaac-lab-base) rather
 # than reimplementing its install steps - that image already has Isaac
 # Sim 5.1.0 + Isaac Lab v2.3.1 (matching this workstation's installed
 # versions) fully set up. This Dockerfile only adds this repo's own
-# code and the pre-built AR4 USD asset on top.
+# code and whatever pre-built USD assets the current task needs on top.
 #
 # Build (two steps, from this repo's root):
 #
 #   1. Build the isaac-lab-base image (one-time, or whenever Isaac Lab
-#      version changes) using Isaac Lab's own official docker-compose:
-#
-#        cd /home/saps/IsaacLab/docker
-#        echo "ACCEPT_EULA=Y" > .env.base.local  # already in .env.base by default
-#        docker compose --profile base build
-#
-#      This produces a local image tagged `isaac-lab-base:latest`.
+#      version changes) using Isaac Lab's own official wrapper - see
+#      docker/README.md for the exact command (raw `docker compose
+#      --profile base build` does not work directly, env var
+#      interpolation gotcha, documented there).
 #
 #   2. Build this repo's image on top of it:
 #
 #        cd /home/saps/projects/rl
-#        docker build -f docker/Dockerfile -t ar4-pickplace:latest .
+#        docker build -f docker/Dockerfile -t isaaclab-manipulation-rl:latest .
 #
 # Run (locally, with GPU passthrough - requires nvidia-container-toolkit
 # installed on the host, which this workstation does not currently have):
 #
 #   docker run --rm -it --gpus all --network host \
-#       ar4-pickplace:latest \
+#       isaaclab-manipulation-rl:latest \
 #       ./isaaclab.sh -p scripts/train.py --pregrasp --num_envs 4096 --headless
 #
 # On a cloud GPU instance (AWS/GCP/RunPod/Lambda - all support
@@ -39,21 +39,26 @@ FROM isaac-lab-base:latest
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# This repo's own code - tasks/, scripts/, docs/, top-level configs.
-# Excludes logs/, .git/, kb/.obsidian/, etc. via docker/.dockerignore.
-# Deliberately does NOT exclude assets/ (gitignored in this repo, but
-# Docker's build context is governed by .dockerignore, not .gitignore) -
-# the pre-built AR4 USD is bundled directly, so the cloud instance never
-# needs the external ROS2/xacro toolchain (annin_ar4_description) this
-# repo's scripts/build_asset.py depends on to regenerate it from source.
-WORKDIR /workspace/ar4-pickplace
-COPY . /workspace/ar4-pickplace
+# This repo's own code - tasks/, scripts/, docs/, top-level configs, for
+# whichever robot/task combination is currently active (not just AR4 -
+# this Dockerfile doesn't know or care which). Excludes logs/, .git/,
+# kb/.obsidian/, etc. via docker/.dockerignore. Deliberately does NOT
+# exclude assets/ (gitignored in this repo, but Docker's build context
+# is governed by .dockerignore, not .gitignore) - whatever's already
+# been built locally via that task's own build_asset.py-equivalent gets
+# bundled directly, so the cloud instance never needs whatever external
+# toolchain (e.g. AR4's ROS2/xacro annin_ar4_description dependency)
+# produced it.
+WORKDIR /workspace/rl
+COPY . /workspace/rl
 
-# Fail fast at build time if the asset wasn't built locally before
-# `docker build` was run - a container without it can't run anything.
-RUN test -f /workspace/ar4-pickplace/assets/ar4_mk5/ar4_mk5.usd || \
-    (echo "ERROR: assets/ar4_mk5/ar4_mk5.usd missing from build context." \
-          "Run scripts/build_asset.py locally before building this image." \
+# Fail fast at build time if no assets were built locally before
+# `docker build` was run - a container with an empty assets/ directory
+# can't run anything, regardless of which task it's for.
+RUN [ -n "$(find /workspace/rl/assets -mindepth 1 -print -quit 2>/dev/null)" ] || \
+    (echo "ERROR: assets/ is empty or missing from the build context." \
+          "Run this task's own asset-build script locally first" \
+          "(e.g. scripts/build_asset.py for the AR4 work)." \
           "See docker/README.md." && exit 1)
 
 # scripts/hillclimb_rewards.py hardcodes ISAACLAB_SH = "/home/saps/IsaacLab/isaaclab.sh"

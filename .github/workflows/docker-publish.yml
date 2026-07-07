@@ -1,9 +1,10 @@
 name: Build and publish Docker image
 
 # Manual trigger only, deliberately - this image is large (built on
-# NVIDIA's proprietary Isaac Sim runtime, ~20GB+) and bundles the
-# pre-built AR4 USD asset. Not run on every push, since most commits to
-# this repo don't touch anything the image needs to reflect (reward/env
+# NVIDIA's proprietary Isaac Sim runtime, ~20GB+) and bundles whatever
+# pre-built USD assets the current task needs. Not run on every push,
+# since most commits to this repo don't touch anything the image needs
+# to reflect (reward/env
 # cfg changes only matter to the Isaac Lab process running inside the
 # container at runtime, not the image build itself, and CI runners don't
 # have the GPU needed to actually build isaac-lab-base's own image
@@ -37,9 +38,9 @@ jobs:
       - name: Build image
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-        run: docker build -f docker/Dockerfile -t "$DOCKERHUB_USERNAME/ar4-pickplace:latest" .
+        run: docker build -f docker/Dockerfile -t "$DOCKERHUB_USERNAME/isaaclab-manipulation-rl:latest" .
 
       - name: Push image
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-        run: docker push "$DOCKERHUB_USERNAME/ar4-pickplace:latest"
+        run: docker push "$DOCKERHUB_USERNAME/isaaclab-manipulation-rl:latest"

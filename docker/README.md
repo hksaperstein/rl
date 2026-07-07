@@ -1,14 +1,19 @@
 # Cloud/headless training container
 
-Packages this repo's AR4 pick-and-place code + the pre-built USD asset
-into a Docker image, built on Isaac Lab's own official base image, so
-`scripts/train.py` runs unmodified on any NVIDIA GPU cloud instance.
+Packages this repo's code + whatever pre-built USD assets the current
+task needs into a Docker image, built on Isaac Lab's own official base
+image, so `scripts/train.py` runs unmodified on any NVIDIA GPU cloud
+instance. Generic to this repo as a whole (a reusable Isaac Lab
+manipulation research platform, per CLAUDE.md's North Star), not
+hardcoded to any one robot/task — today that's AR4 pick-and-place, but
+nothing here assumes that stays true.
 
 ## Prerequisites (this workstation, before building)
 
-1. `assets/ar4_mk5/ar4_mk5.usd` must already exist (`scripts/build_asset.py`
-   has already been run) — the Dockerfile fails the build early with a
-   clear error otherwise. It's already present as of this writing.
+1. `assets/` must already contain whatever the current task needs (run
+   that task's own asset-build script first, e.g. `scripts/build_asset.py`
+   for the AR4 work) — the Dockerfile fails the build early with a clear
+   error if `assets/` is empty. Already satisfied as of this writing.
 2. Docker is installed locally (confirmed: 27.3.1). `nvidia-container-toolkit`
    is **not** currently installed on this workstation, which means the
    image can be *built* here but not *run with GPU access* here — that's
@@ -41,7 +46,7 @@ echo "N" | python3 container.py start base
 # 2. Build this repo's image on top of it (verified working - a real
 #    24GB image built cleanly from this Dockerfile)
 cd /home/saps/projects/rl
-docker build -f docker/Dockerfile -t ar4-pickplace:latest .
+docker build -f docker/Dockerfile -t isaaclab-manipulation-rl:latest .
 ```
 
 ## Push to a registry
@@ -50,19 +55,19 @@ Pick one per the provider you're deploying to:
 
 ```bash
 # Docker Hub (works with any provider that can pull public/private images)
-docker tag ar4-pickplace:latest <dockerhub-username>/ar4-pickplace:latest
-docker push <dockerhub-username>/ar4-pickplace:latest
+docker tag isaaclab-manipulation-rl:latest <dockerhub-username>/isaaclab-manipulation-rl:latest
+docker push <dockerhub-username>/isaaclab-manipulation-rl:latest
 
 # AWS ECR
-aws ecr create-repository --repository-name ar4-pickplace
+aws ecr create-repository --repository-name isaaclab-manipulation-rl
 aws ecr get-login-password | docker login --username AWS --password-stdin <account-id>.dkr.ecr.<region>.amazonaws.com
-docker tag ar4-pickplace:latest <account-id>.dkr.ecr.<region>.amazonaws.com/ar4-pickplace:latest
-docker push <account-id>.dkr.ecr.<region>.amazonaws.com/ar4-pickplace:latest
+docker tag isaaclab-manipulation-rl:latest <account-id>.dkr.ecr.<region>.amazonaws.com/isaaclab-manipulation-rl:latest
+docker push <account-id>.dkr.ecr.<region>.amazonaws.com/isaaclab-manipulation-rl:latest
 
 # GCP Artifact Registry
-gcloud artifacts repositories create ar4-pickplace --repository-format=docker --location=<region>
-docker tag ar4-pickplace:latest <region>-docker.pkg.dev/<project-id>/ar4-pickplace/ar4-pickplace:latest
-docker push <region>-docker.pkg.dev/<project-id>/ar4-pickplace/ar4-pickplace:latest
+gcloud artifacts repositories create isaaclab-manipulation-rl --repository-format=docker --location=<region>
+docker tag isaaclab-manipulation-rl:latest <region>-docker.pkg.dev/<project-id>/isaaclab-manipulation-rl/isaaclab-manipulation-rl:latest
+docker push <region>-docker.pkg.dev/<project-id>/isaaclab-manipulation-rl/isaaclab-manipulation-rl:latest
 ```
 
 RunPod and Lambda Labs both accept a plain Docker Hub image reference
@@ -86,9 +91,9 @@ docker run --rm -it --gpus all --network host \
 Getting checkpoints/logs back off the instance: `logs/` is not baked
 into the image (excluded via `.dockerignore`, and gitignored in this
 repo too) — mount a volume or `docker cp` the container's
-`/workspace/ar4-pickplace/logs/` directory out before tearing the
-instance down, or `rsync`/`scp` it directly from the instance's host
-filesystem if not using `--network host` isolation.
+`/workspace/rl/logs/` directory out before tearing the instance down,
+or `rsync`/`scp` it directly from the instance's host filesystem if not
+using `--network host` isolation.
 
 ## Per-provider account setup (manual — needs your own payment method/identity)
 
@@ -111,7 +116,7 @@ launch, image push, and job dispatch from here.
 ## Publishing to Docker Hub (GitHub Action)
 
 `.github/workflows/docker-publish.yml` builds and pushes
-`ar4-pickplace:latest` to Docker Hub on manual trigger
+`isaaclab-manipulation-rl:latest` to Docker Hub on manual trigger
 (`workflow_dispatch`, deliberately not on every push — the image is
 huge and most commits don't touch anything the image needs to reflect).
 
@@ -132,9 +137,11 @@ huge and most commits don't touch anything the image needs to reflect).
 **Licensing consideration, worth resolving before making the Docker Hub
 repo public:** the bundled AR4 description assets are MIT-licensed
 (`annin_ar4_description`, redistribution-friendly with attribution,
-already satisfied by this README/repo crediting the upstream project).
-The base image itself is `nvcr.io/nvidia/isaac-sim`, NVIDIA's own
-proprietary Omniverse/Isaac Sim runtime under its own EULA — NVIDIA's
-container EULAs commonly restrict redistributing the runtime to third
-parties. Recommend keeping the Docker Hub repo **private** unless/until
-NVIDIA's exact terms have been checked.
+already satisfied by this README/repo crediting the upstream project) —
+this will need re-checking whenever a future task bundles a different
+robot's assets under a different license. The base image itself is
+`nvcr.io/nvidia/isaac-sim`, NVIDIA's own proprietary Omniverse/Isaac Sim
+runtime under its own EULA — NVIDIA's container EULAs commonly restrict
+redistributing the runtime to third parties. Recommend keeping the
+Docker Hub repo **private** unless/until NVIDIA's exact terms have been
+checked.

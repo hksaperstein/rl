@@ -552,3 +552,45 @@ def gripper_schedule_bonus(
     expected_open = env._path_waypoint_idx < 2
     matches = is_open == expected_open
     return matches.float()
+
+
+def antipodal_grasp_bonus(
+    env: ManagerBasedRLEnv,
+    force_threshold: float,
+    antipodal_cos_threshold: float,
+    jaw1_contact_cfg: SceneEntityCfg,
+    jaw2_contact_cfg: SceneEntityCfg,
+) -> torch.Tensor:
+    """Bilateral force-closure grasp bonus: requires both jaw contact
+    force magnitudes to exceed force_threshold AND their force
+    directions to be nearly anti-parallel (cosine of the angle between
+    them below antipodal_cos_threshold, e.g. -0.85 corresponds to a
+    ~30deg friction-cone half-angle) - the classical two-contact
+    force-closure necessary condition (Nguyen 1988, "Constructing
+    Force-Closure Grasps"; Ponce & Faverjon, "On Computing Two-Finger
+    Force-Closure Grasps of Curved 2D Objects," ICRA 1991/IJRR 1993).
+    Unlike contact_grasp_bonus (magnitude-only, kept unchanged and still
+    used by the original sphere-based pickplace_env_cfg.py task), this
+    also checks force *direction*, which force_matrix_w already
+    provides but contact_grasp_bonus discards via vector_norm. A real
+    bilateral contact-force reading can register from a non-antipodal,
+    physically-unstable pinch that classical theory says is not
+    actually resistant to gravity's wrench even though it satisfies a
+    magnitude-only check. See
+    docs/superpowers/specs/research/2026-07-06-classical-manipulation-senior-a.md.
+    """
+    jaw1_sensor: ContactSensor = env.scene[jaw1_contact_cfg.name]
+    jaw2_sensor: ContactSensor = env.scene[jaw2_contact_cfg.name]
+    # force_matrix_w shape: (num_envs, 1 body, 1 filter, 3) for each sensor.
+    jaw1_force_vec = jaw1_sensor.data.force_matrix_w.view(env.num_envs, 3)
+    jaw2_force_vec = jaw2_sensor.data.force_matrix_w.view(env.num_envs, 3)
+    jaw1_force_mag = torch.linalg.vector_norm(jaw1_force_vec, dim=-1)
+    jaw2_force_mag = torch.linalg.vector_norm(jaw2_force_vec, dim=-1)
+    both_magnitude_ok = (jaw1_force_mag > force_threshold) & (jaw2_force_mag > force_threshold)
+
+    jaw1_dir = jaw1_force_vec / (jaw1_force_mag.unsqueeze(-1) + 1e-8)
+    jaw2_dir = jaw2_force_vec / (jaw2_force_mag.unsqueeze(-1) + 1e-8)
+    cos_angle = torch.sum(jaw1_dir * jaw2_dir, dim=-1)
+    antipodal_ok = cos_angle < antipodal_cos_threshold
+
+    return (both_magnitude_ok & antipodal_ok).float()

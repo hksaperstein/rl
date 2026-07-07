@@ -162,11 +162,23 @@ class RewardsCfg:
         },
     )
 
-    contact_grasp_bonus = RewTerm(
-        func=ar4_mdp.contact_grasp_bonus,
-        weight=20.0,
+    # Replaces contact_grasp_bonus (magnitude-only, ungated) after two
+    # independent research passes found real problems with it: (1) it
+    # paid out every step regardless of lift progress, a ~9:1 reward-rate
+    # advantage for freezing after grasp vs. stillness_penalty's net -2,
+    # confirmed in real training data as a ~118:1 ratio; (2) it checked
+    # force magnitude only, not direction, missing the classical
+    # antipodal/force-closure condition. Weight reduced 20.0 -> 3.0 to
+    # close the reward-rate gap directly, on top of the stricter
+    # antipodal check. See
+    # docs/superpowers/specs/research/2026-07-06-rl-manipulation-senior-b.md
+    # and 2026-07-06-classical-manipulation-senior-a.md.
+    antipodal_grasp_bonus = RewTerm(
+        func=ar4_mdp.antipodal_grasp_bonus,
+        weight=3.0,
         params={
             "force_threshold": 0.05,
+            "antipodal_cos_threshold": -0.85,
             "jaw1_contact_cfg": SceneEntityCfg("gripper_jaw1_contact"),
             "jaw2_contact_cfg": SceneEntityCfg("gripper_jaw2_contact"),
         },

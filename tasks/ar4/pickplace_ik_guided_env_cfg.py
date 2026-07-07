@@ -33,8 +33,7 @@ from isaaclab.utils.configclass import configclass
 from isaaclab_tasks.manager_based.manipulation.lift import mdp
 
 from . import mdp as ar4_mdp
-from .env_cfg import ActionsCfg
-from .pickplace_mirror_env_cfg import Ar4PickPlaceMirrorSceneCfg
+from .pickplace_mirror_env_cfg import ActionsCfg, Ar4PickPlaceMirrorSceneCfg
 from .robot_cfg import ARM_JOINT_NAMES, GRIPPER_CLOSED_POS, GRIPPER_JOINT_NAMES, GRIPPER_OPEN_POS
 
 # Same values as pickplace_mirror_env_cfg.py's EventCfg/RewardsCfg reuse.
@@ -173,12 +172,21 @@ class RewardsCfg:
     # antipodal check. See
     # docs/superpowers/specs/research/2026-07-06-rl-manipulation-senior-b.md
     # and 2026-07-06-classical-manipulation-senior-a.md.
+    #
+    # antipodal_cos_threshold: -0.7071 (not -0.85) is physics-derived from
+    # the scene's actual static_friction=dynamic_friction=1.0 (confirmed in
+    # __post_init__'s sim.physics_material). The classical friction-cone
+    # half-angle is arctan(mu); for mu=1.0 that's 45°, giving a correct
+    # antipodal cosine threshold of cos(180° - 45°) = -0.7071. The previous
+    # -0.85 assumed ~30° friction-cone half-angle, causing the antipodal
+    # condition to fire ~1800x less often than magnitude-only checks (verified
+    # empirically in Experiment 9).
     antipodal_grasp_bonus = RewTerm(
         func=ar4_mdp.antipodal_grasp_bonus,
         weight=3.0,
         params={
             "force_threshold": 0.05,
-            "antipodal_cos_threshold": -0.85,
+            "antipodal_cos_threshold": -0.7071,
             "jaw1_contact_cfg": SceneEntityCfg("gripper_jaw1_contact"),
             "jaw2_contact_cfg": SceneEntityCfg("gripper_jaw2_contact"),
         },

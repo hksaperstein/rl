@@ -19,6 +19,7 @@ Import this module only after an Isaac Sim/Isaac Lab AppLauncher has been
 created.
 """
 
+import isaaclab.envs.mdp as isaaclab_mdp
 import isaaclab.sim as sim_utils
 from isaaclab.assets import ArticulationCfg, AssetBaseCfg, RigidObjectCfg
 from isaaclab.envs import ManagerBasedRLEnvCfg
@@ -36,10 +37,9 @@ from isaaclab.utils.configclass import configclass
 from isaaclab_tasks.manager_based.manipulation.lift import mdp
 
 from . import mdp as ar4_mdp
-from .env_cfg import ActionsCfg
 from .objects_cfg import CUBE_CFG
 from .pickplace_env_cfg import _EE_OFFSET
-from .robot_cfg import AR4_MK5_CFG
+from .robot_cfg import AR4_MK5_CFG, ARM_JOINT_NAMES, GRIPPER_CLOSED_POS, GRIPPER_JOINT_NAMES, GRIPPER_OPEN_POS
 
 # Env-local (robot-relative) workspace bounds this task randomizes the
 # cube's spawn and the goal's y-coordinate within. Defined independently
@@ -49,6 +49,31 @@ from .robot_cfg import AR4_MK5_CFG
 _WORKSPACE_X = (-0.30, 0.30)
 _WORKSPACE_Y = (0.10, 0.45)
 _GOAL_Z = (0.0, 0.02)
+
+
+@configclass
+class ActionsCfg:
+    """Action specifications for the cube-based tasks (mirror-goal and
+    classical-IK-guided): identical to env_cfg.py's shared ActionsCfg
+    except scale=0.5 instead of 1.0, matching Isaac Lab's own proven
+    Franka lift-task recipe
+    (isaaclab_tasks/manager_based/manipulation/lift/config/franka/joint_pos_env_cfg.py,
+    which uses scale=0.5). A smaller scale means the same policy-output
+    magnitude produces a finer joint-position correction per step,
+    which may matter more for the precise final approach/closing phase
+    of a grasp than it does for Franka's own free-space reaching.
+    Deliberately scoped to this file (not env_cfg.py's shared
+    ActionsCfg, scale=1.0, still used by the original sphere-based
+    pickplace_env_cfg.py task, grasp_demo.py, interactive_demo.py, and
+    perception scripts - none of those should change)."""
+
+    joint_positions = isaaclab_mdp.JointPositionActionCfg(asset_name="robot", joint_names=ARM_JOINT_NAMES, scale=0.5)
+    gripper_position = isaaclab_mdp.BinaryJointPositionActionCfg(
+        asset_name="robot",
+        joint_names=GRIPPER_JOINT_NAMES,
+        open_command_expr={name: GRIPPER_OPEN_POS for name in GRIPPER_JOINT_NAMES},
+        close_command_expr={name: GRIPPER_CLOSED_POS for name in GRIPPER_JOINT_NAMES},
+    )
 
 
 @configclass
@@ -73,8 +98,21 @@ class Ar4PickPlaceMirrorSceneCfg(InteractiveSceneCfg):
     # the cube task uses the standard size. Resting height (pos z) set to
     # 0.009 to match the default cube size so it sits properly on the
     # ground plane.
+    # Solver iteration counts boosted to match Isaac Lab's own Franka
+    # lift-task cube recipe (solver_position_iteration_count=16,
+    # solver_velocity_iteration_count=1 - well above PhysX defaults) for
+    # more stable, accurate contact resolution during grasping. Other
+    # rigid-body properties (disable_gravity, mass, collision) come from
+    # CUBE_CFG's own spawn config, unchanged.
     cube: RigidObjectCfg = CUBE_CFG.replace(
         init_state=RigidObjectCfg.InitialStateCfg(pos=(0.0, 0.275, 0.009)),
+        spawn=CUBE_CFG.spawn.replace(
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                disable_gravity=False,
+                solver_position_iteration_count=16,
+                solver_velocity_iteration_count=1,
+            )
+        ),
     )
 
     ee_frame: FrameTransformerCfg = FrameTransformerCfg(

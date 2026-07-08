@@ -1988,6 +1988,62 @@ follow-ups below.
          specific `PhysxMimicJointAPI` mechanism Experiment 19 already
          ruled out, but now the most concretely-evidenced next lever,
          ahead of demonstration/imitation bootstrapping.
+     - **Experiment 22: implement jaw synchronization as a software
+       control-loop (jaw2's target continuously tracks jaw1's actual
+       measured position) instead of Experiment 19's already-falsified
+       physics-level constraint. Verified working by three independent
+       checks, but exposed a new, different failure mode — reactive
+       lag — that itself explains the continued null result.** Design
+       spec:
+       `docs/superpowers/specs/2026-07-07-ar4-experiment22-software-jaw-mirroring-design.md`.
+       Full run data:
+       `docs/superpowers/plans/2026-07-07-ar4-experiment22-report.md`.
+       - **A genuine investigation was required before trusting this
+         run at all**: the full 1500-iteration training-time reward
+         trajectories were bit-for-bit identical to Experiment 21's, at
+         every logged point, including `reaching_object` (a pure
+         arm-position metric with no gripper dependency) — a serious
+         red flag investigated rather than dismissed or over-reacted
+         to. Re-running the instrumented contact diagnostic against
+         Experiment 22's own checkpoint (with raw per-step jaw
+         positions now also logged) confirmed the mechanism genuinely
+         is active — jaw2 diverges from jaw1 from the very first step
+         in a pattern consistent with real mirroring-with-lag — and the
+         two checkpoints' own contact diagnostics differ meaningfully
+         (Experiment 21: `max_jaw1_force=6.73N`; Experiment 22: `0.0N`),
+         proving the underlying learned policies are not identical
+         despite the aggregate scalars matching. Conclusion: a real,
+         non-obvious property of how coarse those specific logged
+         reward signals are (`pregrasp_readiness`'s closedness term
+         uses the *mean* of both jaws), not a sign the mechanism failed
+         to run — recorded in the report in full for any future
+         experiment comparing aggregate training scalars between
+         low-level-actuator-only config differences.
+       - **`both_magnitude_ok_steps` stays at exactly `0/750` and
+         `lifting_object` at `0/1500`** — null by the strict success
+         criteria, matching Experiments 17, 18, 20, and 21. But a new,
+         specific diagnostic (`max_jaw_pos_diff=0.011m`, 79% of the full
+         0.014m gripper travel range) explains *why* more precisely than
+         a bare null would: jaw2 reacts to where jaw1 *already is*, not
+         where it's headed, so whenever the policy moves the gripper
+         quickly, jaw2 structurally lags a full control step behind a
+         moving target. **Mirroring relocated the source of divergence
+         (from Task 6's asymmetric-tracking-under-load finding to a new
+         reactive-lag finding) rather than eliminating it.**
+       - **Net assessment: this narrows the software-mirroring design
+         space rather than closing it off.** A corrected version would
+         need to account for jaw1's *velocity* (e.g. tracking jaw1's own
+         commanded target, known instantly with zero lag, rather than
+         its physically-settled actual position, which is inherently
+         one step stale) — a concrete, specific next design, not a dead
+         end. Six consecutive experiments (17, 18, 19, 20, 21, 22) have
+         now each targeted a different specific mechanism for the same
+         underlying problem, narrowing it further each time without yet
+         resolving it — the two most concrete remaining levers are (a)
+         the corrected jaw1-target-following mirroring design just
+         identified, or (b) demonstration/imitation bootstrapping for
+         the lift primitive, increasingly the more attractive option
+         given how many independent mechanisms have now been tried.
 2. Shape classifier misclassifies cube/rectangular-prism as "sphere" against
    real depth data. Root-caused: `PLANARITY_RESIDUAL_THRESHOLD` (tuned on
    near-noiseless synthetic data) doesn't generalize to real sensor noise.

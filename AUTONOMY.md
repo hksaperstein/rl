@@ -38,6 +38,16 @@ checking in first:
   (spec-review gates, AskUserQuestion-style option menus), not just ad
   hoc technical choices.
 
+- **2026-07-07** — after Experiment 20 concluded and I gave a status
+  summary and stopped: *"in between experiments don't wait for my
+  input, continue on the roadmap and making progress toward the north
+  star."* Established: a completed experiment's report isn't a
+  checkpoint to pause at — the next experiment (choosing it, grounding
+  it, building it, running it) starts in the same turn, on the same
+  chain of reasoning that concluded the last one. This is the instruction
+  this file itself exists because of — written in direct response to it,
+  not as a hypothetical.
+
 Each of these was a correction to me stopping and checking in when I
 had enough information to just decide. None of them were about being
 less careful — they were about not making the user do the deciding I
@@ -62,6 +72,11 @@ Reading those instructions together, not narrowly:
 - Running the full Tier 1/Tier 2 workflow (spec → plan → execute) once
   the scientific-method gate is satisfied, without a stop between
   stages
+- Moving from one experiment's conclusion directly into designing and
+  running the next, chained end to end — a report being finished isn't
+  a natural stopping point, the ROADMAP's own open questions are. A
+  session's job doesn't end when an experiment does; it ends when
+  there's a genuine external blocker (see below) or the user says stop
 
 ## What still gets stopped on and flagged
 
@@ -88,6 +103,6 @@ Some findings are big enough that silently deciding and moving on
 would be presumptuous, but small enough (or my judgment sound enough)
 that a full stop-and-ask isn't warranted either. State the finding,
 state the decision, keep moving — that's different from asking
-permission first, and it's what the four instructions above actually
-ask for: decide, then let the user redirect if the call was wrong,
-rather than pausing to find out if the call is allowed.
+permission first, and it's what the instructions above actually ask
+for: decide, then let the user redirect if the call was wrong, rather
+than pausing to find out if the call is allowed.

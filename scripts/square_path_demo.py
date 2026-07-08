@@ -55,27 +55,21 @@ HOME_Q = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 CALIBRATION_C = -1.5677  # empirically measured joint_1 -> EE-azimuth offset (grasp_demo_v2.py investigation)
 
 # Square path: robot-frame, fixed height (parallel to ground), 4 corners +
-# 4 edge midpoints for a smoother traced outline. First attempt used
-# center (0.28, 0.0, 0.15) - the far corners (x=0.34) pinned joint_2 AND
-# joint_3 exactly at their hard limits (residual ~0.23m) while even the
-# near corners pinned joint_3 near its limit (residual ~0.09m). Lowered
-# and pulled closer in: grasp_demo_v2.py's own solved waypoints converged
-# cleanly (residual ~0.035m, joint_3 comfortably mid-range) at z=0.009 and
-# z=0.059 - z=0.15 was simply too high for this arm's geometry without
-# needing joint_3 near its positive limit. New center (0.25, 0.0, 0.08),
-# side 0.10m - corner distances from base: 0.206m-0.304m (closer than
-# before), height much lower (0.08, near the z=0.059 point that converged
-# well), both changes independently reduce the elbow extension needed.
+# 4 edge midpoints for a smoother traced outline. Kept the same
+# well-converged center/height (0.25, 0.0, 0.08) from the previous,
+# working iteration - just enlarged from side=0.10 to side=0.16. Corner
+# distances from base: 0.166m-0.339m, still comfortably inside the arm's
+# measured 0.538m reach envelope.
 SQUARE_Z = 0.08
 SQUARE_POINTS_B = [
-    (0.20, -0.05, SQUARE_Z),  # corner 1
-    (0.20, 0.00, SQUARE_Z),  # mid 1-2
-    (0.20, 0.05, SQUARE_Z),  # corner 2
-    (0.25, 0.05, SQUARE_Z),  # mid 2-3
-    (0.30, 0.05, SQUARE_Z),  # corner 3
-    (0.30, 0.00, SQUARE_Z),  # mid 3-4
-    (0.30, -0.05, SQUARE_Z),  # corner 4
-    (0.25, -0.05, SQUARE_Z),  # mid 4-1
+    (0.17, -0.08, SQUARE_Z),  # corner 1
+    (0.17, 0.00, SQUARE_Z),  # mid 1-2
+    (0.17, 0.08, SQUARE_Z),  # corner 2
+    (0.25, 0.08, SQUARE_Z),  # mid 2-3
+    (0.33, 0.08, SQUARE_Z),  # corner 3
+    (0.33, 0.00, SQUARE_Z),  # mid 3-4
+    (0.33, -0.08, SQUARE_Z),  # corner 4
+    (0.25, -0.08, SQUARE_Z),  # mid 4-1
 ]
 
 GRID_N = 15
@@ -182,7 +176,7 @@ def main() -> None:
 
     os.makedirs(os.path.dirname(VIDEO_PATH), exist_ok=True)
     video_writer = imageio.get_writer(VIDEO_PATH, fps=int(1.0 / env.step_dt), codec="libx264")
-    camera = env.scene["perception_camera"]
+    camera = env.scene["demo_camera"]
 
     with torch.inference_mode():
         env.reset()

@@ -153,3 +153,49 @@ class ProximityGatedBinaryJointPositionActionCfg(BinaryJointPositionActionCfg):
     proximity_threshold: float = MISSING
     """Distance (m) below which the policy's own gripper command passes
     through; at or above this distance the gripper is forced open."""
+
+
+class MirroredGripperAction(ProximityGatedBinaryJointPositionAction):
+    """Gripper action where gripper_jaw2_joint's commanded target
+    continuously tracks gripper_jaw1_joint's ACTUAL measured position
+    each step, rather than both jaws independently targeting a fixed
+    open/closed constant. Subclasses ProximityGatedBinaryJointPositionAction
+    (not plain BinaryJointPositionAction) so both mechanisms compose:
+    the gate still decides whether closing is allowed at all
+    (super().process_actions runs the gate logic first), then jaw2's
+    target is overridden to jaw1's live actual position regardless.
+
+    Implements mimic behavior as a software control-loop reference
+    rather than a PhysX-level constraint - Experiment 19's
+    PhysxMimicJointAPI-based approach was independently confirmed not
+    viable (two tested configurations both made jaw-position divergence
+    measurably worse than the uncoupled baseline). See
+    docs/superpowers/specs/2026-07-07-ar4-experiment22-software-jaw-mirroring-design.md.
+
+    Assumes joint_names orders gripper_jaw1_joint before
+    gripper_jaw2_joint - verified against the resolved joint names at
+    init, not assumed silently.
+    """
+
+    cfg: MirroredGripperActionCfg
+
+    def __init__(self, cfg: MirroredGripperActionCfg, env: ManagerBasedEnv) -> None:
+        super().__init__(cfg, env)
+        assert self._joint_names[0] == "gripper_jaw1_joint" and self._joint_names[1] == "gripper_jaw2_joint", (
+            f"MirroredGripperAction assumes joint order [gripper_jaw1_joint, gripper_jaw2_joint], "
+            f"got {self._joint_names}"
+        )
+
+    def process_actions(self, actions: torch.Tensor) -> None:
+        super().process_actions(actions)
+        jaw1_actual_pos = self._asset.data.joint_pos[:, self._joint_ids[0]]
+        self._processed_actions[:, 1] = jaw1_actual_pos
+
+
+@configclass
+class MirroredGripperActionCfg(ProximityGatedBinaryJointPositionActionCfg):
+    """No new fields - reuses ProximityGatedBinaryJointPositionActionCfg's
+    object_cfg/ee_frame_cfg/proximity_threshold. See
+    MirroredGripperAction."""
+
+    class_type: type[ActionTerm] = MirroredGripperAction

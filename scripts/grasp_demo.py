@@ -3,7 +3,10 @@ gripper on it, lift it, hold, then release.
 
 UPDATED: This version solves joint targets live using Isaac Lab's
 DifferentialIKController (once per waypoint, not every step), settles the arm
-to verify convergence, and records video + verifies grasp via contact forces.
+to verify convergence, and records video. Verification is joint-space/
+Cartesian convergence only - the gripper is treated as "dumb" (open/closed
+command only, no contact-force verification), matching the real AR4
+hardware, which has no gripper contact/force sensors either.
 
 The two Cartesian targets (pregrasp hover above cube, at-cube for grasp) are
 computed using the real simulator's end-effector position as ground truth for
@@ -69,12 +72,9 @@ GRIPPER_CLOSE = -1.0
 
 # IK solver constants
 IK_CONVERGENCE_THRESHOLD = 0.01  # meters (~1cm)
-MAX_IK_ROUNDS = 3
-IK_SETTLE_STEPS = 50  # steps to hold at each IK target before checking convergence
-
-# Grasp verification constants (same thresholds as antipodal_grasp_bonus)
-GRASP_FORCE_THRESHOLD = 0.05  # newtons
-GRASP_ANTIPODAL_COS_THRESHOLD = -0.7071  # cos(135°) for ~45° antipodal requirement
+IK_STEP_MAX = 0.05  # meters - bounded per-round Cartesian step (matches oracle_rollout.py's IK_PURSUIT_MAX_STEP)
+MAX_IK_ROUNDS = 40  # sized so 40 * IK_STEP_MAX = 2.0m of total reach, well over this arm's workspace
+IK_SETTLE_STEPS = 20  # steps to hold at each (now-small) per-round target before checking convergence
 
 
 def _log(msg: str) -> None:
@@ -118,18 +118,36 @@ def solve_ik_to_target(
     """
     robot = env.scene["robot"]
 
-    current_joint_pos = robot.data.joint_pos[:, robot_entity_cfg.joint_ids].clone()
-
     for round_num in range(max_rounds):
+        # Re-read the ACTUAL current joint state fresh every round (not the
+        # previous round's commanded target) - using a stale commanded value
+        # here as the Newton-step baseline, while the Jacobian/ee_pos below
+        # are read from the real (possibly-not-fully-settled) sim state,
+        # caused the residual to grow round-over-round instead of shrinking
+        # in an earlier version of this function.
+        current_joint_pos = robot.data.joint_pos[:, robot_entity_cfg.joint_ids].clone()
+
         # Get current end-effector pose
         ee_pose_w = robot.data.body_pose_w[:, robot_entity_cfg.body_ids[0]]
         ee_pos_b, ee_quat_b = subtract_frame_transforms(
             robot.data.root_pose_w[:, 0:3], robot.data.root_pose_w[:, 3:7], ee_pose_w[:, 0:3], ee_pose_w[:, 3:7]
         )
 
-        # Solve IK to the target in robot frame
+        # Bound the per-round Cartesian step fed to the DLS solve. Commanding
+        # the FULL remaining distance (which can be tens of cm) breaks the
+        # differential-IK linearization's local-validity assumption and
+        # produces wildly unrealistic joint deltas - the exact "unbounded IK
+        # Cartesian jump" bug already found and fixed in this repo's
+        # scripts/oracle_rollout.py (see IK_PURSUIT_MAX_STEP there). Bounding
+        # here means this function needs multiple rounds to close a large
+        # initial gap, which is fine - MAX_IK_ROUNDS is sized for that.
+        direction = target_pos_b - ee_pos_b
+        dist = torch.norm(direction, dim=-1, keepdim=True)
+        step_target_b = ee_pos_b + direction / (dist + 1e-8) * torch.clamp(dist, max=IK_STEP_MAX)
+
+        # Solve IK to the bounded step target in robot frame
         jacobian = robot.root_physx_view.get_jacobians()[:, ik_jacobi_idx, :, robot_entity_cfg.joint_ids]
-        ik_controller.set_command(target_pos_b, ee_pos=ee_pos_b, ee_quat=ee_quat_b)
+        ik_controller.set_command(step_target_b, ee_pos=ee_pos_b, ee_quat=ee_quat_b)
         joint_pos_des = ik_controller.compute(ee_pos_b, ee_quat_b, jacobian, current_joint_pos)
 
         # Step toward the target for settle_steps
@@ -158,51 +176,7 @@ def solve_ik_to_target(
             )
             return joint_pos_des
 
-        # Else: update current state and resolve
-        current_joint_pos = joint_pos_des.clone()
-
     return joint_pos_des
-
-
-def check_antipodal_grasp(
-    env: ManagerBasedEnv,
-    force_threshold: float = GRASP_FORCE_THRESHOLD,
-    antipodal_cos_threshold: float = GRASP_ANTIPODAL_COS_THRESHOLD,
-) -> tuple[bool, dict]:
-    """Check bilateral force-closure grasp condition during hold phase.
-    Returns (passes_check, diagnostics_dict) where passes_check is True if
-    both jaw contact forces exceed force_threshold AND their directions are
-    nearly antipodal (cosine < antipodal_cos_threshold)."""
-
-    # Only check if we actually have contact sensors
-    try:
-        jaw1_sensor = env.scene["gripper_jaw1_contact"]
-        jaw2_sensor = env.scene["gripper_jaw2_contact"]
-    except KeyError:
-        return False, {"error": "Contact sensors not available in this env"}
-
-    # force_matrix_w shape: (num_envs, 1 body, 1 filter, 3)
-    jaw1_force_vec = jaw1_sensor.data.force_matrix_w.view(env.num_envs, 3)
-    jaw2_force_vec = jaw2_sensor.data.force_matrix_w.view(env.num_envs, 3)
-
-    jaw1_force_mag = torch.linalg.vector_norm(jaw1_force_vec, dim=-1)
-    jaw2_force_mag = torch.linalg.vector_norm(jaw2_force_vec, dim=-1)
-
-    jaw1_dir = jaw1_force_vec / (jaw1_force_mag.unsqueeze(-1) + 1e-8)
-    jaw2_dir = jaw2_force_vec / (jaw2_force_mag.unsqueeze(-1) + 1e-8)
-    cos_angle = torch.sum(jaw1_dir * jaw2_dir, dim=-1)
-
-    both_magnitude_ok = (jaw1_force_mag > force_threshold) & (jaw2_force_mag > force_threshold)
-    antipodal_ok = cos_angle < antipodal_cos_threshold
-    passes_check = (both_magnitude_ok & antipodal_ok).all().item()
-
-    return passes_check, {
-        "jaw1_force_mag": jaw1_force_mag.item(),
-        "jaw2_force_mag": jaw2_force_mag.item(),
-        "cos_angle": cos_angle.item(),
-        "both_magnitude_ok": both_magnitude_ok.item(),
-        "antipodal_ok": antipodal_ok.item(),
-    }
 
 
 def main() -> None:
@@ -279,14 +253,12 @@ def main() -> None:
             (90, grasp_q_list, GRIPPER_OPEN),
             (60, grasp_q_list, GRIPPER_CLOSE),
             (90, pregrasp_q_list, GRIPPER_CLOSE),
-            (120, pregrasp_q_list, GRIPPER_CLOSE),  # Hold phase - we'll log grasp data here
+            (120, pregrasp_q_list, GRIPPER_CLOSE),  # Hold phase - cube-height telemetry logged here
             (60, pregrasp_q_list, GRIPPER_OPEN),
             (180, HOME_Q, GRIPPER_OPEN),
         ]
 
         prev_q = HOME_Q
-        hold_phase_idx = 5  # Index of the hold phase in PHASES
-        grasp_success_data = []
 
         _log("\n[INFO] Starting movement phases...\n")
 
@@ -309,52 +281,33 @@ def main() -> None:
                 # Convert from (H, W, 4) RGBA to (H, W, 3) RGB for video
                 video_writer.append_data(rgb[:, :, :3].astype("uint8"))
 
-                # Log grasp verification data during hold phase
-                if phase_idx == hold_phase_idx:
-                    try:
-                        passes_check, diagnostics = check_antipodal_grasp(env)
-                        if "error" not in diagnostics:
-                            grasp_success_data.append({
-                                "step": i,
-                                "passes_check": passes_check,
-                                "diagnostics": diagnostics,
-                            })
-
-                            if i % 20 == 0:  # Print every 20 steps to avoid spam
-                                print(
-                                    f"  Step {i:3d}: jaw1_force={diagnostics['jaw1_force_mag']:.4f}N, "
-                                    f"jaw2_force={diagnostics['jaw2_force_mag']:.4f}N, "
-                                    f"cos_angle={diagnostics['cos_angle']:.4f}, "
-                                    f"antipodal_ok={diagnostics['antipodal_ok']}"
-                                )
-                        elif i == 0:
-                            print(f"  [INFO] Contact sensors not available in this env config")
-                    except Exception as e:
-                        if i == 0:
-                            print(f"  [WARNING] Could not check grasp: {e}")
+                # Track cube height during the lift/hold/transit phases (indices 4-5:
+                # arm should be at PRE_GRASP_Q with gripper closed) as a cheap, purely
+                # kinematic (no contact sensor needed) signal of whether the cube is
+                # moving with the arm - not a substitute for a real grasp-quality
+                # check, just directional evidence for this joint-driving diagnostic.
+                if phase_idx in (4, 5) and i % 30 == 0:
+                    cube_z = env.scene["cube"].data.root_pos_w[0, 2].item()
+                    _log(f"  [PHASE {phase_idx} step {i:3d}] cube height (world z): {cube_z:.4f}m")
 
                 sleep_time = env.step_dt - (time.time() - step_start)
                 if sleep_time > 0:
                     time.sleep(sleep_time)
 
+            # End-of-phase joint convergence check: how close did the arm actually
+            # get to this phase's commanded target (the whole point of this script).
+            achieved_q = robot.data.joint_pos[0, robot_entity_cfg.joint_ids].tolist()
+            joint_error = [abs(a - t) for a, t in zip(achieved_q, target_q)]
+            max_joint_error = max(joint_error)
+            _log(
+                f"  [PHASE {phase_idx} END] max joint error vs. target: {max_joint_error:.5f} rad "
+                f"(achieved={['%.4f' % x for x in achieved_q]})"
+            )
+
             prev_q = target_q
 
         # Trigger a final reset so the recorder manager exports the episode
         env.reset()
-
-        # Print grasp verification summary
-        if grasp_success_data:
-            num_passes = sum(1 for d in grasp_success_data if d["passes_check"])
-            _log(f"\n[GRASP VERIFICATION SUMMARY]")
-            _log(f"  Hold phase steps: {len(grasp_success_data)}")
-            _log(f"  Steps passing antipodal check: {num_passes}/{len(grasp_success_data)}")
-            if num_passes > 0:
-                _log(f"  RESULT: Grasp verified (antipodal contact achieved)")
-            else:
-                _log(f"  RESULT: No antipodal grasp contact detected")
-        else:
-            _log(f"\n[GRASP VERIFICATION]: Contact sensors not available")
-            _log(f"[GRASP VERIFICATION]: Visual inspection of hold phase required")
 
     _log("\nDone. Holding window open for a few seconds before closing...")
     time.sleep(5.0)

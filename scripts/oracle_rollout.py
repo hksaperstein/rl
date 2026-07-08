@@ -80,42 +80,30 @@ raw actions are NOT bounded to [-1, 1] either - clamping the oracle's
 raw actions there was an earlier, incorrect assumption that pinned joints
 at the clamp boundary and reproduced the exact same stuck-at-0 symptom."""
 
-STALL_CHECK_INTERVAL = 25
-STALL_THRESHOLD = 0.005
-ESCAPE_STEPS = 15
-ESCAPE_PERTURBATION_SCALE = 0.03
-"""Stall-detection mechanism, direct port of classical_pickplace_demo.py's
-own _STALL_CHECK_INTERVAL/_STALL_THRESHOLD/_ESCAPE_STEPS/
-_ESCAPE_PERTURBATION_SCALE (same values, proven there), vectorized here for
-the num_envs > 1 case. Added after a Gate 1 smoke-test diagnostic (see
-task-1-report.md) showed pure bounded-pursuit differential IK genuinely
-converges for the first ~15-20 steps of an episode, then reverses and
-plateaus at a stable pose well short of the target - the textbook signature
-of a purely reactive Jacobian-IK controller stalling at a joint limit or
-kinematic singularity (no replanning, no escape from local minima), not a
-logic bug. classical_pickplace_demo.py already solves this for its
-single-env case; this ports the same trigger/timing mechanism per-env.
-ESCAPE_PERTURBATION_SCALE itself is no longer used to perturb Cartesian
-pursuit_delta (see ESCAPE_JOINT_PERTURBATION_SCALE below for why) but is
-left defined/unused-in-that-role here as a record of the original ported
-value; the actual escape injection now happens in joint space."""
+INTEGRAL_GAIN = 0.02
+"""Cartesian integral-error accumulator gain (untuned first-guess). Addresses
+steady-state PD droop in the IK pursuit controller: during receding-horizon
+bounded pursuit toward waypoints, Isaac Lab's pure-PD ImplicitActuator
+(stiffness=40.0, damping=4.0, no integral term) exhibits classic proportional-
+only control fixed-point behavior when pushed against a persistent disturbance
+(gravity load or singularity-driven joint-space coupling). The pursuit target
+is recomputed every step as current_ee_pos + bounded_step_toward_target, so
+if droop prevents reaching that step's sub-target, the next step's target just
+re-anchors to the same drooped position - leading to sustained nonzero computed
+torque at zero velocity (textbook P-only droop signature). Integrating the
+raw unbounded error direction (target - current_ee_pos in body frame, before
+bounding to IK_PURSUIT_MAX_STEP) and adding it to each pursuit_delta provides
+the missing error-accumulation that proportional-only control lacks, letting
+the controller escape the fixed point. This is well-established robotics theory:
+P+I control converges to zero steady-state error against constant disturbances
+where P-only does not."""
 
-ESCAPE_JOINT_PERTURBATION_SCALE = 0.05
-"""First-guess joint-space perturbation magnitude (radians, applied
-independently per arm joint) - NOT a previously-tuned/proven value like
-ESCAPE_PERTURBATION_SCALE above. Added when diagnostics showed the
-original Cartesian-space perturbation (added to pursuit_delta before the
-differential-IK solve) gets absorbed by the same damped-least-squares
-Jacobian pseudo-inverse that causes the stall in the first place: when the
-arm is genuinely stuck at a joint limit or near a kinematic singularity,
-the IK solver structurally suppresses motion in whatever Cartesian
-direction is causing the stall, so a small Cartesian nudge fed into that
-same solve gets absorbed rather than escaping it (verified:
-escape_steps_remaining cycled correctly across 7 separate triggers, but
-dist to the active waypoint moved <0.5mm over ~200 steps - see
-task-1-report.md's "Concerns for Principal" section). Perturbing
-joint_pos_des directly, AFTER the IK solve (see compute_ik_arm_raw_action),
-bypasses the Jacobian/singularity suppression entirely."""
+INTEGRAL_CLAMP = 0.15
+"""Anti-windup clamp for the accumulated integral error (meters, 3x
+IK_PURSUIT_MAX_STEP). Prevents the integral term from running away during
+the early phase of each episode when the end-effector is far from the target
+and bounded pursuit hasn't yet engaged, which could cause overshooting or
+excessive velocity commands."""
 
 
 def compute_ik_arm_raw_action(
@@ -139,22 +127,16 @@ def compute_ik_arm_raw_action(
     further clamped - see IK_PURSUIT_MAX_STEP's docstring for why an
     additional [-1, 1] clamp here would be both unnecessary and wrong.
 
-    Envs with env._escape_steps_remaining > 0 (set by update_stall_check)
-    get a random per-joint perturbation added directly to joint_pos_des,
-    AFTER the IK solve below, rather than to the pursuit direction before
-    it (the original, classical_pickplace_demo.py-ported approach). A
-    Cartesian-space perturbation added to pursuit_delta before the solve
-    gets suppressed by the same damped-least-squares Jacobian
-    pseudo-inverse that causes the stall: when the arm is stuck at a joint
-    limit or near a singularity, the IK solver structurally damps motion in
-    whatever Cartesian direction is causing the stall, so a small nudge fed
-    into that same solve gets absorbed rather than escaping it (verified
-    empirically - see ESCAPE_JOINT_PERTURBATION_SCALE's docstring).
-    Perturbing joint_pos_des directly, after the solve, bypasses the
-    Jacobian/singularity suppression entirely: this function's final
-    `raw = (joint_pos_des - default) / ARM_SCALE` round-trips the
-    perturbation exactly, with no IK solve left in between to suppress
-    it."""
+    To address steady-state PD droop (classic proportional-only control
+    fixed-point against persistent disturbance), this function maintains a
+    per-env Cartesian integral-error accumulator (env._pursuit_error_integral)
+    that accumulates the raw unbounded error direction (target - current_ee_pos)
+    each step. The accumulated integral term is clamped (anti-windup) and added
+    to the bounded pursuit_delta before computing the IK target, providing the
+    missing integral action that proportional-only control lacks. See INTEGRAL_GAIN
+    and INTEGRAL_CLAMP docstrings for mechanism details and why this fixes the
+    textbook P-only droop signature: nonzero computed_torque at zero velocity
+    with frozen joint_pos."""
     robot = env.scene["robot"]
     ee_frame = env.scene["ee_frame"]
 
@@ -177,24 +159,23 @@ def compute_ik_arm_raw_action(
 
     direction = ik_target_b - ee_pos_b
     dist = torch.norm(direction, dim=-1, keepdim=True)
+
+    # Accumulate the raw (unbounded) error direction into the integral term.
+    env._pursuit_error_integral += direction * INTEGRAL_GAIN
+    env._pursuit_error_integral = torch.clamp(
+        env._pursuit_error_integral, -INTEGRAL_CLAMP, INTEGRAL_CLAMP
+    )
+
     step_mag = torch.clamp(dist, max=IK_PURSUIT_MAX_STEP)
     pursuit_delta = direction / (dist + 1e-8) * step_mag
 
-    pursuit_target_b = ee_pos_b + pursuit_delta
+    # Add the accumulated integral term to provide I-action against steady-state droop.
+    pursuit_delta_with_integral = pursuit_delta + env._pursuit_error_integral
+
+    pursuit_target_b = ee_pos_b + pursuit_delta_with_integral
 
     ik_controller.set_command(pursuit_target_b, ee_pos=ee_pos_b, ee_quat=ee_quat_b)
     joint_pos_des = ik_controller.compute(ee_pos_b, ee_quat_b, jacobian, joint_pos)
-
-    escaping = env._escape_steps_remaining > 0
-    if escaping.any():
-        num_arm_joints = len(robot_entity_cfg.joint_ids)
-        perturbation = (
-            torch.rand(env.num_envs, num_arm_joints, device=env.device) * 2.0 - 1.0
-        ) * ESCAPE_JOINT_PERTURBATION_SCALE
-        joint_pos_des = joint_pos_des + perturbation * escaping.unsqueeze(-1).to(perturbation.dtype)
-        env._escape_steps_remaining = torch.where(
-            escaping, env._escape_steps_remaining - 1, env._escape_steps_remaining
-        )
 
     return (joint_pos_des - arm_default_joint_pos) / ARM_SCALE
 
@@ -225,11 +206,10 @@ def reset_waypoints_for_envs(env: ManagerBasedRLEnv, env_ids: torch.Tensor) -> N
     """Calls compute_path_waypoints directly (not via EventCfg, since
     this script does not modify the env cfg) for the given env_ids,
     immediately after those envs have been reset. Also (re)initializes
-    per-env stall-detection state (env._stall_check_pos/
-    env._escape_steps_remaining) for those env_ids, so a fresh episode
-    starts with a clean stall-tracking reference point and no leftover
-    escape perturbation from the previous episode - same convention as
-    env._path_waypoint_idx itself being reset per-episode."""
+    per-env integral-error accumulator state (env._pursuit_error_integral)
+    for those env_ids, so a fresh episode starts with zero accumulated
+    integral error - same convention as env._path_waypoint_idx itself being
+    reset per-episode."""
     ar4_mdp.compute_path_waypoints(
         env,
         env_ids,
@@ -240,46 +220,10 @@ def reset_waypoints_for_envs(env: ManagerBasedRLEnv, env_ids: torch.Tensor) -> N
         carry_height=CARRY_HEIGHT,
     )
 
-    if not hasattr(env, "_stall_check_pos"):
-        env._stall_check_pos = torch.zeros(env.num_envs, 3, device=env.device)
-        env._escape_steps_remaining = torch.zeros(env.num_envs, dtype=torch.long, device=env.device)
+    if not hasattr(env, "_pursuit_error_integral"):
+        env._pursuit_error_integral = torch.zeros(env.num_envs, 3, device=env.device)
 
-    robot = env.scene["robot"]
-    ee_frame = env.scene["ee_frame"]
-    root_pose_w = robot.data.root_pose_w
-    ee_pos_w = ee_frame.data.target_pos_w[:, 0, :]
-    ee_pos_b, _ = subtract_frame_transforms(root_pose_w[:, 0:3], root_pose_w[:, 3:7], ee_pos_w)
-
-    env._stall_check_pos[env_ids] = ee_pos_b[env_ids]
-    env._escape_steps_remaining[env_ids] = 0
-
-
-def update_stall_check(env: ManagerBasedRLEnv, step: int) -> None:
-    """Every STALL_CHECK_INTERVAL steps (skipping step 0, which only has
-    the reset-time initialization in env._stall_check_pos to compare
-    against - matching classical_pickplace_demo.py's own guard, there
-    expressed as `if stall_check_pos is not None`), flags envs whose
-    end-effector moved less than STALL_THRESHOLD in body-frame Cartesian
-    distance since the last check as stalled, granting them ESCAPE_STEPS
-    of randomized pursuit-direction perturbation (applied in
-    compute_ik_arm_raw_action). Direct port of
-    classical_pickplace_demo.py's stall-detection/escape mechanism,
-    vectorized per-env for num_envs > 1."""
-    if step == 0 or step % STALL_CHECK_INTERVAL != 0:
-        return
-
-    robot = env.scene["robot"]
-    ee_frame = env.scene["ee_frame"]
-    root_pose_w = robot.data.root_pose_w
-    ee_pos_w = ee_frame.data.target_pos_w[:, 0, :]
-    ee_pos_b, _ = subtract_frame_transforms(root_pose_w[:, 0:3], root_pose_w[:, 3:7], ee_pos_w)
-
-    moved = torch.norm(ee_pos_b - env._stall_check_pos, dim=-1)
-    stalled = moved < STALL_THRESHOLD
-    env._escape_steps_remaining = torch.where(
-        stalled, torch.full_like(env._escape_steps_remaining, ESCAPE_STEPS), env._escape_steps_remaining
-    )
-    env._stall_check_pos = ee_pos_b
+    env._pursuit_error_integral[env_ids] = 0.0
 
 
 def main() -> None:
@@ -308,8 +252,6 @@ def main() -> None:
 
     with torch.inference_mode():
         for step in range(250):
-            update_stall_check(env, step)
-
             arm_raw = compute_ik_arm_raw_action(env, ik_controller, robot_entity_cfg, ik_jacobi_idx, arm_default_joint_pos)
             # BinaryJointPositionAction's action_dim is always 1 regardless of how many
             # joints it internally controls (isaaclab/envs/mdp/actions/binary_joint_actions.py,
@@ -327,7 +269,7 @@ def main() -> None:
                 reset_waypoints_for_envs(env, done_ids)
 
             if step % 50 == 0:
-                print(f"[STEP {step:3d}] waypoint_idx={env._path_waypoint_idx.tolist()} escape_steps_remaining={env._escape_steps_remaining.tolist()}")
+                print(f"[STEP {step:3d}] waypoint_idx={env._path_waypoint_idx.tolist()}")
 
     print(f"[FINAL] waypoint_idx={env._path_waypoint_idx.tolist()}")
     print("[SMOKE RUN COMPLETE]")

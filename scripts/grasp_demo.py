@@ -34,6 +34,7 @@ simulation_app = app_launcher.app
 
 """Rest everything follows."""
 
+import imageio
 import torch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -43,12 +44,17 @@ from isaaclab.envs import ManagerBasedEnv
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.utils.math import subtract_frame_transforms
 
-from tasks.ar4.env_cfg import Ar4EnvCfg
+from tasks.ar4.grasp_verify_env_cfg import Ar4GraspVerifyEnvCfg
 from tasks.ar4.pickplace_env_cfg import _EE_OFFSET
 from tasks.ar4.robot_cfg import ARM_JOINT_NAMES
 
 LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs")
+VIDEO_PATH = os.path.join(LOG_DIR, "videos", "ar4_grasp_demo.mp4")
+DIAG_PATH = os.path.join(LOG_DIR, "grasp_demo_diag.txt")
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Open diagnostics file for writing
+diag_file = open(DIAG_PATH, "w")
 
 # Cube's known spawn position (from tasks/ar4/objects_cfg.py)
 CUBE_POS_W = (0.20, 0.28, 0.009)
@@ -69,6 +75,13 @@ IK_SETTLE_STEPS = 50  # steps to hold at each IK target before checking converge
 # Grasp verification constants (same thresholds as antipodal_grasp_bonus)
 GRASP_FORCE_THRESHOLD = 0.05  # newtons
 GRASP_ANTIPODAL_COS_THRESHOLD = -0.7071  # cos(135°) for ~45° antipodal requirement
+
+
+def _log(msg: str) -> None:
+    """Print to both stdout and diagnostic file."""
+    print(msg, flush=True)
+    diag_file.write(msg + "\n")
+    diag_file.flush()
 
 
 def _raise_window_in_background(title_substr: str, duration_s: float) -> None:
@@ -162,11 +175,11 @@ def check_antipodal_grasp(
     nearly antipodal (cosine < antipodal_cos_threshold)."""
 
     # Only check if we actually have contact sensors
-    if "gripper_jaw1_contact" not in env.scene._entity_names:
+    try:
+        jaw1_sensor = env.scene["gripper_jaw1_contact"]
+        jaw2_sensor = env.scene["gripper_jaw2_contact"]
+    except KeyError:
         return False, {"error": "Contact sensors not available in this env"}
-
-    jaw1_sensor = env.scene["gripper_jaw1_contact"]
-    jaw2_sensor = env.scene["gripper_jaw2_contact"]
 
     # force_matrix_w shape: (num_envs, 1 body, 1 filter, 3)
     jaw1_force_vec = jaw1_sensor.data.force_matrix_w.view(env.num_envs, 3)
@@ -193,13 +206,20 @@ def check_antipodal_grasp(
 
 
 def main() -> None:
-    # Create environment (Ar4EnvCfg uses joint position actions)
-    env_cfg = Ar4EnvCfg()
+    # Create environment (Ar4GraspVerifyEnvCfg uses joint position actions + contact sensors)
+    env_cfg = Ar4GraspVerifyEnvCfg()
     env_cfg.sim.device = args_cli.device
     env_cfg.recorders.dataset_export_dir_path = LOG_DIR
     env_cfg.recorders.dataset_filename = "grasp_demo"
 
     env = ManagerBasedEnv(cfg=env_cfg)
+
+    # Ensure logs/videos directory exists
+    os.makedirs(os.path.dirname(VIDEO_PATH), exist_ok=True)
+
+    # Set up video writer
+    video_writer = imageio.get_writer(VIDEO_PATH, fps=int(1.0 / env.step_dt), codec="libx264")
+    camera = env.scene["perception_camera"]
 
     total_steps_estimate = (120 + 180 + 90 + 60 + 90 + 120 + 60 + 180)  # phases
     run_time_s = total_steps_estimate * env.step_dt + 10.0
@@ -219,7 +239,7 @@ def main() -> None:
     with torch.inference_mode():
         env.reset()
 
-        print("[INFO] Computing IK targets for pregrasp and grasp waypoints...")
+        _log("[INFO] Computing IK targets for pregrasp and grasp waypoints...")
 
         # Convert world-frame targets to robot-frame
         # (Cube is at (0.20, 0.28, 0.009) in world frame)
@@ -234,18 +254,18 @@ def main() -> None:
         grasp_pos_b = cube_pos_b.clone()
         grasp_pos_b[:, 2] = GRASP_AT_HEIGHT
 
-        print(f"[INFO] Cube position (world): {CUBE_POS_W}")
-        print(f"[INFO] Cube position (robot frame): {cube_pos_b.tolist()}")
-        print(f"[INFO] Pregrasp target (robot frame): {pregrasp_pos_b.tolist()}")
-        print(f"[INFO] Grasp target (robot frame): {grasp_pos_b.tolist()}")
+        _log(f"[INFO] Cube position (world): {CUBE_POS_W}")
+        _log(f"[INFO] Cube position (robot frame): {cube_pos_b.tolist()}")
+        _log(f"[INFO] Pregrasp target (robot frame): {pregrasp_pos_b.tolist()}")
+        _log(f"[INFO] Grasp target (robot frame): {grasp_pos_b.tolist()}")
 
         # Solve IK for pregrasp and grasp
-        print("\n[INFO] Solving IK for PREGRASP waypoint...")
+        _log("\n[INFO] Solving IK for PREGRASP waypoint...")
         pregrasp_q = solve_ik_to_target(
             env, ik_controller, robot_entity_cfg, ik_jacobi_idx, pregrasp_pos_b[0].unsqueeze(0)
         )
 
-        print("\n[INFO] Solving IK for GRASP waypoint...")
+        _log("\n[INFO] Solving IK for GRASP waypoint...")
         grasp_q = solve_ik_to_target(env, ik_controller, robot_entity_cfg, ik_jacobi_idx, grasp_pos_b[0].unsqueeze(0))
 
         # Convert to lists for PHASES
@@ -268,10 +288,10 @@ def main() -> None:
         hold_phase_idx = 5  # Index of the hold phase in PHASES
         grasp_success_data = []
 
-        print("\n[INFO] Starting movement phases...\n")
+        _log("\n[INFO] Starting movement phases...\n")
 
         for phase_idx, (duration, target_q, gripper_cmd) in enumerate(PHASES):
-            print(f"[PHASE {phase_idx}] Duration: {duration} steps, Gripper: {'OPEN' if gripper_cmd > 0 else 'CLOSE'}")
+            _log(f"[PHASE {phase_idx}] Duration: {duration} steps, Gripper: {'OPEN' if gripper_cmd > 0 else 'CLOSE'}")
 
             for i in range(duration):
                 step_start = time.time()
@@ -283,6 +303,11 @@ def main() -> None:
                     action[:, j] = q[j]
                 action[:, num_arm_joints] = gripper_cmd
                 env.step(action)
+
+                # Capture and record frame
+                rgb = camera.data.output["rgb"][0].cpu().numpy()
+                # Convert from (H, W, 4) RGBA to (H, W, 3) RGB for video
+                video_writer.append_data(rgb[:, :, :3].astype("uint8"))
 
                 # Log grasp verification data during hold phase
                 if phase_idx == hold_phase_idx:
@@ -320,21 +345,25 @@ def main() -> None:
         # Print grasp verification summary
         if grasp_success_data:
             num_passes = sum(1 for d in grasp_success_data if d["passes_check"])
-            print(f"\n[GRASP VERIFICATION SUMMARY]")
-            print(f"  Hold phase steps: {len(grasp_success_data)}")
-            print(f"  Steps passing antipodal check: {num_passes}/{len(grasp_success_data)}")
+            _log(f"\n[GRASP VERIFICATION SUMMARY]")
+            _log(f"  Hold phase steps: {len(grasp_success_data)}")
+            _log(f"  Steps passing antipodal check: {num_passes}/{len(grasp_success_data)}")
             if num_passes > 0:
-                print(f"  RESULT: Grasp verified (antipodal contact achieved)")
+                _log(f"  RESULT: Grasp verified (antipodal contact achieved)")
             else:
-                print(f"  RESULT: No antipodal grasp contact detected")
+                _log(f"  RESULT: No antipodal grasp contact detected")
         else:
-            print(f"\n[GRASP VERIFICATION]: Contact sensors not available in Ar4EnvCfg")
-            print(f"[GRASP VERIFICATION]: Visual inspection of hold phase required")
+            _log(f"\n[GRASP VERIFICATION]: Contact sensors not available")
+            _log(f"[GRASP VERIFICATION]: Visual inspection of hold phase required")
 
-    print("\nDone. Holding window open for a few seconds before closing...")
+    _log("\nDone. Holding window open for a few seconds before closing...")
     time.sleep(5.0)
+    video_writer.close()
     env.close()
-    print(f"Joint data recorded to: {LOG_DIR}")
+    _log(f"Joint data recorded to: {LOG_DIR}")
+    _log(f"Video recorded to: {VIDEO_PATH}")
+    _log(f"Diagnostics recorded to: {DIAG_PATH}")
+    diag_file.close()
 
 
 if __name__ == "__main__":

@@ -2278,6 +2278,43 @@ follow-ups below.
    `docs/superpowers/plans/2026-07-08-ar4-experiment24-gate1-report.md`.
    Gate 2's implementation plan was explicitly not written, per the
    original plan's own scope note for a FAIL verdict.
+7. **A purely classical (non-RL) IK-driven joint pipeline also cannot
+   reliably reach the cube's grasp pose — likely a genuine kinematic
+   obstruction, not an RL or per-script bug.** Prompted by revisiting
+   Experiments 11-15 (whose scalar-only "promising" trends were never
+   trustworthy — same ungated-reward blind spot Experiment 16 later
+   exposed) and a direct redirect to verify basic classical joint driving
+   first. `scripts/grasp_demo.py` (dormant since this repo's first
+   commits) was rebuilt to solve IK once per waypoint via live simulator
+   feedback (not a reactive per-step loop), with two real bugs found and
+   fixed along the way — a stale-joint-state carry-over, and the same
+   "unbounded IK Cartesian jump" bug `scripts/oracle_rollout.py` already
+   found (a single DLS Newton step toward a target tens of cm away
+   produces unrealistic joint deltas; fixed by bounding the per-round
+   step to 0.05m, matching `oracle_rollout.py`'s own fix). Bounding the
+   step stopped the residual from diverging (was growing 0.35m→0.67m,
+   now improves 0.9m→0.33m) but it still plateaus well short of the
+   cube — verified via both logged telemetry and video-frame inspection,
+   cube height frozen at spawn throughout the lift/hold phases, gripper
+   visibly separated from the cube in every sampled frame. Both the
+   pregrasp and grasp waypoints (5cm apart) independently converged to
+   nearly the identical stuck joint configuration. **This is the fourth
+   independent script/mechanism** (the original `classical_pickplace_demo.py`
+   kinematic-singularity stall, plus three architecturally distinct
+   attempts across `oracle_rollout.py`/`grasp_demo.py`) **to hit the same
+   "converges partway, then stalls" signature at/near this cube
+   position**, independent of RL, independent of action-space
+   formulation. Grasp-force verification via contact sensors was
+   deliberately dropped from this diagnostic per direct instruction — the
+   real AR4 hardware has no gripper force sensors either, so the gripper
+   is treated as "dumb" (open/closed command only), matching hardware.
+   Not yet investigated: whether `(0.20, 0.28, 0.009)` is genuinely within
+   this arm's comfortable reach envelope for a straight-down approach at
+   all (joint-limit/self-collision check against the actual USD, or a
+   deliberately non-straight-down approach angle) — this is the natural
+   next question, and a plausible deeper explanation for a meaningful
+   share of this repo's "lift never emerges" history, independent of
+   reward shaping.
 
 ## Direction
 

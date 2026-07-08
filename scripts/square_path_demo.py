@@ -55,19 +55,27 @@ HOME_Q = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 CALIBRATION_C = -1.5677  # empirically measured joint_1 -> EE-azimuth offset (grasp_demo_v2.py investigation)
 
 # Square path: robot-frame, fixed height (parallel to ground), 4 corners +
-# 4 edge midpoints for a smoother traced outline. Center (0.28, 0.0, 0.15),
-# side 0.12m - comfortably inside the arm's measured 0.538m reach envelope
-# (corner distances from base: 0.228m-0.345m) and clear of the ground/cube.
-SQUARE_Z = 0.15
+# 4 edge midpoints for a smoother traced outline. First attempt used
+# center (0.28, 0.0, 0.15) - the far corners (x=0.34) pinned joint_2 AND
+# joint_3 exactly at their hard limits (residual ~0.23m) while even the
+# near corners pinned joint_3 near its limit (residual ~0.09m). Lowered
+# and pulled closer in: grasp_demo_v2.py's own solved waypoints converged
+# cleanly (residual ~0.035m, joint_3 comfortably mid-range) at z=0.009 and
+# z=0.059 - z=0.15 was simply too high for this arm's geometry without
+# needing joint_3 near its positive limit. New center (0.25, 0.0, 0.08),
+# side 0.10m - corner distances from base: 0.206m-0.304m (closer than
+# before), height much lower (0.08, near the z=0.059 point that converged
+# well), both changes independently reduce the elbow extension needed.
+SQUARE_Z = 0.08
 SQUARE_POINTS_B = [
-    (0.22, -0.06, SQUARE_Z),  # corner 1
-    (0.22, 0.00, SQUARE_Z),  # mid 1-2
-    (0.22, 0.06, SQUARE_Z),  # corner 2
-    (0.28, 0.06, SQUARE_Z),  # mid 2-3
-    (0.34, 0.06, SQUARE_Z),  # corner 3
-    (0.34, 0.00, SQUARE_Z),  # mid 3-4
-    (0.34, -0.06, SQUARE_Z),  # corner 4
-    (0.28, -0.06, SQUARE_Z),  # mid 4-1
+    (0.20, -0.05, SQUARE_Z),  # corner 1
+    (0.20, 0.00, SQUARE_Z),  # mid 1-2
+    (0.20, 0.05, SQUARE_Z),  # corner 2
+    (0.25, 0.05, SQUARE_Z),  # mid 2-3
+    (0.30, 0.05, SQUARE_Z),  # corner 3
+    (0.30, 0.00, SQUARE_Z),  # mid 3-4
+    (0.30, -0.05, SQUARE_Z),  # corner 4
+    (0.25, -0.05, SQUARE_Z),  # mid 4-1
 ]
 
 GRID_N = 15
@@ -129,6 +137,14 @@ def solve_point(env, ik_controller, robot_entity_cfg, ik_jacobi_idx, target_pos_
         jacobian = robot.root_physx_view.get_jacobians()[:, ik_jacobi_idx, :, robot_entity_cfg.joint_ids]
         ik_controller.set_command(step_target_b, ee_pos=ee_pos_b, ee_quat=ee_quat_b)
         joint_pos_des = ik_controller.compute(ee_pos_b, ee_quat_b, jacobian, current_joint_pos)
+        # Lock joint_1 to its calibrated seed value during polish - letting
+        # DLS freely adjust all 3 joints let it drag joint_1 far from a
+        # good grid-search seed on 2/8 square-path points this session,
+        # landing much worse (0.24m/0.30m residual) despite the grid
+        # search itself having found a good starting point. Restricting
+        # polish to the 2 DOF it actually needs (matching the calibrated
+        # bearing already established for joint_1) avoids that failure mode.
+        joint_pos_des[:, 0] = seed_j1
         for _ in range(POLISH_SETTLE_STEPS):
             action = torch.zeros(env.num_envs, num_arm_joints + 1, device=env.device)
             for j in range(num_arm_joints):

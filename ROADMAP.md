@@ -2308,13 +2308,47 @@ follow-ups below.
    deliberately dropped from this diagnostic per direct instruction — the
    real AR4 hardware has no gripper force sensors either, so the gripper
    is treated as "dumb" (open/closed command only), matching hardware.
-   Not yet investigated: whether `(0.20, 0.28, 0.009)` is genuinely within
-   this arm's comfortable reach envelope for a straight-down approach at
-   all (joint-limit/self-collision check against the actual USD, or a
-   deliberately non-straight-down approach angle) — this is the natural
-   next question, and a plausible deeper explanation for a meaningful
-   share of this repo's "lift never emerges" history, independent of
-   reward shaping.
+   **Update, same session: this was investigated further and the
+   unreachability hypothesis was refuted — see item 8 below.**
+8. **Resolved: the stall was a DLS Newton-step local-minimum trap, not
+   genuine unreachability — the arm CAN be driven to within a few
+   centimeters of the cube via grid-search-then-polish.** Direct forward-
+   kinematics measurement (`scripts/measure_reach_envelope.py`, no IK
+   solver involved at all) proved the cube target is comfortably within
+   the arm's reach envelope (0.538m max measured reach vs. 0.344m
+   needed) — refuting item 7's unreachability hypothesis. Seeding the
+   proven bounded-step DLS solve from a geometrically-aimed starting
+   configuration (`scripts/ik_seeded_start.py`, after empirically
+   recalibrating a wrong assumed joint_1-to-azimuth sign convention)
+   barely helped, confirming the DLS iteration itself gets trapped in a
+   local minimum independent of starting direction. A direct forward-
+   kinematics grid search (`scripts/ik_grid_search.py`, 625 points, no
+   iteration, can't get stuck in a local minimum) found a configuration
+   within 3.5-6cm of the target; a DLS polish from that seed
+   (`scripts/ik_polish_from_grid.py`) closed it to 3.648cm before
+   plateauing again (same bit-exact fixed-point signature as every prior
+   attempt) — DLS still can't fully close even a small, well-conditioned
+   gap on its own. `scripts/grasp_demo_v2.py` applied this method to both
+   waypoints and ran the full phased pick/lift/hold/release sequence,
+   also finding and fixing a second real bug (phase-transition
+   interpolation using the previous phase's intended target as the next
+   phase's baseline instead of its actual achieved position — the
+   "correct-looking" fix, re-reading actual state each phase, made
+   things far worse since this arm's actuators track a fixed commanded
+   target much better than a continuously-ramping one; reverted to
+   direct target-commanding per phase). Result: joint tracking improved
+   to ~0.19-0.32 rad residual, and video shows the gripper genuinely
+   close to the cube for the first time this session (previously the
+   cube sat completely disconnected from the arm in every attempt) — but
+   the cube still never moves; the combined IK gap plus phase-tracking
+   residual is still enough to miss contact. **Net: the classical joint-
+   driving reachability question is answered (yes, with the right
+   method) — a full clean grasp+lift is not yet achieved, and closing
+   the remaining few centimeters (finer/better-centered grid search,
+   longer per-phase settle time, or re-solving from the actual achieved
+   state at each phase transition) is flagged as an open next step, not
+   pursued indefinitely this session.** Full evidence trail: see the
+   commit `8b72ef7` message and the conversation record.
 
 ## Direction
 

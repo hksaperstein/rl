@@ -12,9 +12,16 @@ mdp.py uses (tasks/ar4/mdp.py), reproduced inline exactly as Experiments
   - grasp_ok:           both_magnitude_ok AND antipodal_ok
   - gate_fires:         height_ok AND grasp_ok
 
-Also logs residual_authority (expected 1.0 throughout, since training is
-complete and _step_count is already far past warmup_steps by the time
-this checkpoint was saved) and gripper joint positions.
+Also logs residual_authority and gripper joint positions. NOTE:
+_step_count is action-term instance state, not part of the saved
+checkpoint (runner.load() restores only network weights) - a fresh env
+here re-ramps residual_authority from 0 regardless of how much training
+the loaded policy actually saw, so do NOT assume this reads 1.0
+throughout. See docs/superpowers/plans/2026-07-07-ar4-experiment23-report.md's
+"Important Methodological Note" section for the full explanation and
+the fix needed (force _step_count past warmup_steps at construction)
+before this script's own residual_authority readout can be trusted as
+representing the fully-trained policy's behavior.
 
 .. code-block:: bash
 

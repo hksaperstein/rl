@@ -2044,6 +2044,63 @@ follow-ups below.
          identified, or (b) demonstration/imitation bootstrapping for
          the lift primitive, increasingly the more attractive option
          given how many independent mechanisms have now been tried.
+     - **Experiment 23: residual RL over a classical 5-waypoint pursuit
+       controller, with the specific literature-grounded warm-start
+       (Johannink et al. 2019) Experiment 13's own ROADMAP entry
+       diagnosed as missing but never implemented — a structurally new
+       direction after six consecutive reward/action-space tweaks
+       (17-22), not a seventh tweak on the same paradigm. Warm-start
+       mechanism independently verified genuinely working via a hard
+       gate; still null.** Design spec:
+       `docs/superpowers/specs/2026-07-07-ar4-experiment23-warmstarted-residual-design.md`.
+       Full run data:
+       `docs/superpowers/plans/2026-07-07-ar4-experiment23-report.md`.
+       - **Hard gate passed before committing to the full run**: a real
+         1300-step env rollout confirmed `residual_authority` (the new
+         action term's warm-start ramp) genuinely rises from ~0 at step
+         0 to exactly 1.0 at step 1200 and stays clamped, reading the
+         live action term's own internal state inside an actual
+         `ManagerBasedRLEnv` — independently re-verified by a reviewer
+         who recomputed every logged value against the ramp formula and
+         confirmed it matches the term's real internal blend exactly,
+         not just a self-reported "PASS".
+       - **`lifting_object` stays at exactly `0/1500`, `both_magnitude_ok_steps`
+         at exactly `0/750`** — null by the strict criteria, matching
+         Experiments 17, 18, 20, 21, and 22. Since the warm-start
+         mechanism is now independently confirmed to genuinely work,
+         this specifically falsifies "the warm-start gap explains
+         Experiment 13's regression and blocks the residual mechanism
+         from working" — the classical-base-plus-residual paradigm
+         itself appears to be a more fundamental non-fit for this
+         task's grasp/lift sub-problem, not an implementation-gap
+         problem.
+       - **A genuine methodological gap was found and recorded, not
+         glossed over**: the contact diagnostic's own log revealed
+         `residual_authority` only reached 0.625 by the diagnostic's own
+         final step, not 1.0 — because `_step_count` lives on the action
+         term instance, not in the saved checkpoint, so a fresh
+         diagnostic script re-ramps from zero regardless of how much
+         training the loaded policy actually saw. This does NOT
+         confound the training-time result itself (the policy spent
+         ~97% of its 1500-iteration training run at full authority,
+         `warmup_steps=1200` being only ~3.3% of the 36,000-step
+         budget) but is a real gap in this repo's residual-action
+         diagnostic tooling worth fixing (force `_step_count` past
+         `warmup_steps` at construction) before trusting any future
+         residual-RL diagnostic's contact numbers at face value.
+       - **Net assessment: eight consecutive experiments (13, 17-23)
+         spanning reward shaping, grasp gating, orientation bias,
+         proximity gating, software jaw mirroring, and now
+         warm-started residual RL, have all converged on the identical
+         null.** Having now exhausted the most well-grounded remaining
+         variant within the reward/action-space-engineering-over-pure-
+         PPO-exploration technique family, demonstration/imitation
+         bootstrapping (previously deferred as impractical given a
+         human-teleoperation requirement) is the most concretely
+         justified next direction — either a from-scratch expert-
+         controller-generated demonstration pipeline bypassing that
+         requirement, or a renewed look at what such a pipeline would
+         concretely require in this repo's specific setup.
 2. Shape classifier misclassifies cube/rectangular-prism as "sphere" against
    real depth data. Root-caused: `PLANARITY_RESIDUAL_THRESHOLD` (tuned on
    near-noiseless synthetic data) doesn't generalize to real sensor noise.

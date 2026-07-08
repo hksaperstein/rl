@@ -1,6 +1,7 @@
 assets/
 logs/
 .superpowers/sdd/
+.vscode/
 __pycache__/
 *.py[cod]
 *$py.class

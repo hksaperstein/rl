@@ -1,0 +1,220 @@
+{
+  "main": {
+    "id": "cfccee7665284f5b",
+    "type": "split",
+    "children": [
+      {
+        "id": "a616c8cdf060cb34",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "b55acdbfbd5ebf33",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "wiki/experiments/experiment-06-mirror-scene-stillness-penalty.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "experiment-06-mirror-scene-stillness-penalty"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "vertical"
+  },
+  "left": {
+    "id": "4c6407638d8fc872",
+    "type": "split",
+    "children": [
+      {
+        "id": "67c2e87ebcea61aa",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "049d7384a9e5040d",
+            "type": "leaf",
+            "state": {
+              "type": "file-explorer",
+              "state": {
+                "sortOrder": "alphabetical",
+                "autoReveal": false
+              },
+              "icon": "lucide-folder-closed",
+              "title": "Files"
+            }
+          },
+          {
+            "id": "55eaa8f624aca359",
+            "type": "leaf",
+            "state": {
+              "type": "search",
+              "state": {
+                "query": "",
+                "matchingCase": false,
+                "explainSearch": false,
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical"
+              },
+              "icon": "lucide-search",
+              "title": "Search"
+            }
+          },
+          {
+            "id": "822c668dfb9d2b0f",
+            "type": "leaf",
+            "state": {
+              "type": "bookmarks",
+              "state": {},
+              "icon": "lucide-bookmark",
+              "title": "Bookmarks"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300
+  },
+  "right": {
+    "id": "aba4111a167501fb",
+    "type": "split",
+    "children": [
+      {
+        "id": "652ed1e51821f911",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "46d4ddd2fee1d3f2",
+            "type": "leaf",
+            "state": {
+              "type": "backlink",
+              "state": {
+                "file": "wiki/experiments/experiment-06-mirror-scene-stillness-penalty.md",
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical",
+                "showSearch": false,
+                "searchQuery": "",
+                "backlinkCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-coming-in",
+              "title": "Backlinks for experiment-06-mirror-scene-stillness-penalty"
+            }
+          },
+          {
+            "id": "e3d2fe24351821f1",
+            "type": "leaf",
+            "state": {
+              "type": "outgoing-link",
+              "state": {
+                "linksCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-going-out",
+              "title": "Outgoing links"
+            }
+          },
+          {
+            "id": "37e86ce730bfe6c5",
+            "type": "leaf",
+            "state": {
+              "type": "tag",
+              "state": {
+                "sortOrder": "frequency",
+                "useHierarchy": true,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-tags",
+              "title": "Tags"
+            }
+          },
+          {
+            "id": "a0a759846a81a630",
+            "type": "leaf",
+            "state": {
+              "type": "all-properties",
+              "state": {
+                "sortOrder": "frequency",
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-archive",
+              "title": "All properties"
+            }
+          },
+          {
+            "id": "3aef4c67c439b659",
+            "type": "leaf",
+            "state": {
+              "type": "outline",
+              "state": {
+                "followCursor": false,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-list",
+              "title": "Outline"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 717.5,
+    "collapsed": true
+  },
+  "left-ribbon": {
+    "hiddenItems": {
+      "switcher:Open quick switcher": false,
+      "graph:Open graph view": false,
+      "canvas:Create new canvas": false,
+      "daily-notes:Open today's daily note": false,
+      "templates:Insert template": false,
+      "command-palette:Open command palette": false,
+      "bases:Create new base": false
+    }
+  },
+  "active": "b55acdbfbd5ebf33",
+  "lastOpenFiles": [
+    "wiki/experiments/experiment-07-sphere-shrink.md",
+    "wiki/experiments/experiment-08-classical-ik-guided-path.md",
+    "wiki/experiments/experiment-09-antipodal-grasp-bonus.md",
+    "wiki/experiments/experiment-10-antipodal-threshold-action-scale-solver.md",
+    "wiki/experiments/experiment-11-taskspace-ik.md",
+    "wiki/experiments/experiment-12-stillness-reward-rate.md",
+    "wiki/experiments/experiment-14-reach-skip-curriculum.md",
+    "wiki/experiments/experiment-13-residual-rl.md",
+    "wiki/experiments/experiment-05-potential-based-reward-shaping.md",
+    "wiki/experiments/experiment-02-curriculum-gated-lift-height.md",
+    "wiki/concepts/reward-hacking-and-sparse-discoverability.md",
+    "wiki/concepts/reach-grasp-lift-gap.md",
+    "wiki/concepts/ppo-critic-divergence.md",
+    "wiki/concepts/citation-verification-practice.md",
+    "wiki/concepts/action-space-design.md",
+    "wiki/experiments/experiment-01-contact-sensor-grasp-reward.md",
+    "wiki/concepts/grasp-mechanics-antipodal-vs-magnitude.md",
+    "wiki/concepts/reward-rate-arithmetic.md",
+    "wiki/experiments/experiment-03-always-on-lift-height.md",
+    "wiki/experiments/experiment-04-sa-ppo-lr-bump.md",
+    "wiki/experiments/experiment-05-potential-based-reward-shaping.md.tmp.4962.61463fdb6f84",
+    "wiki/experiments/experiment-04-sa-ppo-lr-bump.md.tmp.4962.7057c45ca2f2",
+    "wiki/experiments/experiment-03-always-on-lift-height.md.tmp.4962.c67299ab8016",
+    "wiki/experiments/experiment-02-curriculum-gated-lift-height.md.tmp.4962.aae051bab9ac",
+    "wiki/experiments/experiment-01-contact-sensor-grasp-reward.md.tmp.4962.e27c4b0df853",
+    "README.md",
+    "wiki/experiments/experiment-06-mirror-scene-stillness-penalty.md",
+    "wiki/index.md.tmp.4962.f7eff121e71d",
+    "wiki/concepts/citation-verification-practice.md.tmp.4962.53d3b3833623",
+    "wiki/concepts/reward-hacking-and-sparse-discoverability.md.tmp.4962.9b82ed3e1fa6",
+    "wiki/concepts/reach-grasp-lift-gap.md.tmp.4962.3cda23252561",
+    "wiki/concepts/grasp-mechanics-antipodal-vs-magnitude.md.tmp.4962.9908909071a5",
+    "wiki/index.md"
+  ]
+}

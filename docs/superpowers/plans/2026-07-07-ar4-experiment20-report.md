@@ -172,3 +172,54 @@ guidance and this project's established practice, `lifting_object`
 remaining exactly `0/1500` with unambiguous scalar evidence means video
 would add nothing new — there is no nonzero occurrence to visually
 characterize.
+
+## Addendum: Instrumented Antipodal-Contact Diagnostic
+
+Following this report's own "Net assessment" recommendation, ran a
+Task-6-style instrumented rollout of the final checkpoint
+(`model_1499.pt`, 3 episodes, 750 total steps) reproducing
+`antipodal_grasp_bonus`'s exact sub-condition computation inline, to
+determine whether antipodal contact is ever reached at all now that
+orientation-alignment is solved.
+
+```
+[SUMMARY] total_steps=750 height_ok_steps=0 both_magnitude_ok_steps=0
+antipodal_ok_steps=0 grasp_ok_steps=0 gate_fires_steps=0
+max_jaw1_force=0.0 max_jaw2_force=2.227085 max_cube_z=0.009049
+min_orientation_dot=0.016509 max_orientation_dot=0.999778
+```
+
+**`height_ok_steps=0`, `max_cube_z=0.00905`** — consistent with every
+prior experiment: the cube never leaves the ground by any margin
+(spawn/resting height is 0.009).
+
+**`max_orientation_dot=0.9998`** confirms the policy does achieve
+near-perfect vertical alignment at times during this rollout (0.9998 ≈
+1 degree off straight down) — direct, per-step confirmation the
+mechanism works in practice, not just in the training-time aggregate
+reward.
+
+**The failure signature itself has changed from Experiment 17's Task 6
+finding.** There, both jaws registered contact force simultaneously
+(`both_magnitude_ok_steps=231/750`) in a non-antipodal wedge. Here,
+**`both_magnitude_ok_steps=0/750` — `gripper_jaw1_joint`'s contact
+sensor never registers any force at all across the entire rollout**
+(`max_jaw1_force=0.0`), while `gripper_jaw2_joint` does register contact
+intermittently (`max_jaw2_force=2.23N`). This is a genuinely different,
+asymmetric failure mode, not a repeat of Experiment 17's wedge signature.
+
+**Interpretation:** with the orientation problem now solved, the
+gripper can approach vertically, but the two jaws are not making
+symmetric contact with the cube at all — consistent with, though not
+independently re-confirmed here, the mimic-joint mechanical defect
+Experiment 17's Task 6 and Experiment 19's own investigation already
+established as real and unresolved (jaw2 tracks its commanded position
+20% worse than jaw1 under load). An asymmetric gripper that closes
+unevenly would plausibly produce exactly this pattern: one jaw reaching
+the cube, the other consistently falling short or drifting past it.
+This reframes the mimic-joint defect's priority — Experiment 19 closed
+out the specific `PhysxMimicJointAPI`-based fix as not viable, but the
+underlying mechanical asymmetry itself remains a live, and now more
+directly implicated, candidate blocker, independent of a `PhysxMimicJointAPI`-specific
+solution (e.g. a different coupling mechanism, or hardware-level
+verification of the real robot's actual mimic linkage).

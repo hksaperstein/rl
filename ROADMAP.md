@@ -1904,6 +1904,33 @@ follow-ups below.
          shaping and action-space constraints have both now been
          exhausted without success across this many independent
          attempts.
+       - **Follow-up (same day): ran candidate (a), the instrumented
+         rollout — the failure signature itself has changed since
+         Experiment 17's Task 6.** 750 steps (3 episodes) of the final
+         checkpoint: `height_ok_steps=0` (cube still never leaves the
+         ground, `max_cube_z=0.00905` vs. 0.009 resting), but critically
+         `both_magnitude_ok_steps=0/750` — `gripper_jaw1_joint`'s
+         contact sensor registers **zero force at every single step of
+         the entire rollout** (`max_jaw1_force=0.0`), while
+         `gripper_jaw2_joint` does register contact intermittently
+         (`max_jaw2_force=2.23N`). Experiment 17's Task 6 found both
+         jaws contacting simultaneously in a non-antipodal wedge
+         (`both_magnitude_ok_steps=231/750`); this is a genuinely
+         different, asymmetric failure — one jaw never touches the cube
+         at all. `max_orientation_dot=0.9998` confirms the orientation
+         mechanism does achieve near-perfect vertical alignment in this
+         same rollout (per-step, not just the training-time aggregate),
+         so this isn't an orientation regression. **This directly
+         implicates the mimic-joint mechanical asymmetry** (Experiment
+         17 Task 6 / Experiment 19: jaw2 tracks its commanded position
+         20% worse than jaw1 under load) as a more directly-evidenced
+         candidate blocker than before — an asymmetric gripper that
+         closes unevenly plausibly produces exactly one-jaw-only
+         contact. Experiment 19 closed out the specific
+         `PhysxMimicJointAPI`-based fix as not viable, but the
+         underlying mechanical asymmetry itself remains live and is now
+         more directly implicated by this new evidence, independent of
+         that one specific (failed) fix mechanism.
 2. Shape classifier misclassifies cube/rectangular-prism as "sphere" against
    real depth data. Root-caused: `PLANARITY_RESIDUAL_THRESHOLD` (tuned on
    near-noiseless synthetic data) doesn't generalize to real sensor noise.

@@ -2243,6 +2243,41 @@ follow-ups below.
 5. Final whole-branch review for the perception-integration plan (Task 12)
    was explicitly skipped per user instruction — still pending whenever that
    work resumes.
+6. **Experiment 24 Gate 1 (scripted-oracle demonstration bootstrapping):
+   FAIL.** Built a non-learned, reactive-differential-IK oracle
+   (`scripts/oracle_rollout.py`) meant to follow this repo's existing
+   5-waypoint pick-and-place path without human teleoperation, to
+   bootstrap BC pretraining for a warm-started RL finetune. It stalls —
+   end-effector position frozen bit-identical for 50+ steps — before
+   reaching the grasp waypoint in the overwhelming majority of sampled
+   episodes (~1/24 advanced past waypoint 0 in the original smoke tests).
+   Three architecturally distinct fixes were tried and failed: Cartesian-
+   space escape-perturbation (ported from `classical_pickplace_demo.py`,
+   verified firing correctly but with zero effect), joint-space
+   perturbation (verified reaching the commanded target with zero effect
+   on actual position), and integral/accumulated-error pursuit correction
+   (no effect at a conservative gain, **actively diverged the arm away
+   from the target** at a stronger gain — the third fix made things worse,
+   not better, when strengthened). Root-cause diagnostics (independently
+   re-verified, not just accepted from a first pass) ruled out actuator
+   torque saturation (never clips, peak torque 14.1N·m vs. a 20N·m limit),
+   a hard joint-limit hit (~13° of margin), contact/collision (0.0N
+   throughout), and classic Jacobian rank-collapse (smallest singular
+   value plateaus ~0.15, not ~0) — evidence instead points to a genuine
+   fixed point of the receding-horizon control loop in a poorly-
+   conditioned kinematic region, where the linearized IK correction stops
+   reliably pointing toward the goal. This independently echoes
+   Experiment 20's own prior conclusion (a damping sweep across six
+   values, multiple target formulations) that single-Newton-step-per-env-
+   step differential IK is not a stable mechanism on this arm — reached
+   via a structurally different investigation path this time (waypoint-
+   pursuit stall vs. orientation-holding drift). Full evidence trail and
+   recommended next directions (multi-iteration IK-before-`env.step()`
+   convergence, or reconsidering human teleoperation as the demonstration
+   source after all) in
+   `docs/superpowers/plans/2026-07-08-ar4-experiment24-gate1-report.md`.
+   Gate 2's implementation plan was explicitly not written, per the
+   original plan's own scope note for a FAIL verdict.
 
 ## Direction
 

@@ -24,13 +24,17 @@ from typing import TYPE_CHECKING
 
 import torch
 
-from isaaclab.envs.mdp.actions.actions_cfg import DifferentialInverseKinematicsActionCfg
+from isaaclab.envs.mdp.actions.actions_cfg import BinaryJointPositionActionCfg, DifferentialInverseKinematicsActionCfg
+from isaaclab.envs.mdp.actions.binary_joint_actions import BinaryJointPositionAction
 from isaaclab.envs.mdp.actions.task_space_actions import DifferentialInverseKinematicsAction
+from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers.action_manager import ActionTerm
 from isaaclab.utils import configclass
 
 if TYPE_CHECKING:
+    from isaaclab.assets import RigidObject
     from isaaclab.envs import ManagerBasedEnv
+    from isaaclab.sensors import FrameTransformer
 
 
 class VerticalLockDifferentialIKAction(DifferentialInverseKinematicsAction):
@@ -103,3 +107,49 @@ class VerticalLockDifferentialIKActionCfg(DifferentialInverseKinematicsActionCfg
     fixed_orientation: tuple[float, float, float, float] = MISSING
     """Quaternion (w, x, y, z) the end-effector orientation is locked to,
     every step, regardless of policy output."""
+
+
+class ProximityGatedBinaryJointPositionAction(BinaryJointPositionAction):
+    """Binary joint-position gripper action that forces the gripper open
+    regardless of the policy's own command, unless the cube is within
+    cfg.proximity_threshold of the end-effector. Once within range, the
+    policy's own open/close command passes through unchanged.
+
+    Directly motivated by Experiment 20's own follow-up instrumented
+    diagnostic (see
+    docs/superpowers/specs/2026-07-07-ar4-experiment21-proximity-gated-gripper-design.md):
+    across 750 rollout steps of the trained checkpoint,
+    gripper_jaw1_joint's contact sensor registered zero force at every
+    step while gripper_jaw2_joint registered contact intermittently - an
+    asymmetric single-jaw-contact failure, not the both-jaws-wrong-angle
+    wedge Experiment 17 found. Hard-gating closing to only be possible
+    near the object tests whether premature/imprecise closing explains
+    that asymmetry.
+    """
+
+    cfg: ProximityGatedBinaryJointPositionActionCfg
+
+    def process_actions(self, actions: torch.Tensor) -> None:
+        super().process_actions(actions)
+        object: RigidObject = self._env.scene[self.cfg.object_cfg.name]
+        ee_frame: FrameTransformer = self._env.scene[self.cfg.ee_frame_cfg.name]
+        ee_pos_w = ee_frame.data.target_pos_w[:, 0, :]
+        dist = torch.norm(object.data.root_pos_w - ee_pos_w, dim=-1)
+        out_of_range = dist > self.cfg.proximity_threshold
+        self._processed_actions[out_of_range] = self._open_command
+
+
+@configclass
+class ProximityGatedBinaryJointPositionActionCfg(BinaryJointPositionActionCfg):
+    """Adds object_cfg/ee_frame_cfg/proximity_threshold to the stock
+    binary joint-position action cfg. See
+    ProximityGatedBinaryJointPositionAction."""
+
+    class_type: type[ActionTerm] = ProximityGatedBinaryJointPositionAction
+    object_cfg: SceneEntityCfg = MISSING
+    """The object (cube) the gate measures proximity to."""
+    ee_frame_cfg: SceneEntityCfg = MISSING
+    """The end-effector frame the gate measures proximity from."""
+    proximity_threshold: float = MISSING
+    """Distance (m) below which the policy's own gripper command passes
+    through; at or above this distance the gripper is forced open."""

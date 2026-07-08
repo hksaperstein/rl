@@ -152,6 +152,18 @@ parser.add_argument(
         "docs/superpowers/specs/2026-07-07-ar4-experiment20-vertical-orientation-lock-design.md."
     ),
 )
+parser.add_argument(
+    "--proximitygate",
+    action="store_true",
+    default=False,
+    help=(
+        "Train on the proximity-gated gripper variant: the gripper is forced open regardless of the "
+        "policy's own command unless the cube is within 5cm of the end-effector, on top of "
+        "--orientationbias's unchanged reward set. Directly tests whether premature/imprecise closing "
+        "explains the asymmetric single-jaw-contact failure Experiment 20's own diagnostic found. See "
+        "docs/superpowers/specs/2026-07-07-ar4-experiment21-proximity-gated-gripper-design.md."
+    ),
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
@@ -189,6 +201,7 @@ from tasks.ar4.pickplace_baseproximity_env_cfg import Ar4PickPlaceBaseProximityE
 from tasks.ar4.pickplace_graspgated_env_cfg import Ar4PickPlaceGraspGatedEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_orientationbias_env_cfg import Ar4PickPlaceOrientationBiasEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_pregrasp_env_cfg import Ar4PickPlacePregraspEnvCfg  # noqa: E402
+from tasks.ar4.pickplace_proximitygate_env_cfg import Ar4PickPlaceProximityGateEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_provenrecipe_env_cfg import Ar4PickPlaceProvenRecipeEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_reachskip_env_cfg import Ar4PickPlaceReachskipEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_residual_env_cfg import Ar4PickPlaceResidualEnvCfg  # noqa: E402
@@ -201,7 +214,9 @@ LOG_ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 
 
 def main() -> None:
-    if args_cli.orientationbias:
+    if args_cli.proximitygate:
+        env_cfg_cls = Ar4PickPlaceProximityGateEnvCfg
+    elif args_cli.orientationbias:
         env_cfg_cls = Ar4PickPlaceOrientationBiasEnvCfg
     elif args_cli.pregrasp:
         env_cfg_cls = Ar4PickPlacePregraspEnvCfg

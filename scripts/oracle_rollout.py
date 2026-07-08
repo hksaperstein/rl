@@ -84,17 +84,38 @@ STALL_CHECK_INTERVAL = 25
 STALL_THRESHOLD = 0.005
 ESCAPE_STEPS = 15
 ESCAPE_PERTURBATION_SCALE = 0.03
-"""Stall-detection/escape-perturbation mechanism, direct port of
-classical_pickplace_demo.py's own _STALL_CHECK_INTERVAL/_STALL_THRESHOLD/
-_ESCAPE_STEPS/_ESCAPE_PERTURBATION_SCALE (same values, proven there),
-vectorized here for the num_envs > 1 case. Added after a Gate 1 smoke-test
-diagnostic (see task-1-report.md) showed pure bounded-pursuit differential
-IK genuinely converges for the first ~15-20 steps of an episode, then
-reverses and plateaus at a stable pose well short of the target - the
-textbook signature of a purely reactive Jacobian-IK controller stalling at
-a joint limit or kinematic singularity (no replanning, no escape from
-local minima), not a logic bug. classical_pickplace_demo.py already solves
-this for its single-env case; this ports the same mechanism per-env."""
+"""Stall-detection mechanism, direct port of classical_pickplace_demo.py's
+own _STALL_CHECK_INTERVAL/_STALL_THRESHOLD/_ESCAPE_STEPS/
+_ESCAPE_PERTURBATION_SCALE (same values, proven there), vectorized here for
+the num_envs > 1 case. Added after a Gate 1 smoke-test diagnostic (see
+task-1-report.md) showed pure bounded-pursuit differential IK genuinely
+converges for the first ~15-20 steps of an episode, then reverses and
+plateaus at a stable pose well short of the target - the textbook signature
+of a purely reactive Jacobian-IK controller stalling at a joint limit or
+kinematic singularity (no replanning, no escape from local minima), not a
+logic bug. classical_pickplace_demo.py already solves this for its
+single-env case; this ports the same trigger/timing mechanism per-env.
+ESCAPE_PERTURBATION_SCALE itself is no longer used to perturb Cartesian
+pursuit_delta (see ESCAPE_JOINT_PERTURBATION_SCALE below for why) but is
+left defined/unused-in-that-role here as a record of the original ported
+value; the actual escape injection now happens in joint space."""
+
+ESCAPE_JOINT_PERTURBATION_SCALE = 0.05
+"""First-guess joint-space perturbation magnitude (radians, applied
+independently per arm joint) - NOT a previously-tuned/proven value like
+ESCAPE_PERTURBATION_SCALE above. Added when diagnostics showed the
+original Cartesian-space perturbation (added to pursuit_delta before the
+differential-IK solve) gets absorbed by the same damped-least-squares
+Jacobian pseudo-inverse that causes the stall in the first place: when the
+arm is genuinely stuck at a joint limit or near a kinematic singularity,
+the IK solver structurally suppresses motion in whatever Cartesian
+direction is causing the stall, so a small Cartesian nudge fed into that
+same solve gets absorbed rather than escaping it (verified:
+escape_steps_remaining cycled correctly across 7 separate triggers, but
+dist to the active waypoint moved <0.5mm over ~200 steps - see
+task-1-report.md's "Concerns for Principal" section). Perturbing
+joint_pos_des directly, AFTER the IK solve (see compute_ik_arm_raw_action),
+bypasses the Jacobian/singularity suppression entirely."""
 
 
 def compute_ik_arm_raw_action(
@@ -117,13 +138,23 @@ def compute_ik_arm_raw_action(
     scale=ARM_SCALE) to produce the raw action env.step() expects. Not
     further clamped - see IK_PURSUIT_MAX_STEP's docstring for why an
     additional [-1, 1] clamp here would be both unnecessary and wrong.
+
     Envs with env._escape_steps_remaining > 0 (set by update_stall_check)
-    get a random per-env perturbation added to the pursuit direction
-    before it's converted to a body-frame IK target - direct port of
-    classical_pickplace_demo.py's escape-perturbation mechanism, applied
-    here instead of after the fact since this controller's "pursuit
-    delta" plays the same role as that script's own local variable of the
-    same name."""
+    get a random per-joint perturbation added directly to joint_pos_des,
+    AFTER the IK solve below, rather than to the pursuit direction before
+    it (the original, classical_pickplace_demo.py-ported approach). A
+    Cartesian-space perturbation added to pursuit_delta before the solve
+    gets suppressed by the same damped-least-squares Jacobian
+    pseudo-inverse that causes the stall: when the arm is stuck at a joint
+    limit or near a singularity, the IK solver structurally damps motion in
+    whatever Cartesian direction is causing the stall, so a small nudge fed
+    into that same solve gets absorbed rather than escaping it (verified
+    empirically - see ESCAPE_JOINT_PERTURBATION_SCALE's docstring).
+    Perturbing joint_pos_des directly, after the solve, bypasses the
+    Jacobian/singularity suppression entirely: this function's final
+    `raw = (joint_pos_des - default) / ARM_SCALE` round-trips the
+    perturbation exactly, with no IK solve left in between to suppress
+    it."""
     robot = env.scene["robot"]
     ee_frame = env.scene["ee_frame"]
 
@@ -149,18 +180,21 @@ def compute_ik_arm_raw_action(
     step_mag = torch.clamp(dist, max=IK_PURSUIT_MAX_STEP)
     pursuit_delta = direction / (dist + 1e-8) * step_mag
 
-    escaping = env._escape_steps_remaining > 0
-    if escaping.any():
-        perturbation = (torch.rand(env.num_envs, 3, device=env.device) * 2.0 - 1.0) * ESCAPE_PERTURBATION_SCALE
-        pursuit_delta = pursuit_delta + perturbation * escaping.unsqueeze(-1).to(perturbation.dtype)
-        env._escape_steps_remaining = torch.where(
-            escaping, env._escape_steps_remaining - 1, env._escape_steps_remaining
-        )
-
     pursuit_target_b = ee_pos_b + pursuit_delta
 
     ik_controller.set_command(pursuit_target_b, ee_pos=ee_pos_b, ee_quat=ee_quat_b)
     joint_pos_des = ik_controller.compute(ee_pos_b, ee_quat_b, jacobian, joint_pos)
+
+    escaping = env._escape_steps_remaining > 0
+    if escaping.any():
+        num_arm_joints = len(robot_entity_cfg.joint_ids)
+        perturbation = (
+            torch.rand(env.num_envs, num_arm_joints, device=env.device) * 2.0 - 1.0
+        ) * ESCAPE_JOINT_PERTURBATION_SCALE
+        joint_pos_des = joint_pos_des + perturbation * escaping.unsqueeze(-1).to(perturbation.dtype)
+        env._escape_steps_remaining = torch.where(
+            escaping, env._escape_steps_remaining - 1, env._escape_steps_remaining
+        )
 
     return (joint_pos_des - arm_default_joint_pos) / ARM_SCALE
 

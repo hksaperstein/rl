@@ -164,6 +164,20 @@ parser.add_argument(
         "docs/superpowers/specs/2026-07-07-ar4-experiment21-proximity-gated-gripper-design.md."
     ),
 )
+parser.add_argument(
+    "--jawmirror",
+    action="store_true",
+    default=False,
+    help=(
+        "Train on the software jaw-mirroring variant: gripper_jaw2_joint's commanded target "
+        "continuously tracks gripper_jaw1_joint's actual measured position each step (a software "
+        "control-loop reference, not the PhysX-level constraint Experiment 19 already ruled out), on "
+        "top of --proximitygate's unchanged reward set and proximity gate. Directly tests whether jaw "
+        "synchronization explains why both jaws contact the cube (Experiment 21) but never "
+        "simultaneously. See "
+        "docs/superpowers/specs/2026-07-07-ar4-experiment22-software-jaw-mirroring-design.md."
+    ),
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
@@ -199,6 +213,7 @@ from tasks.ar4.pickplace_mirror_env_cfg import Ar4PickPlaceMirrorEnvCfg  # noqa:
 from tasks.ar4.pickplace_single_object_env_cfg import Ar4PickPlaceSingleObjectEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_baseproximity_env_cfg import Ar4PickPlaceBaseProximityEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_graspgated_env_cfg import Ar4PickPlaceGraspGatedEnvCfg  # noqa: E402
+from tasks.ar4.pickplace_jawmirror_env_cfg import Ar4PickPlaceJawMirrorEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_orientationbias_env_cfg import Ar4PickPlaceOrientationBiasEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_pregrasp_env_cfg import Ar4PickPlacePregraspEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_proximitygate_env_cfg import Ar4PickPlaceProximityGateEnvCfg  # noqa: E402
@@ -214,7 +229,9 @@ LOG_ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 
 
 def main() -> None:
-    if args_cli.proximitygate:
+    if args_cli.jawmirror:
+        env_cfg_cls = Ar4PickPlaceJawMirrorEnvCfg
+    elif args_cli.proximitygate:
         env_cfg_cls = Ar4PickPlaceProximityGateEnvCfg
     elif args_cli.orientationbias:
         env_cfg_cls = Ar4PickPlaceOrientationBiasEnvCfg

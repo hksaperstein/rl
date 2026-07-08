@@ -89,6 +89,12 @@ parser.add_argument(
     default=False,
     help="Evaluate the proximity-gated gripper scene (see scripts/train.py --proximitygate) instead of the four-object scene.",
 )
+parser.add_argument(
+    "--jawmirror",
+    action="store_true",
+    default=False,
+    help="Evaluate the software jaw-mirroring scene (see scripts/train.py --jawmirror) instead of the four-object scene.",
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 args_cli.enable_cameras = True  # required for video recording
@@ -123,6 +129,7 @@ from tasks.ar4.pickplace_ik_guided_env_cfg import Ar4PickPlaceIkGuidedEnvCfg  # 
 from tasks.ar4.pickplace_mirror_env_cfg import Ar4PickPlaceMirrorEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_baseproximity_env_cfg import Ar4PickPlaceBaseProximityEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_graspgated_env_cfg import Ar4PickPlaceGraspGatedEnvCfg  # noqa: E402
+from tasks.ar4.pickplace_jawmirror_env_cfg import Ar4PickPlaceJawMirrorEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_orientationbias_env_cfg import Ar4PickPlaceOrientationBiasEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_pregrasp_env_cfg import Ar4PickPlacePregraspEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_proximitygate_env_cfg import Ar4PickPlaceProximityGateEnvCfg  # noqa: E402
@@ -138,7 +145,9 @@ VIDEO_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file_
 
 
 def main() -> None:
-    if args_cli.proximitygate:
+    if args_cli.jawmirror:
+        env_cfg_cls = Ar4PickPlaceJawMirrorEnvCfg
+    elif args_cli.proximitygate:
         env_cfg_cls = Ar4PickPlaceProximityGateEnvCfg
     elif args_cli.orientationbias:
         env_cfg_cls = Ar4PickPlaceOrientationBiasEnvCfg
@@ -189,7 +198,9 @@ def main() -> None:
         # advances and silently merges every episode into one video. 250 = one episode's
         # worth of steps (episode_length_s=5.0 / step_dt=decimation*sim.dt=2*0.01=0.02s),
         # from Ar4PickPlaceEnvCfg - update this if that config changes.
-        if args_cli.proximitygate:
+        if args_cli.jawmirror:
+            name_prefix = "ar4_pickplace_jawmirror"
+        elif args_cli.proximitygate:
             name_prefix = "ar4_pickplace_proximitygate"
         elif args_cli.orientationbias:
             name_prefix = "ar4_pickplace_orientationbias"

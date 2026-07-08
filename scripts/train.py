@@ -178,6 +178,19 @@ parser.add_argument(
         "docs/superpowers/specs/2026-07-07-ar4-experiment22-software-jaw-mirroring-design.md."
     ),
 )
+parser.add_argument(
+    "--warmresidual",
+    action="store_true",
+    default=False,
+    help=(
+        "Train on the warm-started residual-RL variant: the arm's action is a classical "
+        "waypoint-pursuit base controller plus a policy residual whose authority ramps linearly "
+        "from 0 to 1.0 over the first 1200 env steps (Johannink et al. 2019's warm-start "
+        "technique, never implemented in Experiment 13's original residual attempt), on top of "
+        "Experiment 22's unchanged reward set and gripper mechanism. See "
+        "docs/superpowers/specs/2026-07-07-ar4-experiment23-warmstarted-residual-design.md."
+    ),
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
@@ -224,12 +237,15 @@ from tasks.ar4.pickplace_taskspace_env_cfg import (  # noqa: E402
     Ar4PickPlaceTaskspaceEnvCfg,
     Ar4PickPlaceTaskspacePPORunnerCfg,
 )
+from tasks.ar4.pickplace_warmresidual_env_cfg import Ar4PickPlaceWarmResidualEnvCfg  # noqa: E402
 
 LOG_ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs", "train")
 
 
 def main() -> None:
-    if args_cli.jawmirror:
+    if args_cli.warmresidual:
+        env_cfg_cls = Ar4PickPlaceWarmResidualEnvCfg
+    elif args_cli.jawmirror:
         env_cfg_cls = Ar4PickPlaceJawMirrorEnvCfg
     elif args_cli.proximitygate:
         env_cfg_cls = Ar4PickPlaceProximityGateEnvCfg
@@ -261,7 +277,7 @@ def main() -> None:
     env_cfg.scene.num_envs = args_cli.num_envs
     env_cfg.sim.device = args_cli.device
 
-    if args_cli.taskspace or args_cli.residual or args_cli.reachskip or args_cli.baseproximity:
+    if args_cli.taskspace or args_cli.residual or args_cli.reachskip or args_cli.baseproximity or args_cli.warmresidual:
         agent_cfg = Ar4PickPlaceTaskspacePPORunnerCfg()
     else:
         agent_cfg = Ar4PickPlacePPORunnerCfg()

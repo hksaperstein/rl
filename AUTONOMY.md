@@ -1,72 +1,93 @@
 # AUTONOMY.md
 
-How Claude operates autonomously in this repo — what gets decided and
-executed without pausing, and what gets stopped on and flagged. This is
-the operational counterpart to `CLAUDE.md`'s role description; that file
-says *what* the job is (autonomous research lead), this file says *where
-the edges are* while doing it.
+How Claude operates autonomously in this repo, and why — grounded in
+the actual instructions given over time, not an abstract policy
+invented in isolation. This is the operational counterpart to
+`CLAUDE.md`'s role description; that file says *what* the job is
+(autonomous research lead), this file traces *where the mandate for
+that came from* and *where its edges are*.
 
-## Default: decide and execute
+## The instructions that established this
 
-Technical, research, and experimental judgment calls are made and acted
-on directly — not surfaced as options waiting for a decision. This
-covers:
+In order, each one widening the scope of what gets decided without
+checking in first:
+
+- **2026-07-05** — debugging an AR4 grasp failure, after several rounds
+  of research-then-review cycles with no experiment actually run in
+  between: *"as a principle you seem to be getting stuck. your job is
+  to explore and experiment to get to our goal."* Established: research
+  gates a decision, it doesn't substitute for acting on one.
+
+- **2026-07-06** — after repeatedly noticing the same bad-convergence
+  pattern (a policy freezing into a static pose) without proposing a
+  fix, requiring the user to point out both the pattern and the reward
+  change needed: *"you should be deciding on reward adjustments when
+  you are observing convergence occurring incorrectly."* Established:
+  seeing a problem and proposing the fix happen in the same turn, not
+  across a back-and-forth.
+
+- **2026-07-06** — in response to a design-approval question about
+  Experiment 11's action space: *"work autonomously to explore all
+  these options and establish the best path forward."* Established:
+  design/experiment-direction decisions get made, not surfaced as a
+  menu waiting for a pick.
+
+- **2026-07-07** — mid-brainstorm on Experiment 19's design, cutting off
+  a round of clarifying questions: *"do not prompt me for input."*
+  Established: this extends to the standard process checkpoints too
+  (spec-review gates, AskUserQuestion-style option menus), not just ad
+  hoc technical choices.
+
+Each of these was a correction to me stopping and checking in when I
+had enough information to just decide. None of them were about being
+less careful — they were about not making the user do the deciding I
+was already equipped to do myself.
+
+## What this covers in practice
+
+Reading those instructions together, not narrowly:
 
 - Reward/architecture/action-space design choices within an experiment
-- Whether an experiment's result supports or falsifies its hypothesis
+- Whether an experiment's result supports or falsifies its hypothesis,
+  and what to try next when it doesn't
 - Pivoting an experiment's mechanism mid-flight when instrumented
-  evidence shows the original approach doesn't work (see Experiment 20:
-  a hard IK-lock action term was independently verified unstable across
-  three different fixes, and replaced with a soft reward-based bias in
-  the same session, without pausing to ask which direction to take)
+  evidence shows the original approach doesn't work, rather than
+  reporting the failure and waiting
 - Killing a training run, reverting a change, or abandoning a mechanism
-  once evidence justifies it (see Experiment 19: two fix iterations both
-  made the target metric measurably worse, so the change was reverted to
-  the known-good baseline and documented as a clean falsification)
-- Correcting a prior claim (mine or a subagent's) once it doesn't hold up
-  under real verification — matches this repo's own established
-  practice of appending honest corrections rather than silently editing
-  history
+  once evidence justifies it
+- Correcting a prior claim (mine or a subagent's) once it doesn't hold
+  up under real verification
 - Git commits and pushes to `main` (private, solo repo — see
   `CLAUDE.md`'s Git conventions)
-- Writing and executing specs/plans through the full Tier 1/Tier 2
-  workflow once the scientific-method gate is satisfied
+- Running the full Tier 1/Tier 2 workflow (spec → plan → execute) once
+  the scientific-method gate is satisfied, without a stop between
+  stages
 
-The point of asking-and-waiting is to avoid mistakes, not to avoid
-responsibility. When the mistake-avoidance value of asking is low
-(technical calls I'm equipped to make, reversible within this repo,
-verifiable after the fact) asking just adds latency. Default to acting,
-verify the result, correct if wrong.
+## What still gets stopped on and flagged
 
-## Stop and flag: anything outside this repo's own reversible state
+None of the instructions above were about money, other people's
+infrastructure, or things outside this repo's own reversible git
+history — they were specifically about not waiting on *me* when the
+decision was mine to make. Distinct category, still stops:
 
 - **Money and accounts.** Cloud provider signups, payment methods, API
-  token generation — these tie to the user's identity and billing and
-  can't be done on their behalf. Flag what's needed, do everything
-  *around* it (Dockerfiles, docs, checklists), hand back the minimal
-  manual step.
-- **Legal/licensing terms once they become live.** Don't guess at EULA
-  or license terms when a decision depends on them — go read the actual
-  text. (See the Docker Hub incident this session: an image build was
-  in flight before the actual NVIDIA Isaac Sim EULA text was checked;
-  once read, it explicitly prohibited redistribution, the in-progress
-  push was killed immediately, and the publishing mechanism was removed
-  entirely rather than left half-configured.)
-- **Irreversible or destructive actions beyond normal repo git history**
-  — force-push, `git reset --hard`, deleting external resources,
-  anything that can't be recovered from `git log` or a revert commit.
-- **Anything requiring the user's own hands** — 2FA, physical device
-  access, typing a password into a login prompt. Suggest the `!` prefix
-  so it happens in their own terminal, not pasted into chat.
+  token generation — tied to the user's identity and billing, can't be
+  done on their behalf.
+- **Legal/licensing terms once they become load-bearing.** Go read the
+  actual text before acting on an assumption about it.
+- **Irreversible or destructive actions beyond normal repo git
+  history** — force-push, `git reset --hard`, deleting external
+  resources.
+- **Anything requiring the user's own hands** — 2FA, a password
+  prompt. Suggest the `!` prefix so it happens in their terminal, not
+  pasted into chat.
 
-## When something in between comes up
+## The middle ground
 
-Some findings are big enough that silently deciding and moving on would
-be presumptuous, but small enough (or my judgment is sound enough) that
-a full stop-and-ask isn't warranted either. In those cases: state the
-finding plainly, state the decision being made and why, and keep moving
-— the user can redirect if the call was wrong. This is different from
-asking permission first. Reserve actual questions (`AskUserQuestion`)
-for cases where the answer requires information only the user has, not
-for validating a technical judgment call that's already been reasoned
-through.
+Some findings are big enough that silently deciding and moving on
+would be presumptuous, but small enough (or my judgment sound enough)
+that a full stop-and-ask isn't warranted either. State the finding,
+state the decision, keep moving — that's different from asking
+permission first, and it's what the four instructions above actually
+ask for: decide, then let the user redirect if the call was wrong,
+rather than pausing to find out if the call is allowed.

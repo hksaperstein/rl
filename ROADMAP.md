@@ -1791,6 +1791,119 @@ follow-ups below.
          planning — Dex-Net, GPD, both already in this repo's research
          record) — independent of, and not blocked by, this experiment's
          negative result on jaw-coupling fidelity specifically.
+     - **Experiment 20: constrain the gripper's approach orientation
+       toward vertical/top-down. The mechanism pivoted mid-experiment
+       after independent verification found the originally-designed hard
+       IK constraint structurally unstable; the revised soft reward-bias
+       mechanism worked exactly as intended (the strongest, most
+       saturated dense signal recorded in this repo's history) — and
+       `lifting_object` still stayed at exactly 0/1500, a clean
+       falsification of the orientation-discovery-bottleneck hypothesis.**
+       Design spec:
+       `docs/superpowers/specs/2026-07-07-ar4-experiment20-vertical-orientation-lock-design.md`
+       (see its "Revision" section for the full mechanism-pivot account).
+       Full run data:
+       `docs/superpowers/plans/2026-07-07-ar4-experiment20-report.md`.
+       - **Original design: a custom absolute-pose differential-IK
+         action term (`VerticalLockDifferentialIKAction`,
+         `tasks/ar4/actions.py`) locking orientation exactly, every
+         step, leaving only 3D position under policy control.** Built,
+         code-reviewed clean (spec compliance ✅, no Critical findings),
+         but the task reviewer flagged that `_FIXED_DOWNWARD_QUAT` had
+         no reproducible measurement artifact — the single most
+         load-bearing value in the experiment, asserted but not
+         instrumented, echoing Experiment 16's exact prior lesson (an
+         unverified claim later found wrong under real instrumentation).
+       - **Independent re-verification against the live simulated
+         system (not isolated quaternion math) found the mechanism
+         genuinely unstable.** The real end-effector orientation
+         converged to within ~9-10 degrees of target by step 30, then
+         **diverged to 75-99 degrees off target within the same episode
+         under zero commanded policy action**, resetting and reproducing
+         the identical pattern next episode. Three independently-tried
+         fixes, per this repo's systematic-debugging discipline (3
+         failed fixes means question the architecture, not patch
+         again):
+         1. Tilting the target 5/10/15/20 degrees off exact-vertical
+            (testing whether a wrist singularity specifically at
+            straight-down was the cause) — all tilts diverged similarly,
+            ruling out one specific singular target as the sole
+            explanation.
+         2. Giving the action term's position target persistent state,
+            replacing Isaac Lab's own stock convention of recomputing it
+            fresh each step as `current_position + delta` (self-
+            referential under a zero action — provides zero restoring
+            force; harmless for Experiment 11's position-only 3-DOF
+            action, which has 3 redundant joint DOF to absorb drift, but
+            with this experiment's fully-constrained 6-DOF pose lock —
+            zero redundant DOF — nothing anchored the solve). A real,
+            independently-motivated correctness fix, kept in
+            `tasks/ar4/actions.py` regardless of outcome — reduced peak
+            drift (~52-59 vs. ~77-99 degrees) but did not achieve
+            stability.
+         3. Sweeping the DLS damping coefficient (`lambda_val`, default
+            0.01) from 0.01 to 1.0 — no monotonic relationship (0.1 came
+            closest to the 15-degree stability threshold; 0.3/0.5/1.0
+            were worse again), not a simple tuning fix.
+       - **Conclusion: hard-locking full 6-DOF pose via a single-Newton-
+         step-per-env-step differential-IK controller is not a stable
+         mechanism for sustained pose-holding on this arm**, independent
+         of target orientation, position-target formulation, or damping
+         tuning — an architecture-level finding, not an implementation
+         bug. `tasks/ar4/actions.py` and
+         `pickplace_verticallock_env_cfg.py` were kept, not deleted:
+         real, working, independently-verified code for a mechanism that
+         may be worth revisiting later with a fundamentally different
+         control approach (e.g. multiple IK substeps per env step), just
+         not pursued further under this experiment.
+       - **Revised mechanism: a soft dense reward term,
+         `orientation_alignment_bonus`, layered onto the already-proven
+         joint-space action (Experiment 18's exact `ActionsCfg`)
+         instead of a new IK-based action space.** Tests the identical
+         underlying hypothesis without the IK-stability problem class.
+         New env cfg `Ar4PickPlaceOrientationBiasEnvCfg`
+         (`tasks/ar4/pickplace_orientationbias_env_cfg.py`): Experiment
+         18's exact action/observation/event/termination/curriculum
+         configuration plus the one new term.
+       - **The revised mechanism worked exactly as intended — the
+         strongest, most cleanly saturated dense signal recorded in
+         this repo's history.** `Episode_Reward/orientation_alignment`
+         reached its effective ceiling (weight 2.0 × a [0,1]-bounded
+         function) by iteration 150 and stayed saturated at 1.92-1.96 for
+         the entire remaining ~90% of training — more completely
+         saturated than Experiment 18's `pregrasp_readiness` (which
+         settled around 1.2-1.25 out of a similar ~2.0 ceiling, not
+         fully saturated). This confirms the policy unambiguously
+         solved the specific sub-problem this experiment targeted:
+         orienting the gripper's approach axis vertically.
+       - **`Episode_Reward/lifting_object` stayed at exactly `0/1500`
+         regardless — a clean falsification, not an inconclusive
+         result.** Identical to Experiment 17's and Experiment 18's
+         outcomes. Because the orientation-alignment signal was
+         unambiguously solved (not merely attempted), this specifically
+         rules out approach-orientation discovery as the exploration
+         bottleneck, rather than leaving that question open. Whatever is
+         blocking `lifting_object` from ever firing is not primarily an
+         orientation-discovery problem.
+       - **Net assessment: four consecutive experiments (17, 18, 19, 20)
+         now converge on the same underlying fact — the cube never
+         leaves the ground by any margin — after reward shaping, hard
+         and soft orientation constraints, and a mechanical mimic-joint
+         fix attempt have each been tried and each failed to move it.**
+         Per this repo's own mandate to prefer a structurally new
+         direction over another variant on the same class of approach
+         after a string of nulls, the next research direction should not
+         be a fifth reward/action-space tweak on top of pure joint-space
+         RL exploration. Candidates: (a) an instrumented Task-6-style
+         rollout of Experiment 20's trained checkpoint, to determine
+         whether antipodal contact is ever reached at all now that
+         orientation is solved (narrows "still never contacts correctly"
+         vs. "contacts correctly but can't complete the lift") before
+         committing to the next experiment; (b) demonstration/imitation
+         bootstrapping for the lift primitive specifically, since reward
+         shaping and action-space constraints have both now been
+         exhausted without success across this many independent
+         attempts.
 2. Shape classifier misclassifies cube/rectangular-prism as "sphere" against
    real depth data. Root-caused: `PLANARITY_RESIDUAL_THRESHOLD` (tuned on
    near-noiseless synthetic data) doesn't generalize to real sensor noise.

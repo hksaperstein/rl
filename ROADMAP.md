@@ -1931,6 +1931,63 @@ follow-ups below.
          underlying mechanical asymmetry itself remains live and is now
          more directly implicated by this new evidence, independent of
          that one specific (failed) fix mechanism.
+     - **Experiment 21: hard-gate the gripper open during approach, only
+       allowing the policy's own close command once the cube is within
+       5cm of the end-effector — directly testing the user's own design
+       contribution ("consider approaching with open jaw, and only
+       closing when in position") against Experiment 20's specific
+       asymmetric-contact finding. Null on the literal success
+       criterion, but a real, narrowing result: Experiment 20's specific
+       failure signature (one jaw never touching at all) is resolved.**
+       Design spec:
+       `docs/superpowers/specs/2026-07-07-ar4-experiment21-proximity-gated-gripper-design.md`.
+       Full run data:
+       `docs/superpowers/plans/2026-07-07-ar4-experiment21-report.md`.
+       - **New action term `ProximityGatedBinaryJointPositionAction`**
+         (`tasks/ar4/actions.py`) forces the gripper open regardless of
+         the policy's own command unless the cube is within
+         `proximity_threshold=0.05m` of the end-effector — verified
+         directly against the action term's own computed command (not
+         inferred from downstream training behavior): cube far + close
+         command → forced open; cube 0.02m away + close command →
+         actually closes. Grounded in a real (though only
+         secondary-source-confirmed, not independently verified against
+         primary PDF text due to file size) precedent for staged
+         approach-then-close structures in learned grasping,
+         arXiv:2303.17592.
+       - **`lifting_object` stays at exactly `0/1500`** — identical to
+         Experiments 17, 18, and 20. `orientation_alignment` and
+         `pregrasp_readiness` both remained healthy and consistent with
+         Experiment 20's own values, confirming the new gate didn't
+         disrupt either existing mechanism.
+       - **The instrumented contact diagnostic (same Task-6-style
+         rollout used after Experiment 20) shows a real, specific
+         change, even though the strict `both_magnitude_ok_steps`
+         success criterion is still `0/750`.** Comparing directly:
+         `max_jaw1_force` went from **0.0N** (Experiment 20 — jaw1 never
+         registered any contact at all) to **6.73N** (Experiment 21 —
+         real, substantial contact); `max_jaw2_force` went from 2.23N to
+         27.44N. Both jaws now make genuine contact with the cube at
+         some point in the rollout — Experiment 20's specific
+         one-jaw-never-touches asymmetry is resolved. What remains
+         missing is *simultaneity*: both jaws touch, but never at the
+         same step. `max_orientation_dot=1.0` (tighter than Experiment
+         20's own 0.9998) confirms this isn't an orientation regression.
+       - **Net assessment: this narrows rather than repeats the open
+         question.** Five consecutive experiments (17, 18, 19, 20, 21)
+         have each ruled out a different specific candidate, and each
+         successive instrumented diagnostic has narrowed the failure
+         description further: "cube never leaves the ground" (all) →
+         "one jaw never touches at all" (20) → "both jaws touch, just
+         not simultaneously" (21). The most directly-implicated
+         remaining candidate is the mimic-joint mechanical asymmetry
+         itself (Experiment 17 Task 6 / Experiment 19: jaw2 tracks its
+         commanded position 20% worse than jaw1 under load) — a timing/
+         coordination defect is exactly what an uncoupled, asymmetric
+         gripper would be expected to produce. Not fixable via the
+         specific `PhysxMimicJointAPI` mechanism Experiment 19 already
+         ruled out, but now the most concretely-evidenced next lever,
+         ahead of demonstration/imitation bootstrapping.
 2. Shape classifier misclassifies cube/rectangular-prism as "sphere" against
    real depth data. Root-caused: `PLANARITY_RESIDUAL_THRESHOLD` (tuned on
    near-noiseless synthetic data) doesn't generalize to real sensor noise.

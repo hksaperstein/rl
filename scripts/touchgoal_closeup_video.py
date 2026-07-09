@@ -126,7 +126,13 @@ def main() -> None:
             goal_pos_w = env.unwrapped._touch_goal_pos_w
             goal_dist = torch.norm(ee_pos_w - goal_pos_w, dim=-1)
 
-            rgb_all = camera.data.output["rgb"][:, ..., :3].cpu().numpy()
+            # camera.data.output["rgb"] comes back row-0-at-bottom (OpenGL
+            # framebuffer convention, matching this camera's convention="opengl"
+            # offset) - flip vertically (axis=1, the per-env row axis) so saved
+            # frames are right-side-up. Confirmed empirically on the
+            # graspgoal_closeup_video.py sibling script - see that file's
+            # matching comment.
+            rgb_all = camera.data.output["rgb"][:, ..., :3].cpu().numpy()[:, ::-1, :, :]
             dones_bool = dones.bool()
             time_outs = extras.get("time_outs")
 

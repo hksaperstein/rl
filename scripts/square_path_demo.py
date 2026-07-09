@@ -71,7 +71,9 @@ SQUARE_POINTS_B = [
 ]
 
 HOLD_STEPS_PER_POINT = 70
-IK_SETTLE_STEPS = 300  # Extended settle time to ensure PD converges to sub-cm residuals
+IK_SETTLE_STEPS = 100  # Settle time per correction round (gravity droop correction loop handles residuals)
+IK_CORRECTION_ROUNDS = 5  # Max fixed-point correction iterations
+IK_CORRECTION_TOLERANCE = 0.005  # 5mm tolerance for convergence
 
 
 def solve_ik3(x, y, z):
@@ -89,6 +91,69 @@ def solve_ik3(x, y, z):
     q2 = math.pi / 2 - phi1
     q3 = -math.pi / 2 - delta
     return q1, q2, q3
+
+
+def solve_waypoint_with_correction(env, robot, robot_entity_cfg, target_xyz, j2_min, j2_max, j3_min, j3_max,
+                                    num_arm_joints, settle_steps=IK_SETTLE_STEPS, max_rounds=IK_CORRECTION_ROUNDS,
+                                    tol=IK_CORRECTION_TOLERANCE):
+    """Solve a waypoint using iterative target-nudging to correct for gravity droop.
+
+    Uses fixed-point iteration: solve IK for a "corrected" target, settle, measure error,
+    nudge the corrected target toward where it needs to be, and re-solve (repeat up to max_rounds).
+    This compensates for steady-state gravity droop in the PD-controlled arm without using
+    Jacobian-based iterative IK (closed-form solve per round, just target adjustment).
+    """
+    corrected_target = list(target_xyz)
+    q_target = None
+    residual = None
+
+    for round_idx in range(max_rounds):
+        # Solve IK for the corrected target
+        q1, q2, q3 = solve_ik3(corrected_target[0], corrected_target[1], corrected_target[2])
+
+        # Clip q2, q3 to joint limits
+        q2 = max(j2_min, min(j2_max, q2))
+        q3 = max(j3_min, min(j3_max, q3))
+        q_target = [q1, q2, q3, 0.0, 0.0, 0.0]
+
+        # Command and settle
+        for _ in range(settle_steps):
+            action = torch.zeros(env.num_envs, num_arm_joints + 1, device=env.device)
+            for j in range(num_arm_joints):
+                action[:, j] = q_target[j]
+            action[:, num_arm_joints] = GRIPPER_OPEN
+            env.step(action)
+
+        # Measure actual EE position and residual
+        ee_pose_w = robot.data.body_pose_w[:, robot_entity_cfg.body_ids[0]]
+        ee_pos_b, _ = subtract_frame_transforms(
+            robot.data.root_pose_w[:, 0:3], robot.data.root_pose_w[:, 3:7], ee_pose_w[:, 0:3], ee_pose_w[:, 3:7]
+        )
+        achieved = ee_pos_b[0].cpu().numpy()
+        target_t = torch.tensor(target_xyz, device=env.device)
+        residual = torch.norm(ee_pos_b[0] - target_t).item()
+
+        # Diagnostic: show achieved vs commanded joint angles
+        achieved_q = robot.data.joint_pos[0, robot_entity_cfg.joint_ids][:3].cpu().numpy()
+        q2_droop = q_target[1] - achieved_q[1]
+        q3_droop = q_target[2] - achieved_q[2]
+
+        print(f"    round {round_idx}: residual={residual:.5f}m")
+        if round_idx == 0:  # Print diagnostic details for first round only
+            print(f"      cmd q2/q3: {q_target[1]:.4f} {q_target[2]:.4f}")
+            print(f"      got q2/q3: {achieved_q[1]:.4f} {achieved_q[2]:.4f}")
+            print(f"      droop:     {q2_droop:.4f} {q3_droop:.4f} rad")
+
+        # Check convergence
+        if residual < tol:
+            print(f"    -> Converged (round {round_idx})")
+            break
+
+        # Compute error and nudge the corrected target for next round
+        error = [target_xyz[i] - achieved[i] for i in range(3)]
+        corrected_target = [corrected_target[i] + error[i] for i in range(3)]
+
+    return q_target, residual
 
 
 def main() -> None:
@@ -143,36 +208,14 @@ def main() -> None:
             )
         print(f"  -> Check PASSED\n")
 
-        print(f"[INFO] Solving {len(SQUARE_POINTS_B)} square-path waypoints (closed-form IK)...")
+        print(f"[INFO] Solving {len(SQUARE_POINTS_B)} square-path waypoints (closed-form IK with gravity-droop correction)...")
         solved_qs = []
         for idx, pt in enumerate(SQUARE_POINTS_B):
             print(f"\n[INFO] Solving point {idx}: {pt}")
-            q1, q2, q3 = solve_ik3(pt[0], pt[1], pt[2])
-
-            # Clip q2, q3 to joint limits
-            q2_clipped = max(j2_min, min(j2_max, q2))
-            q3_clipped = max(j3_min, min(j3_max, q3))
-            if q2_clipped != q2 or q3_clipped != q3:
-                print(f"  WARNING: Joint limits applied: q2 {q2:.4f} -> {q2_clipped:.4f}, q3 {q3:.4f} -> {q3_clipped:.4f}")
-
-            q_target = [q1, q2_clipped, q3_clipped, 0.0, 0.0, 0.0]
-
-            # Command the target and let PD converge
-            for _ in range(IK_SETTLE_STEPS):
-                action = torch.zeros(env.num_envs, num_arm_joints + 1, device=env.device)
-                for j in range(num_arm_joints):
-                    action[:, j] = q_target[j]
-                action[:, num_arm_joints] = GRIPPER_OPEN
-                env.step(action)
-
-            # Measure residual
-            ee_pose_w = robot.data.body_pose_w[:, robot_entity_cfg.body_ids[0]]
-            ee_pos_b, _ = subtract_frame_transforms(
-                robot.data.root_pose_w[:, 0:3], robot.data.root_pose_w[:, 3:7], ee_pose_w[:, 0:3], ee_pose_w[:, 3:7]
+            q_target, residual = solve_waypoint_with_correction(
+                env, robot, robot_entity_cfg, pt, j2_min, j2_max, j3_min, j3_max, num_arm_joints
             )
-            target_t = torch.tensor(pt, device=env.device)
-            residual = torch.norm(ee_pos_b[0] - target_t).item()
-            print(f"  -> residual {residual:.5f}m, q={['%.4f' % x for x in q_target[:3]]}")
+            print(f"  -> final residual {residual:.5f}m, q={['%.4f' % x for x in q_target[:3]]}")
             solved_qs.append(q_target)
 
         print("\n[INFO] All waypoints solved. Executing square path (looping wrist/gripper limp, arm off, then square, then home)...\n")

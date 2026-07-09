@@ -1,6 +1,6 @@
 # scripts/smoke_test_touchgoal_env.py
 """Headless smoke test for Ar4PickPlaceTouchGoalEnvCfg (Experiment 25):
-builds the env, steps it a fixed number of times with random actions
+builds the env, steps it a fixed number of times with all-zero actions
 across a few envs, and prints observation shapes, reward values, and
 termination behavior - real evidence the env cfg actually builds and
 runs, not just that it imports without error.
@@ -56,9 +56,9 @@ def main() -> None:
                     f"terminated={terminated.cpu().tolist()}, truncated={truncated.cpu().tolist()}"
                 )
 
-        # Drive one env's arm target directly toward a plausible pose and confirm
-        # touch_goal_milestone_bonus and touched-cube latch actually respond -
-        # not just that the env runs without crashing.
+        # Read and print state after 50 static/zero-action steps to confirm
+        # these buffers exist and hold sane values (_touched_cube latch,
+        # touch_goal_milestone_max, cube position, ee_frame target position).
         cube = env.scene["cube"]
         ee_frame = env.scene["ee_frame"]
         print(f"[SMOKE] cube position (env 0): {cube.data.root_pos_w[0].cpu().tolist()}")

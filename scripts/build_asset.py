@@ -141,6 +141,146 @@ def _generate_wedge_usd(out_path: str, radius: float = 0.011, height: float = 0.
     stage.GetRootLayer().Save()
 
 
+def _build_urdf_color_map(urdf_path: str) -> dict:
+    """Parse a URDF and return {visual_mesh_basename -> (r, g, b)} from each
+    ``<visual>``'s ``<material><color rgba>``.
+
+    The installed URDF importer (isaacsim.asset.importer.urdf) authors a white
+    ``DefaultMaterial`` (``diffuse_color_constant = (1, 1, 1)``) for every
+    imported mesh and discards the URDF's per-visual ``<material><color>``
+    values entirely - there is no ImportConfig flag controlling this. This map
+    is used in a post-import pass to write the authored colors back onto the
+    generated USD's shaders, so the arm renders with its real aluminum / dark-
+    motor / enclosure scheme instead of a flat white silhouette.
+
+    URDF allows a material to be defined once (with a color) and referenced by
+    name later without repeating the color, so named colors are collected
+    globally first and then resolved per visual.
+    """
+    import xml.etree.ElementTree as ET
+
+    def _parse_rgba(color_el):
+        rgba = color_el.get("rgba", "").split()
+        if len(rgba) < 3:
+            return None
+        return (float(rgba[0]), float(rgba[1]), float(rgba[2]))
+
+    tree = ET.parse(urdf_path)
+    root = tree.getroot()
+
+    # Global name -> color table (any <material name=...><color/></material>).
+    named_colors: dict = {}
+    for mat in root.iter("material"):
+        name = mat.get("name")
+        color_el = mat.find("color")
+        if name and color_el is not None:
+            rgb = _parse_rgba(color_el)
+            if rgb is not None:
+                named_colors[name] = rgb
+
+    color_map: dict = {}
+    for visual in root.iter("visual"):
+        mesh_el = visual.find("geometry/mesh")
+        mat_el = visual.find("material")
+        if mesh_el is None or mat_el is None:
+            continue
+        filename = mesh_el.get("filename", "")
+        if not filename:
+            continue
+        basename = os.path.splitext(os.path.basename(filename))[0]
+        # Prefer an inline <color>; fall back to a named-material reference.
+        color_el = mat_el.find("color")
+        rgb = _parse_rgba(color_el) if color_el is not None else named_colors.get(mat_el.get("name"))
+        if rgb is not None:
+            color_map[basename] = rgb
+    return color_map
+
+
+def _apply_visual_colors(base_usd_path: str, color_map: dict) -> None:
+    """Write the URDF's per-visual colors onto the imported USD's shaders.
+
+    The importer nests each visual under ``.../visuals/<MeshName>/...`` with a
+    bound ``DefaultMaterial`` whose MDL shader carries a
+    ``diffuse_color_constant`` input (default white). ``<MeshName>`` is the STL
+    file's basename, which is exactly the key produced by
+    :func:`_build_urdf_color_map`. Both the shader's ``diffuse_color_constant``
+    (what the RTX renderer uses) and the mesh's ``displayColor`` primvar (a
+    fallback for non-RTX/Hydra-Storm viewports) are set.
+
+    Authored directly on the base configuration layer (the layer that *defines*
+    the geometry and materials), so the change composes into the referenced
+    asset without running into instanceable-proxy edit restrictions.
+    """
+    from pxr import Gf, Sdf, Usd, UsdGeom, UsdShade, Vt
+
+    stage = Usd.Stage.Open(base_usd_path)
+
+    def _mesh_name_from_path(path_str: str):
+        # In the base layer the importer authors each visual under
+        #   /visuals/<link>/<STLName>/node_STL_BINARY_/{mesh,Looks/DefaultMaterial/...}
+        # so the STL basename (the color_map key) is the component immediately
+        # *before* the node_STL_* marker - not the component after "visuals"
+        # (that is the link name). Collision geometry lives under a separate
+        # scope and never carries a node_STL_* visual marker here.
+        parts = path_str.split("/")
+        marker_idx = next((i for i, p in enumerate(parts) if p.startswith("node_STL")), None)
+        if marker_idx is None or marker_idx == 0:
+            return None
+        if "collisions" in parts:
+            return None  # never recolor collision meshes
+        return parts[marker_idx - 1]
+
+    shaders_set = 0
+    meshes_set = 0
+    unmatched = set()
+
+    for prim in stage.Traverse():
+        tname = prim.GetTypeName()
+        if tname == "Shader":
+            name = _mesh_name_from_path(prim.GetPath().pathString)
+            if name is None:
+                continue
+            rgb = color_map.get(name)
+            if rgb is None:
+                unmatched.add(name)
+                continue
+            shader = UsdShade.Shader(prim)
+            vec = Gf.Vec3f(*rgb)
+            inp = shader.GetInput("diffuse_color_constant")
+            if not inp:
+                inp = shader.CreateInput("diffuse_color_constant", Sdf.ValueTypeNames.Color3f)
+            inp.Set(vec)
+            shaders_set += 1
+        elif tname == "Mesh":
+            name = _mesh_name_from_path(prim.GetPath().pathString)
+            if name is None:
+                continue
+            rgb = color_map.get(name)
+            if rgb is None:
+                continue
+            mesh = UsdGeom.Mesh(prim)
+            mesh.CreateDisplayColorAttr().Set(Vt.Vec3fArray([Gf.Vec3f(*rgb)]))
+            meshes_set += 1
+
+    stage.GetRootLayer().Save()
+    print(
+        f"[colors] applied URDF visual colors: {shaders_set} shaders, "
+        f"{meshes_set} mesh displayColors set (base layer: {os.path.basename(base_usd_path)})"
+    )
+    if unmatched:
+        print(f"[colors] WARNING: {len(unmatched)} visual mesh name(s) had no URDF color match: {sorted(unmatched)}")
+
+
+def _locate_base_layer(usd_out_dir: str) -> str:
+    """Return the configuration sub-layer that defines the imported geometry
+    and materials (``*_base.usd``; falls back to the largest .usd)."""
+    config_dir = os.path.join(usd_out_dir, "configuration")
+    candidates = [f for f in os.listdir(config_dir) if f.endswith(".usd")]
+    base = [f for f in candidates if f.endswith("_base.usd")]
+    chosen = base[0] if base else max(candidates, key=lambda f: os.path.getsize(os.path.join(config_dir, f)))
+    return os.path.join(config_dir, chosen)
+
+
 def main() -> None:
     description_path = _resolve_description_path()
 
@@ -194,6 +334,13 @@ def main() -> None:
         if not result_path or not os.path.isfile(output_usd):
             simulation_app.close()
             sys.exit("URDF import failed: no USD output produced.")
+
+        # The importer discards the URDF's per-visual <material><color> values
+        # (every mesh gets a white DefaultMaterial). Write them back onto the
+        # generated USD so the arm renders in its real color scheme.
+        color_map = _build_urdf_color_map(urdf_path)
+        base_layer = _locate_base_layer(USD_OUT_DIR)
+        _apply_visual_colors(base_layer, color_map)
 
         manifest_path = os.path.join(USD_OUT_DIR, "usd_path.txt")
         with open(manifest_path, "w") as f:

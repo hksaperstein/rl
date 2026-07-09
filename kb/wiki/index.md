@@ -116,6 +116,13 @@ see the coverage boundary note below.)*
   spatially opposed; the generalized lesson from Experiment 25's
   pre-training dead-zone catch (2026-07-09, also post-dates the rest of
   this first pass).
+- [[asset-build-material-import]] — the shared AR4 USD asset rendered as a
+  flat white silhouette because this Isaac Sim version's URDF importer
+  discards per-visual `<material><color>` values (no ImportConfig flag
+  controls it); fixed with a post-import color-authoring pass in
+  `build_asset.py`, verified cosmetic-only (physics/robot layers byte-
+  identical, EE offset re-checked) (2026-07-09, also post-dates this first
+  pass).
 - [[hyperparameter-registry]] — table-first, edit-in-place reference for
   every actively-tuned hyperparameter (physics/PPO/actuator/task-reward):
   current value, where it's set, why, what changed it last. Unlike the

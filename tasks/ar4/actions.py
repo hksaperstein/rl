@@ -159,13 +159,16 @@ class ProximityGatedBinaryJointPositionActionCfg(BinaryJointPositionActionCfg):
 
 class MirroredGripperAction(ProximityGatedBinaryJointPositionAction):
     """Gripper action where gripper_jaw2_joint's commanded target
-    continuously tracks gripper_jaw1_joint's ACTUAL measured position
-    each step, rather than both jaws independently targeting a fixed
-    open/closed constant. Subclasses ProximityGatedBinaryJointPositionAction
-    (not plain BinaryJointPositionAction) so both mechanisms compose:
-    the gate still decides whether closing is allowed at all
-    (super().process_actions runs the gate logic first), then jaw2's
-    target is overridden to jaw1's live actual position regardless.
+    continuously tracks gripper_jaw1_joint's own COMMANDED target
+    (zero-lag, already gate-processed by super().process_actions this same
+    step), rather than both jaws independently targeting a fixed open/closed
+    constant. This is the corrected version of the Experiment 22 mechanism,
+    which tracked the actual/settled position and was found to suffer from
+    reactive lag under a moving jaw1 target. Subclasses
+    ProximityGatedBinaryJointPositionAction (not plain BinaryJointPositionAction)
+    so both mechanisms compose: the gate still decides whether closing is
+    allowed at all (super().process_actions runs the gate logic first), then
+    jaw2's target is overridden to jaw1's commanded target regardless.
 
     Implements mimic behavior as a software control-loop reference
     rather than a PhysX-level constraint - Experiment 19's
@@ -190,8 +193,16 @@ class MirroredGripperAction(ProximityGatedBinaryJointPositionAction):
 
     def process_actions(self, actions: torch.Tensor) -> None:
         super().process_actions(actions)
-        jaw1_actual_pos = self._asset.data.joint_pos[:, self._joint_ids[0]]
-        self._processed_actions[:, 1] = jaw1_actual_pos
+        # Track jaw1's own COMMANDED target (already gate-processed by
+        # super().process_actions this same step, zero lag) instead of
+        # its physically-settled actual position (one physics step
+        # stale under contact load) - Experiment 22's own report
+        # identified this exact fix as the concrete next lever after
+        # finding jaw2 structurally lags a moving jaw1 target by one
+        # control step. See
+        # docs/superpowers/specs/2026-07-09-ar4-experiment26-gripper-reintroduction-design.md.
+        jaw1_commanded_target = self._processed_actions[:, 0]
+        self._processed_actions[:, 1] = jaw1_commanded_target
 
 
 @configclass

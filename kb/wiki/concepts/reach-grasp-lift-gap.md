@@ -166,10 +166,59 @@ family, at least for now. The North Star's broader manipulation goal is
 unchanged, but this specific narrow phase's definition of success was
 renegotiated rather than the mechanism retried an eighth time.
 
+## A new, more severe stage: complete static freeze, no reach attempt at all (Experiment 26)
+
+Every failure signature recorded above, across the sphere era, the cube
+era, and Experiment 25's touch-goal reduction, involves **at least some
+motion**: the sphere-era standing failure signature is "reach, grip,
+freeze" — a real reach followed by a real grasp followed by a static hold;
+even the pre-Experiment-1 precursor and the multiplicatively-gated
+alignment-bonus freeze (item 1 and item 6's sub-case above) show the arm
+reaching toward the object for roughly the first second before locking into
+a static pose; Experiment 25's own near-miss shows the arm reliably curling
+onto the cube and extending most of the way toward the goal before stalling
+just outside tolerance. In every one of these cases, a reach attempt
+happens; the gap is in what comes after it.
+
+[[experiment-26-gripper-reintroduction]] breaks that pattern. Reintroducing
+the gripper (grasp/lift/carry/goal back in scope, composing Experiment 21's
+proximity gate with Experiment 17's antipodal gate under a 4-stage
+extension of Experiment 25's monotonic staged-potential reward, per
+ROADMAP.md item 11) produced a trained policy that held one completely
+static pose for the full 30-second episode in all 4 inspected envs, with
+frames sampled every 3 seconds visually identical from step 1 to timeout —
+**no reach attempt at all, not a reach that stalls, not a grasp-then-freeze,
+static from the first logged step.** `cube_reached_goal` stayed at exactly
+`0.0000` for the entire 1500-iteration run, and the one nonzero reward
+component (`grasp_goal_milestone_bonus`) plateaued within the first ~15
+iterations and never moved again.
+
+This is a new, more severe point on this gap's throughline, not a repeat of
+an existing stage: every prior instance of "the policy doesn't get past
+reach" still involved genuine reach behavior emerging first (this project's
+one sub-behavior that had converged reliably, ~0.92-0.95, across nearly
+every experiment in its history, independent of reward or action-space
+design — the very fact Experiment 25's hypothesis leaned on). Here, reach
+itself fails to emerge under the reintroduced gripper action/observation
+surface, something none of experiments 1 through 25 exhibited even in their
+worst failure cases. Since the arm-only, gripper-free `--touchgoal` task
+(Experiment 25) reliably converges under the same physics/PPO setup, the
+regression specifically implicates what changed with the gripper's
+reintroduction (action dimension 7→8, observation dimension 24→31 via the
+new `grasp_state` term, or the reward's `reach` segment specifically under
+the new 4-stage formula) rather than a general breakdown of this project's
+established reach behavior. Not yet root-caused — see
+[[experiment-26-gripper-reintroduction]] for the full result and
+[[staged-reward-co-satisfiability]] for the reward mechanism this design
+extends.
+
 ## Related experiments
 
 All 14 — this is the connecting narrative across the entire numbered
 sequence — plus [[experiment-25-touch-goal-reach]], a later structural
 pivot away from this gap rather than a further attempt to close it (see the
 section above; Experiments 15-24 in between remain an acknowledged
-uncompiled gap).
+uncompiled gap), and [[experiment-26-gripper-reintroduction]], a new and
+more severe stage on the same throughline: complete static freeze from
+step 1, distinct from every prior failure signature's "at least some
+motion" pattern.

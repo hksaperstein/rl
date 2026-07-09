@@ -136,6 +136,25 @@ time `sim.dt` changes for any reason. Any future script that counts
 substeps directly, not just `interactive_joint_demo.py`, should be
 considered a candidate for this same bug until checked.
 
+## A related gotcha, not physics but the same "verify, don't assume" discipline: camera frames can be silently flipped
+
+Not a physics-fidelity bug itself, but the same category of silent,
+easy-to-miss correctness defect this article otherwise documents (opaque
+PhysX offsets, a raw-substep settle-time coupling). While building
+Experiment 26's close-up camera (see
+[[experiment-26-gripper-reintroduction]]), both
+`scripts/graspgoal_closeup_video.py` and the existing
+`scripts/touchgoal_closeup_video.py` were found saving every frame
+vertically flipped — an OpenGL framebuffer row-order convention
+(row-0-at-bottom) never corrected before writing to PNG/mp4, confirmed
+empirically only once an unflipped render showed the ground grid at the top
+of frame and sky at the bottom. Any future script that reads a camera
+sensor's raw buffer directly (`camera.data.output["rgb"]` or equivalent)
+rather than going through a library that already handles row order is a
+candidate for this same bug until checked with exactly this kind of direct
+visual sanity check, not assumed correct because the render "looks like an
+image."
+
 ## Related concepts
 
 [[reach-grasp-lift-gap]] — the zero-contact-force classical-IK grasp miss

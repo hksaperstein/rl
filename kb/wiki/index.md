@@ -76,6 +76,14 @@ see the coverage boundary note below.)*
     end-effector reaching. A pre-training review caught a running-max
     dead-zone defect before any training run; the actual training run
     itself has not yet been executed as of this pass.
+26. [[experiment-26-gripper-reintroduction]] — reintroduces the gripper
+    (grasp/lift/carry/goal back in scope), composing Experiment 21's
+    proximity gate and Experiment 17's antipodal gate with a 4-stage
+    extension of Experiment 25's monotonic staged reward and a 30s
+    episode; falsified by a complete static freeze from step 1 in all 4
+    inspected envs — a qualitatively more severe failure signature than
+    any prior stage in this project's history, which always showed at
+    least some motion.
 
 ### Concepts
 
@@ -128,23 +136,27 @@ chronological source record.
 ## Coverage boundary as of 2026-07-09
 
 `ROADMAP.md`'s "Known follow-ups" section has grown substantially since the
-2026-07-07 pass above — it now runs through item 10, covering (at minimum)
+2026-07-07 pass above — it now runs through item 11, covering (at minimum)
 Experiment 24 Gate 1's scripted-oracle stall (item 6), the classical
 (non-RL) IK reachability investigation (items 7-8), a 2026-07-09
-physics-fidelity verification pass (item 9), and Experiment 25's
-touch-goal-reach structural pivot (item 10). **Items 6-8, and the numbered
-Experiments 15 through 24 that fall between this wiki's first pass and
-Experiment 25, are not individually compiled into their own articles yet**
-— that backfill is a separate, larger gap left for a future pass, not
-attempted here. Two exceptions exist so far: item 9's physics-fidelity
-content (dt/decimation, collision offsets, EE-frame verification
-methodology, and a settle-time/dt coupling bug class) is covered in
-[[sim-physics-fidelity]], with item 9's classical-IK contact-sensor finding
-cross-linked from [[reach-grasp-lift-gap]]'s closing sections; and item
-10 (Experiment 25) is covered in [[experiment-25-touch-goal-reach]], with
-its structural-pivot narrative folded into [[reach-grasp-lift-gap]]'s
-newest closing section and its running-max dead-zone finding generalized
-in [[staged-reward-co-satisfiability]]. Silence on items 6-8 and
-Experiments 15-24 here means "not yet compiled," not "nothing happened" —
-see `ROADMAP.md` itself for the full record of those items in the
-meantime.
+physics-fidelity verification pass (item 9), Experiment 25's
+touch-goal-reach structural pivot (item 10), and Experiment 26's gripper
+reintroduction (item 11). **Items 6-8, and the numbered Experiments 15
+through 24 that fall between this wiki's first pass and Experiment 25, are
+not individually compiled into their own articles yet** — that backfill is
+a separate, larger gap left for a future pass, not attempted here. Three
+exceptions exist so far: item 9's physics-fidelity content (dt/decimation,
+collision offsets, EE-frame verification methodology, and a settle-time/dt
+coupling bug class) is covered in [[sim-physics-fidelity]], with item 9's
+classical-IK contact-sensor finding cross-linked from
+[[reach-grasp-lift-gap]]'s closing sections; item 10 (Experiment 25) is
+covered in [[experiment-25-touch-goal-reach]], with its structural-pivot
+narrative folded into [[reach-grasp-lift-gap]]'s closing sections and its
+running-max dead-zone finding generalized in
+[[staged-reward-co-satisfiability]]; and item 11 (Experiment 26) is covered
+in [[experiment-26-gripper-reintroduction]], with its complete-static-freeze
+finding folded into [[reach-grasp-lift-gap]]'s newest closing section as a
+new, more severe point on that article's whole throughline. Silence on
+items 6-8 and Experiments 15-24 here means "not yet compiled," not "nothing
+happened" — see `ROADMAP.md` itself for the full record of those items in
+the meantime.

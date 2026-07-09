@@ -2538,6 +2538,63 @@ follow-ups below.
       existing tolerance. Not pursued further in this pass — superseded by
       the next direction (reintroducing the gripper) per direct user
       instruction.
+11. **Experiment 26: reintroduce the gripper (grasp/lift/carry/goal), 30s
+    episodes. Trained policy stays completely static for the entire
+    episode — a full freeze, not a partial attempt.** Design:
+    `docs/superpowers/specs/2026-07-09-ar4-experiment26-gripper-reintroduction-design.md`.
+    Plan: `docs/superpowers/plans/2026-07-09-ar4-experiment26-gripper-reintroduction-implementation.md`.
+    - Composed two previously-validated fixes (Experiment 21's
+      proximity-gated gripper, Experiment 17's antipodal grasp gate) with
+      a 4-stage extension of Experiment 25's monotonic staged-potential
+      reward (reach → grasp → lift → goal) and a Stack-task-precedented
+      30.0s episode length. A third originally-planned fix (Experiment
+      22's jaw-mirroring mechanism) was found and retired during final
+      whole-branch review — see item 10's own follow-up entry above and
+      `tasks/ar4/pickplace_graspgoal_env_cfg.py`'s `ActionsCfg` docstring
+      for the full account.
+    - **Training (1500 iterations): `Episode_Termination/cube_reached_goal`
+      stayed at exactly `0.0000` for the entire run — not a single logged
+      point showed any nonzero value.** `Episode_Reward/grasp_goal_milestone_bonus`
+      rose from `0.0001` to `~0.0037` in the first handful of iterations,
+      then stayed completely flat at that value for the rest of training
+      (iteration ~15 through 1500). `Episode_Termination/time_out` was
+      `1.0000` throughout — every single episode ran the full 1500-step/
+      30s length. Training itself was stable throughout (`Loss/value_function`
+      ≈0, `Mean action noise std` ≈1.0-1.1, no divergence signature).
+    - **A front, head-on close-up camera** (`tasks/ar4/graspgoal_democam_env_cfg.py`,
+      built per direct user request) confirms this directly: a 4-env
+      deterministic rollout of the final checkpoint (`model_1499.pt`)
+      shows 0/4 envs ever grasping, lifting, or reaching the goal, and the
+      arm's pose at episode timeout (step 1500) is visually indistinguishable
+      from its pose at step 1 - confirmed by sampling frames at 3s
+      intervals throughout the episode, all identical. **The trained
+      policy holds a single static pose for the entire 30-second episode,
+      not even attempting to move toward the cube.**
+    - **Building this camera surfaced and fixed a real, unrelated bug**:
+      `scripts/graspgoal_closeup_video.py` and `scripts/touchgoal_closeup_video.py`
+      (both share the same `camera.data.output["rgb"]`-reading code) were
+      saving every frame vertically flipped (OpenGL framebuffer convention,
+      row-0-at-bottom, never corrected before writing to PNG/mp4) -
+      confirmed empirically (an unflipped render showed the ground grid
+      at the top of frame, sky at the bottom) and fixed in both scripts.
+      Item 10's touchgoal video-review conclusions were based on relative
+      position/distance state, not pixel interpretation, so aren't
+      invalidated by this - but the images themselves were genuinely
+      inverted and this is recorded for the record.
+    - **Net assessment: this is a different, more severe failure signature
+      than anything in this project's sphere-era history** (which always
+      showed at least *some* motion - "reach, grip, freeze" after genuine
+      contact, or a reach-converges-then-holds pattern) - here there is no
+      reach attempt at all, static from step 1. Given `--touchgoal`
+      (arm-only, 2-stage) reliably converges under this same physics/PPO
+      setup, the regression specifically implicates the reintroduced
+      gripper action/observation surface (arm-only action dim 7→ now
+      includes the gripper's binary action; observation dim 24→31,
+      including the new `grasp_state` term) or the reward's `reach`
+      segment specifically failing to provide a usable gradient under
+      the new 4-stage formula, not a general breakdown of PPO/physics.
+      Not yet root-caused - flagged as the next investigation, not
+      pursued further in this pass.
 
 ## Direction
 

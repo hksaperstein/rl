@@ -52,7 +52,6 @@ from .robot_cfg import (
 # value, different physical meaning.
 GOAL_OFFSET = (-0.40, 0.0, 0.144)
 
-CUBE_HALF_SIZE = 0.006
 REACH_DIST_NORM = 0.3
 LIFT_MINIMAL_HEIGHT = 0.03
 LIFT_TARGET_HEIGHT = 0.10

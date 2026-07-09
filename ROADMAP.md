@@ -2539,8 +2539,9 @@ follow-ups below.
       the next direction (reintroducing the gripper) per direct user
       instruction.
 11. **Experiment 26: reintroduce the gripper (grasp/lift/carry/goal), 30s
-    episodes. Trained policy stays completely static for the entire
-    episode — a full freeze, not a partial attempt.** Design:
+    episodes. Trained policy reaches close to the cube fast (~2.4cm by
+    0.5s) but never holds that position or grasps — it oscillates in
+    reach distance for the remaining ~29s of every episode.** Design:
     `docs/superpowers/specs/2026-07-09-ar4-experiment26-gripper-reintroduction-design.md`.
     Plan: `docs/superpowers/plans/2026-07-09-ar4-experiment26-gripper-reintroduction-implementation.md`.
     - Composed two previously-validated fixes (Experiment 21's
@@ -2562,39 +2563,69 @@ follow-ups below.
       30s length. Training itself was stable throughout (`Loss/value_function`
       ≈0, `Mean action noise std` ≈1.0-1.1, no divergence signature).
     - **A front, head-on close-up camera** (`tasks/ar4/graspgoal_democam_env_cfg.py`,
-      built per direct user request) confirms this directly: a 4-env
-      deterministic rollout of the final checkpoint (`model_1499.pt`)
-      shows 0/4 envs ever grasping, lifting, or reaching the goal, and the
-      arm's pose at episode timeout (step 1500) is visually indistinguishable
-      from its pose at step 1 - confirmed by sampling frames at 3s
-      intervals throughout the episode, all identical. **The trained
-      policy holds a single static pose for the entire 30-second episode,
-      not even attempting to move toward the cube.**
-    - **Building this camera surfaced and fixed a real, unrelated bug**:
-      `scripts/graspgoal_closeup_video.py` and `scripts/touchgoal_closeup_video.py`
-      (both share the same `camera.data.output["rgb"]`-reading code) were
-      saving every frame vertically flipped (OpenGL framebuffer convention,
-      row-0-at-bottom, never corrected before writing to PNG/mp4) -
-      confirmed empirically (an unflipped render showed the ground grid
-      at the top of frame, sky at the bottom) and fixed in both scripts.
-      Item 10's touchgoal video-review conclusions were based on relative
-      position/distance state, not pixel interpretation, so aren't
-      invalidated by this - but the images themselves were genuinely
-      inverted and this is recorded for the record.
-    - **Net assessment: this is a different, more severe failure signature
-      than anything in this project's sphere-era history** (which always
-      showed at least *some* motion - "reach, grip, freeze" after genuine
-      contact, or a reach-converges-then-holds pattern) - here there is no
-      reach attempt at all, static from step 1. Given `--touchgoal`
-      (arm-only, 2-stage) reliably converges under this same physics/PPO
-      setup, the regression specifically implicates the reintroduced
-      gripper action/observation surface (arm-only action dim 7→ now
-      includes the gripper's binary action; observation dim 24→31,
-      including the new `grasp_state` term) or the reward's `reach`
-      segment specifically failing to provide a usable gradient under
-      the new 4-stage formula, not a general breakdown of PPO/physics.
-      Not yet root-caused - flagged as the next investigation, not
-      pursued further in this pass.
+      built per direct user request) was used for an initial visual check
+      via sparse (3-second-interval) frame sampling. That sampling showed
+      apparently-identical poses at every sampled instant and was
+      (wrongly) read as "the arm never moves at all" - **this
+      characterization has since been corrected** (see below);  3-second
+      sampling is too sparse to distinguish a true freeze from an
+      oscillating trajectory that happens to revisit similar poses.
+    - **A separate root-cause investigation's instrumented rollout
+      reported a different pattern**: the arm reaches to within ~2.4cm of
+      the cube and then holds. This was also incomplete - correct about
+      the fast initial reach, wrong about the "holds" part.
+    - **Resolved directly with a per-step trajectory trace**
+      (`scripts/graspgoal_reach_trajectory_check.py`, printing exact
+      `reach_dist` every 10-100 steps across a full 1500-step/30s episode,
+      4 envs, `model_1499.pt`), settling the disagreement between the
+      above two reads with real numbers instead of either visual sampling
+      or a single before/after check. **Verified behavior: `reach_dist`
+      drops from ~0.52m at reset to ~0.024-0.026m by step 20-30
+      (0.4-0.6s) - a fast, genuine, accurate reach. It does NOT hold
+      there: for the remaining ~29s of the episode, `reach_dist`
+      oscillates unpredictably, ranging roughly between 0.04m and 0.6m at
+      different sampled points (e.g. step 900: `[0.494, 0.514, 0.341,
+      0.269]`; step 1300: `[0.593, 0.208, 0.574, 0.052]`), never
+      restabilizing near the cube and never crossing into `grasped`/
+      `lifted` (both `False` for all 4 envs at every sampled point,
+      start to finish).** Neither the original "complete static freeze"
+      read nor the "reaches and holds" read is correct - the real
+      signature is "reaches fast and accurately once, then wanders/
+      oscillates without holding or re-settling, grasp never discovered."
+    - **Building the demo camera surfaced and fixed a real, unrelated
+      bug**: `scripts/graspgoal_closeup_video.py` and
+      `scripts/touchgoal_closeup_video.py` (both share the same
+      `camera.data.output["rgb"]`-reading code) were saving every frame
+      vertically flipped (OpenGL framebuffer convention, row-0-at-bottom,
+      never corrected before writing to PNG/mp4) - confirmed empirically
+      (an unflipped render showed the ground grid at the top of frame,
+      sky at the bottom) and fixed in both scripts. Item 10's touchgoal
+      video-review conclusions were based on relative position/distance
+      state, not pixel interpretation, so aren't invalidated by this -
+      but the images themselves were genuinely inverted and this is
+      recorded for the record.
+    - **Net assessment: this is a plausible artifact of the running-max
+      milestone reward mechanism combined with a grasp gate the policy
+      never discovers.** The `grasp_goal_milestone_bonus`'s reach segment
+      is a running MAX over `reach_progress` - once the policy achieves
+      its single best (closest) approach early in an episode, that best
+      is permanently banked; nothing in the reward differentiates staying
+      close from wandering away afterward, and since the antipodal grasp
+      gate is apparently never satisfied, there is no further
+      outcome-relevant gradient for the rest of the episode. This is
+      consistent with an initial fast, accurate reach (which IS rewarded,
+      once) followed by directionless movement (which is neither
+      rewarded nor penalized). This differs from this project's
+      sphere-era "reach, grip, freeze" signature (which involved genuine
+      contact before going static) - here contact/grasp is never
+      achieved, but the arm does not freeze either; it keeps moving
+      without converging. Given `--touchgoal` (arm-only, 2-stage)
+      reliably converges under this same physics/PPO setup, the
+      regression specifically implicates the reintroduced gripper action/
+      observation surface or the reward's lack of an incentive to
+      *hold* a good reach once achieved, not a general breakdown of PPO/
+      physics. Not yet root-caused to a specific fix - flagged as the
+      next investigation, not pursued further in this pass.
 
 ## Direction
 

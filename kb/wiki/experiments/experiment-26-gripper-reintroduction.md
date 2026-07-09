@@ -70,14 +70,37 @@ A new front, head-on close-up camera
 (`tasks/ar4/graspgoal_democam_env_cfg.py`, built per direct user request,
 after two framing corrections during construction — wrong height, then
 wrong side of the robot entirely, confirmed by the rendered image showing a
-rear access panel instead of the front) was used to check this directly.
+rear access panel instead of the front) was used for an initial check.
 A 4-env deterministic rollout of the final checkpoint (`model_1499.pt`)
-shows 0/4 envs ever grasping, lifting, or reaching the goal. Frames sampled
-at 3-second intervals throughout the 30-second episode are visually
-identical from step 1 to episode timeout (step 1500): **the trained policy
-holds one completely static pose for the entire episode and never even
-attempts to move toward the cube** — not a reach that stalls partway, not
-a grasp followed by a freeze, no motion at all from the first logged step.
+confirmed 0/4 envs ever grasping, lifting, or reaching the goal. Frames
+sampled at 3-second intervals throughout the 30-second episode looked
+visually identical from step 1 to episode timeout — this was initially
+read as "the trained policy holds one completely static pose for the
+entire episode and never even attempts to move toward the cube," but
+**this read was wrong**, corrected below.
+
+A separate root-cause investigation's own instrumented rollout reported a
+different pattern instead — that the arm reaches to within ~2.4cm of the
+cube and then holds there. This too proved incomplete.
+
+The disagreement between these two reads was resolved directly with a
+per-step trajectory trace (`scripts/graspgoal_reach_trajectory_check.py`),
+printing exact `reach_dist` every 10-100 steps across a full 1500-step
+(30s) episode for 4 envs on `model_1499.pt` — real numbers instead of
+either sparse visual sampling or a single before/after check. **Verified
+behavior: `reach_dist` drops from ~0.52m at reset to ~0.024-0.026m by step
+20-30 (0.4-0.6s) — a fast, genuine, accurate reach. It does NOT hold
+there.** For the remaining ~29s of the episode, `reach_dist` oscillates
+unpredictably, ranging roughly between 0.04m and 0.6m at different sampled
+points (e.g. step 900: `[0.494, 0.514, 0.341, 0.269]`; step 1300: `[0.593,
+0.208, 0.574, 0.052]`), never restabilizing near the cube, and `grasped`/
+`lifted` stay `False` for all 4 envs at every sampled point from start to
+finish. The 3-second-interval visual sampling that suggested a total
+freeze was simply too sparse to distinguish a genuine freeze from an
+oscillating trajectory that happens to revisit similar-looking poses at
+the sampled instants. **The real signature: fast, accurate initial reach,
+followed by directionless wandering that never holds or re-settles, grasp
+never discovered — neither a freeze nor a clean "reach and hold."**
 
 Building this camera also surfaced and fixed a real, separate bug,
 unrelated to the training result itself: both the new
@@ -97,34 +120,41 @@ rendering bug worth flagging for reuse elsewhere (see
 
 ## Verdict
 
-**Falsified, and by a qualitatively more severe failure signature than
-anything else in this project's history.** Every prior null result in this
-project's whole reach-grasp-lift arc — sphere-era "reach, grip, freeze,"
-Experiment 25's touch-goal near-miss — involved at least some genuine
-motion: a reach attempt, sometimes a real grasp, before the policy stalled
-or froze. Here there is no reach attempt at all. The policy is static from
-step 1, for the full 30-second episode, in all 4 inspected envs. This is a
-complete freeze, not a partial one — precisely the distinction this article
-exists to record, and the reason it is a new, more severe point on the
-[[reach-grasp-lift-gap]] throughline rather than a repeat of the "reach,
-grip, freeze" pattern.
+**Falsified — but the failure mode is distinct from any prior null result
+in this project's reach-grasp-lift arc, and is not a freeze.** The policy
+reaches genuinely and quickly (2.4cm within 0.6s), which is real motion,
+then never holds that position or crosses the grasp gate; instead it
+wanders in reach distance for the rest of the episode. This is neither
+sphere-era "reach, grip, freeze" (which involved genuine contact before
+going static) nor a clean "reach and hold" — it is closer to "reach
+achieved once, then no further outcome-relevant behavior."
+
+A plausible mechanism: the `grasp_goal_milestone_bonus`'s reach segment is
+a running MAX over `reach_progress` (see [[staged-reward-co-satisfiability]]),
+so once the policy achieves its single best (closest) approach early in an
+episode, that best is permanently banked — nothing in the reward
+differentiates staying close from wandering away afterward. Since the
+antipodal grasp gate is apparently never satisfied, there is no further
+outcome-relevant gradient for the remainder of the episode, consistent
+with an initial accurate reach (rewarded once) followed by movement that
+is neither rewarded nor penalized.
 
 Since `--touchgoal` (arm-only, 2-stage, no gripper) reliably converges
 under the same physics/PPO setup Experiment 25 already validated, the
 regression specifically implicates something introduced by the
 reintroduced gripper action/observation surface (action dimension 7→8,
 adding the gripper's binary action; observation dimension 24→31, adding
-the new `grasp_state` term) or the reward's `reach` segment specifically
-failing to provide a usable gradient under the new 4-stage formula — not a
-general breakdown of PPO or physics under this task family. Not yet
-root-caused; flagged as the next investigation, not pursued further in
-this pass.
+the new `grasp_state` term) or the reward's lack of any incentive to
+*hold* a good reach once achieved — not a general breakdown of PPO or
+physics under this task family. Not yet root-caused to a specific fix;
+flagged as the next investigation, not pursued further in this pass.
 
 ## Related concepts
 
-[[reach-grasp-lift-gap]] — this experiment adds a new, more severe closing
-stage to that article's whole arc: complete static freeze from step 1,
-distinct from every prior "at least some motion" failure signature.
+[[reach-grasp-lift-gap]] — this experiment adds a new point to that
+article's whole arc: fast, accurate reach followed by unresolved
+oscillation and no grasp, distinct from every prior failure signature
+(neither "some motion then freeze" nor "reach and hold").
 [[staged-reward-co-satisfiability]] — the 4-stage monotonic potential this
 design's reward reuses is a direct extension of Experiment 25's
 dead-zone-immune mechanism; the design's hypothesis explicitly credits this

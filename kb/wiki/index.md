@@ -80,10 +80,13 @@ see the coverage boundary note below.)*
     (grasp/lift/carry/goal back in scope), composing Experiment 21's
     proximity gate and Experiment 17's antipodal gate with a 4-stage
     extension of Experiment 25's monotonic staged reward and a 30s
-    episode; falsified by a complete static freeze from step 1 in all 4
-    inspected envs — a qualitatively more severe failure signature than
-    any prior stage in this project's history, which always showed at
-    least some motion.
+    episode; falsified by a fast, accurate initial reach (~2.4cm by 0.5s)
+    that never holds or converts to grasp — the arm instead oscillates in
+    reach distance for the remaining ~29s of every episode, confirmed with
+    a full per-step trajectory trace after two earlier, incomplete reads
+    (a "complete freeze" from sparse visual sampling and a "reaches and
+    holds" claim from a separate rollout) were each resolved against real
+    numbers.
 
 ### Concepts
 
@@ -154,9 +157,10 @@ covered in [[experiment-25-touch-goal-reach]], with its structural-pivot
 narrative folded into [[reach-grasp-lift-gap]]'s closing sections and its
 running-max dead-zone finding generalized in
 [[staged-reward-co-satisfiability]]; and item 11 (Experiment 26) is covered
-in [[experiment-26-gripper-reintroduction]], with its complete-static-freeze
-finding folded into [[reach-grasp-lift-gap]]'s newest closing section as a
-new, more severe point on that article's whole throughline. Silence on
+in [[experiment-26-gripper-reintroduction]], with its "fast reach that
+never holds or converts to grasp" finding folded into
+[[reach-grasp-lift-gap]]'s newest closing section as a new point on that
+article's whole throughline. Silence on
 items 6-8 and Experiments 15-24 here means "not yet compiled," not "nothing
 happened" — see `ROADMAP.md` itself for the full record of those items in
 the meantime.

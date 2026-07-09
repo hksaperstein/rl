@@ -191,6 +191,19 @@ parser.add_argument(
         "docs/superpowers/specs/2026-07-07-ar4-experiment23-warmstarted-residual-design.md."
     ),
 )
+parser.add_argument(
+    "--touchgoal",
+    action="store_true",
+    default=False,
+    help=(
+        "Train on the touch-goal variant (Experiment 25): the arm touches the top of a fixed cube, "
+        "then reaches a fixed goal point - no grasp, no lift, arm-only action space. Replaces the "
+        "grasp/lift mechanism entirely given the still-unresolved jaw-mimic-joint defect (Experiments "
+        "19/22, both failed) and pickplace_mirror_env_cfg.py's own ungated reward shape (the same "
+        "shape Experiment 16 found exploitable via wrist-wedging). See "
+        "docs/superpowers/specs/2026-07-09-ar4-experiment25-touch-goal-reach-design.md."
+    ),
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
@@ -237,13 +250,16 @@ from tasks.ar4.pickplace_taskspace_env_cfg import (  # noqa: E402
     Ar4PickPlaceTaskspaceEnvCfg,
     Ar4PickPlaceTaskspacePPORunnerCfg,
 )
+from tasks.ar4.pickplace_touchgoal_env_cfg import Ar4PickPlaceTouchGoalEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_warmresidual_env_cfg import Ar4PickPlaceWarmResidualEnvCfg  # noqa: E402
 
 LOG_ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs", "train")
 
 
 def main() -> None:
-    if args_cli.warmresidual:
+    if args_cli.touchgoal:
+        env_cfg_cls = Ar4PickPlaceTouchGoalEnvCfg
+    elif args_cli.warmresidual:
         env_cfg_cls = Ar4PickPlaceWarmResidualEnvCfg
     elif args_cli.jawmirror:
         env_cfg_cls = Ar4PickPlaceJawMirrorEnvCfg

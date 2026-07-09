@@ -10,6 +10,8 @@ Import this module only after an Isaac Sim/Isaac Lab AppLauncher has been
 created.
 """
 
+import math
+
 import isaaclab.envs.mdp as isaaclab_mdp
 import isaaclab.sim as sim_utils
 from isaaclab.assets import ArticulationCfg, AssetBaseCfg, RigidObjectCfg
@@ -53,7 +55,7 @@ GOAL_OFFSET = (-0.40, 0.0, 0.144)
 CUBE_HALF_SIZE = 0.006  # meters (12mm cube, tasks/ar4/objects_cfg.py)
 TOUCH_STD = 0.05
 TOUCH_TOLERANCE = 0.02
-GOAL_STD = 0.1
+TOUCH_TO_GOAL_DIST = math.sqrt(GOAL_OFFSET[0] ** 2 + GOAL_OFFSET[1] ** 2 + (GOAL_OFFSET[2] - CUBE_HALF_SIZE) ** 2)
 GOAL_TOLERANCE = 0.02
 
 
@@ -113,7 +115,7 @@ class ObservationsCfg:
         )
         goal_position = ObsTerm(
             func=ar4_mdp.touch_goal_position_in_robot_root_frame,
-            params={"robot_cfg": SceneEntityCfg("robot"), "object_cfg": SceneEntityCfg("cube"), "goal_offset": GOAL_OFFSET},
+            params={"robot_cfg": SceneEntityCfg("robot")},
         )
         actions = ObsTerm(func=mdp.last_action)
 
@@ -131,6 +133,12 @@ class EventCfg:
 
     reset_all = EventTerm(func=mdp.reset_scene_to_default, mode="reset")
 
+    set_touch_goal_position = EventTerm(
+        func=ar4_mdp.set_touch_goal_position,
+        mode="reset",
+        params={"object_cfg": SceneEntityCfg("cube"), "goal_offset": GOAL_OFFSET},
+    )
+
     reset_touch_goal_milestone = EventTerm(func=ar4_mdp.reset_touch_goal_milestone, mode="reset")
 
 
@@ -147,7 +155,6 @@ class TerminationsCfg:
             "threshold": GOAL_TOLERANCE,
             "object_cfg": SceneEntityCfg("cube"),
             "ee_frame_cfg": SceneEntityCfg("ee_frame"),
-            "goal_offset": GOAL_OFFSET,
             "cube_half_size": CUBE_HALF_SIZE,
             "touch_tolerance": TOUCH_TOLERANCE,
         },
@@ -165,11 +172,10 @@ class RewardsCfg:
         params={
             "object_cfg": SceneEntityCfg("cube"),
             "ee_frame_cfg": SceneEntityCfg("ee_frame"),
-            "goal_offset": GOAL_OFFSET,
             "cube_half_size": CUBE_HALF_SIZE,
             "touch_std": TOUCH_STD,
             "touch_tolerance": TOUCH_TOLERANCE,
-            "goal_std": GOAL_STD,
+            "touch_to_goal_dist": TOUCH_TO_GOAL_DIST,
         },
     )
 

@@ -19,6 +19,8 @@ from isaaclab.utils.math import combine_frame_transforms, quat_apply, sample_uni
 
 import isaaclab.sim as sim_utils
 
+from .touch_goal_reward import touch_goal_progress
+
 if TYPE_CHECKING:
     from isaaclab.assets import Articulation, RigidObject
     from isaaclab.envs import ManagerBasedRLEnv
@@ -337,73 +339,90 @@ def reset_lift_milestone(env: ManagerBasedRLEnv, env_ids: torch.Tensor) -> None:
     env._lift_milestone_max[env_ids] = 0.0
 
 
+def set_touch_goal_position(
+    env: ManagerBasedRLEnv,
+    env_ids: torch.Tensor,
+    object_cfg: SceneEntityCfg,
+    goal_offset: tuple[float, float, float],
+) -> None:
+    """Event term (mode="reset"): snapshot the goal position once, from
+    the cube's position at reset time - decouples the goal from any
+    subsequent cube displacement during the touch approach (the cube is
+    a dynamic RigidObject, not kinematic/fixed-base; found by final
+    whole-branch review, 2026-07-09, that deriving the goal from the
+    cube's LIVE position every step let an incidental touch-contact
+    nudge silently move the goal too, undermining the task's fixed-goal
+    intent). Must be registered after reset_all/reset_root_state_uniform
+    in the same EventCfg (same ordering requirement as set_mirrored_goal,
+    this file)."""
+    object: RigidObject = env.scene[object_cfg.name]
+    if not hasattr(env, "_touch_goal_pos_w"):
+        env._touch_goal_pos_w = torch.zeros(env.num_envs, 3, device=env.device)
+    goal_offset_t = torch.tensor(goal_offset, device=env.device)
+    env._touch_goal_pos_w[env_ids] = object.data.root_pos_w[env_ids] + goal_offset_t
+
+
 def _raw_touch_goal_progress(
     env: ManagerBasedRLEnv,
     object_cfg: SceneEntityCfg,
     ee_frame_cfg: SceneEntityCfg,
-    goal_offset: tuple[float, float, float],
     cube_half_size: float = 0.006,
     touch_std: float = 0.05,
     touch_tolerance: float = 0.02,
-    goal_std: float = 0.1,
+    touch_to_goal_dist: float = 0.4231,
 ) -> torch.Tensor:
-    """Two-stage touch-then-goal progress signal, no grasp/lift involved at
-    all (Experiment 25 - see docs/superpowers/specs/2026-07-09-ar4-experiment25-touch-goal-reach-design.md).
-    Stage 1: end-effector proximity to a point just above the cube's top
-    face. Stage 2 (goal_term): end-effector proximity to a fixed goal
-    point, computed as object.data.root_pos_w + goal_offset so it stays
-    correctly per-env-world-offset without a separate stateful buffer
-    (the cube's own position is fixed/unrandomized in this task, so this
-    is equivalent to - but simpler than - env_target_pos_w-style state).
-    goal_term is gated to 0 until env._touched_cube latches true for that
-    env, unlike _raw_lift_progress_mirrored's ungated additive sum (the
-    exact reward shape that let Experiment 16's wedging exploit satisfy
-    lift/goal reward without genuine grasp - this task has no grasp to
-    exploit around, but the gate is kept anyway since "touch, then go" is
-    the literal task definition, not just a shaping nicety).
-    """
+    """Two-stage touch-then-goal progress signal, no grasp/lift involved
+    at all (Experiment 25 - see
+    docs/superpowers/specs/2026-07-09-ar4-experiment25-touch-goal-reach-design.md).
+    Reads live simulated state (end-effector position, the cube's own
+    live position for the touch point specifically - touching should
+    always refer to wherever the cube actually is) and env._touch_goal_pos_w
+    (the goal, snapshotted once at reset by set_touch_goal_position - see
+    that function's docstring for why the goal specifically must NOT be
+    read live). Delegates the actual progress formula to
+    touch_goal_reward.touch_goal_progress() - see that function's
+    docstring for why it's a monotonic linear post-touch potential, not
+    two summed tanh bumps (final whole-branch review, 2026-07-09, found
+    the original dual-tanh-sum formulation left a reward-free dead zone
+    across most of the touch-to-goal traverse under the running-max
+    milestone mechanism, since the touch and goal points are ~0.42m
+    apart)."""
     object: RigidObject = env.scene[object_cfg.name]
     ee_frame: FrameTransformer = env.scene[ee_frame_cfg.name]
     ee_pos_w = ee_frame.data.target_pos_w[:, 0, :]
 
-    goal_offset_t = torch.tensor(goal_offset, device=env.device)
     touch_point_w = object.data.root_pos_w + torch.tensor([0.0, 0.0, cube_half_size], device=env.device)
-    goal_pos_w = object.data.root_pos_w + goal_offset_t
-
     touch_dist = torch.norm(ee_pos_w - touch_point_w, dim=-1)
-    touch_term = 1.0 - torch.tanh(touch_dist / touch_std)
 
     if not hasattr(env, "_touched_cube"):
         env._touched_cube = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
     env._touched_cube |= touch_dist < touch_tolerance
 
-    goal_dist = torch.norm(ee_pos_w - goal_pos_w, dim=-1)
-    goal_term_raw = 1.0 - torch.tanh(goal_dist / goal_std)
-    goal_term = torch.where(env._touched_cube, goal_term_raw, torch.zeros_like(goal_term_raw))
+    if not hasattr(env, "_touch_goal_pos_w"):
+        env._touch_goal_pos_w = torch.zeros(env.num_envs, 3, device=env.device)
+    goal_dist = torch.norm(ee_pos_w - env._touch_goal_pos_w, dim=-1)
 
-    return 0.3 * touch_term + 0.7 * goal_term
+    return touch_goal_progress(touch_dist, goal_dist, env._touched_cube, touch_std, touch_to_goal_dist)
 
 
 def touch_goal_milestone_bonus(
     env: ManagerBasedRLEnv,
     object_cfg: SceneEntityCfg,
     ee_frame_cfg: SceneEntityCfg,
-    goal_offset: tuple[float, float, float],
     cube_half_size: float = 0.006,
     touch_std: float = 0.05,
     touch_tolerance: float = 0.02,
-    goal_std: float = 0.1,
+    touch_to_goal_dist: float = 0.4231,
 ) -> torch.Tensor:
-    """Undiscounted running-max milestone bonus over _raw_touch_goal_progress -
-    same mechanism as staged_milestone_bonus (tasks/ar4/mdp.py, this file):
-    reward = (new best-ever raw progress) - (previous best-ever raw
-    progress), never negative, never punishes regressing away from a
-    best-ever point already reached."""
+    """Undiscounted running-max milestone bonus over
+    _raw_touch_goal_progress - same mechanism as staged_milestone_bonus
+    (this file): reward = (new best-ever raw progress) - (previous
+    best-ever raw progress), never negative."""
     if not hasattr(env, "_touch_goal_milestone_max"):
         env._touch_goal_milestone_max = torch.zeros(env.num_envs, device=env.device)
 
     raw = _raw_touch_goal_progress(
-        env, object_cfg, ee_frame_cfg, goal_offset, cube_half_size, touch_std, touch_tolerance, goal_std,
+        env, object_cfg, ee_frame_cfg, cube_half_size, touch_std, touch_tolerance, touch_to_goal_dist,
     )
     prev = env._touch_goal_milestone_max.clone()
     env._touch_goal_milestone_max = torch.maximum(env._touch_goal_milestone_max, raw)
@@ -411,10 +430,8 @@ def touch_goal_milestone_bonus(
 
 
 def reset_touch_goal_milestone(env: ManagerBasedRLEnv, env_ids: torch.Tensor) -> None:
-    """Event term (mode="reset"): zero the running-max milestone buffer and
-    the touched-cube latch for resetting envs, so a new episode starts
-    with no carried-over progress. Must be registered alongside
-    reset_scene_to_default."""
+    """Event term (mode="reset"): zero the running-max milestone buffer
+    and the touched-cube latch for resetting envs."""
     if not hasattr(env, "_touch_goal_milestone_max"):
         env._touch_goal_milestone_max = torch.zeros(env.num_envs, device=env.device)
     if not hasattr(env, "_touched_cube"):
@@ -428,18 +445,12 @@ def touch_then_goal_reached(
     threshold: float,
     object_cfg: SceneEntityCfg,
     ee_frame_cfg: SceneEntityCfg,
-    goal_offset: tuple[float, float, float],
     cube_half_size: float = 0.006,
     touch_tolerance: float = 0.02,
 ) -> torch.Tensor:
-    """Termination: end-effector within threshold of the fixed goal point
-    AND the cube has been touched at some point this episode. Recomputes
-    the touch check independently (not just reading env._touched_cube)
-    so this is correct regardless of whether the reward manager or the
-    termination manager runs first within a given step - both terms
-    apply the same idempotent |= latch update using the same
-    touch_tolerance, so either evaluation order produces the same result
-    by the end of the step."""
+    """Termination: end-effector within threshold of env._touch_goal_pos_w
+    (set once at reset by set_touch_goal_position) AND the cube has been
+    touched at some point this episode."""
     object: RigidObject = env.scene[object_cfg.name]
     ee_frame: FrameTransformer = env.scene[ee_frame_cfg.name]
     ee_pos_w = ee_frame.data.target_pos_w[:, 0, :]
@@ -450,9 +461,9 @@ def touch_then_goal_reached(
         env._touched_cube = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
     env._touched_cube |= touch_dist < touch_tolerance
 
-    goal_offset_t = torch.tensor(goal_offset, device=env.device)
-    goal_pos_w = object.data.root_pos_w + goal_offset_t
-    goal_dist = torch.norm(ee_pos_w - goal_pos_w, dim=-1)
+    if not hasattr(env, "_touch_goal_pos_w"):
+        env._touch_goal_pos_w = torch.zeros(env.num_envs, 3, device=env.device)
+    goal_dist = torch.norm(ee_pos_w - env._touch_goal_pos_w, dim=-1)
 
     return (goal_dist < threshold) & env._touched_cube
 
@@ -460,20 +471,13 @@ def touch_then_goal_reached(
 def touch_goal_position_in_robot_root_frame(
     env: ManagerBasedRLEnv,
     robot_cfg: SceneEntityCfg,
-    object_cfg: SceneEntityCfg,
-    goal_offset: tuple[float, float, float],
 ) -> torch.Tensor:
-    """The fixed goal position (object.data.root_pos_w + goal_offset)
-    expressed in the robot's root frame - mirrors
-    mirrored_target_position_in_robot_root_frame's pattern (this file),
-    but derives the goal from the cube's own live position plus a fixed
-    offset instead of a separately-randomized stateful buffer, since this
-    task's cube position is fixed (not randomized per episode)."""
+    """env._touch_goal_pos_w (set once at reset by set_touch_goal_position)
+    expressed in the robot's root frame."""
     robot: RigidObject = env.scene[robot_cfg.name]
-    object: RigidObject = env.scene[object_cfg.name]
-    goal_offset_t = torch.tensor(goal_offset, device=env.device)
-    goal_pos_w = object.data.root_pos_w + goal_offset_t
-    goal_pos_b, _ = subtract_frame_transforms(robot.data.root_pos_w, robot.data.root_quat_w, goal_pos_w)
+    if not hasattr(env, "_touch_goal_pos_w"):
+        env._touch_goal_pos_w = torch.zeros(env.num_envs, 3, device=env.device)
+    goal_pos_b, _ = subtract_frame_transforms(robot.data.root_pos_w, robot.data.root_quat_w, env._touch_goal_pos_w)
     return goal_pos_b
 
 

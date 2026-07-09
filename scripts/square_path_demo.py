@@ -7,7 +7,22 @@ convention as scripts/grasp_demo_v2.py.
 Solves each waypoint using closed-form 3-DOF IK derived from the AR4's URDF
 kinematics (see docs/superpowers/plans/2026-07-08-square-path-closed-form-ik.md).
 joint_1 is a pure base-yaw rotation about the vertical axis, and joints 2-3
-form a 2-link planar arm in the rotated plane.
+form a 2-link planar arm in the rotated plane. A 3-DOF arm solving for a 3D
+position target is exactly determined (3 unknowns, 3 equations) - the IK
+itself has nothing to iterate; the home-pose self-check below confirms it
+matches the live sim to sub-mm precision in one shot.
+
+The one thing that isn't exact is the actuator: `tasks/ar4/robot_cfg.py`'s
+arm `ImplicitActuatorCfg` (stiffness=40, damping=4) is a plain PD position
+controller, which has a textbook nonzero steady-state error under a constant
+disturbance (gravity torque, at a bent/extended pose) - a controls problem,
+not a kinematics one. Commanding the exact closed-form joint target and
+settling isn't enough on its own; this script overrides the arm's PD gains
+higher (scoped to this script's own env instance only, via
+`write_joint_stiffness_to_sim`/`write_joint_damping_to_sim` - does not touch
+the shared robot_cfg.py other scripts/training depend on) so the actuator
+actually tracks its commanded position, making the single-shot closed-form
+solve accurate without any correction loop.
 
 .. code-block:: bash
 
@@ -71,9 +86,14 @@ SQUARE_POINTS_B = [
 ]
 
 HOLD_STEPS_PER_POINT = 70
-IK_SETTLE_STEPS = 100  # Settle time per correction round (gravity droop correction loop handles residuals)
-IK_CORRECTION_ROUNDS = 5  # Max fixed-point correction iterations
-IK_CORRECTION_TOLERANCE = 0.005  # 5mm tolerance for convergence
+IK_SETTLE_STEPS = 150  # Settle time for the single-shot solve to reach the stiffened actuator's steady state
+
+# Arm PD gains for this demo only (overridden at runtime, not in robot_cfg.py -
+# see module docstring). Original stiffness=40/damping=4 has 8-19cm of gravity
+# droop at this square's reach; 2500/45 measured <1cm single-shot with no
+# correction loop (verified via scripts/_diag_point6_convergence.py).
+ARM_STIFFNESS = 2500.0
+ARM_DAMPING = 45.0
 
 
 def solve_ik3(x, y, z):
@@ -93,66 +113,32 @@ def solve_ik3(x, y, z):
     return q1, q2, q3
 
 
-def solve_waypoint_with_correction(env, robot, robot_entity_cfg, target_xyz, j2_min, j2_max, j3_min, j3_max,
-                                    num_arm_joints, settle_steps=IK_SETTLE_STEPS, max_rounds=IK_CORRECTION_ROUNDS,
-                                    tol=IK_CORRECTION_TOLERANCE):
-    """Solve a waypoint using iterative target-nudging to correct for gravity droop.
+def solve_waypoint(env, robot, robot_entity_cfg, target_xyz, j2_min, j2_max, j3_min, j3_max, num_arm_joints):
+    """Solve and command one waypoint: closed-form IK, single settle, done.
 
-    Uses fixed-point iteration: solve IK for a "corrected" target, settle, measure error,
-    nudge the corrected target toward where it needs to be, and re-solve (repeat up to max_rounds).
-    This compensates for steady-state gravity droop in the PD-controlled arm without using
-    Jacobian-based iterative IK (closed-form solve per round, just target adjustment).
+    No iteration - the closed-form solve is already exact (see module
+    docstring), and with the arm's PD gains raised (see ARM_STIFFNESS/
+    ARM_DAMPING) the actuator actually reaches the commanded joint target,
+    so a single settle is sufficient.
     """
-    corrected_target = list(target_xyz)
-    q_target = None
-    residual = None
+    q1, q2, q3 = solve_ik3(*target_xyz)
+    q2 = max(j2_min, min(j2_max, q2))
+    q3 = max(j3_min, min(j3_max, q3))
+    q_target = [q1, q2, q3, 0.0, 0.0, 0.0]
 
-    for round_idx in range(max_rounds):
-        # Solve IK for the corrected target
-        q1, q2, q3 = solve_ik3(corrected_target[0], corrected_target[1], corrected_target[2])
+    for _ in range(IK_SETTLE_STEPS):
+        action = torch.zeros(env.num_envs, num_arm_joints + 1, device=env.device)
+        for j in range(num_arm_joints):
+            action[:, j] = q_target[j]
+        action[:, num_arm_joints] = GRIPPER_OPEN
+        env.step(action)
 
-        # Clip q2, q3 to joint limits
-        q2 = max(j2_min, min(j2_max, q2))
-        q3 = max(j3_min, min(j3_max, q3))
-        q_target = [q1, q2, q3, 0.0, 0.0, 0.0]
-
-        # Command and settle
-        for _ in range(settle_steps):
-            action = torch.zeros(env.num_envs, num_arm_joints + 1, device=env.device)
-            for j in range(num_arm_joints):
-                action[:, j] = q_target[j]
-            action[:, num_arm_joints] = GRIPPER_OPEN
-            env.step(action)
-
-        # Measure actual EE position and residual
-        ee_pose_w = robot.data.body_pose_w[:, robot_entity_cfg.body_ids[0]]
-        ee_pos_b, _ = subtract_frame_transforms(
-            robot.data.root_pose_w[:, 0:3], robot.data.root_pose_w[:, 3:7], ee_pose_w[:, 0:3], ee_pose_w[:, 3:7]
-        )
-        achieved = ee_pos_b[0].cpu().numpy()
-        target_t = torch.tensor(target_xyz, device=env.device)
-        residual = torch.norm(ee_pos_b[0] - target_t).item()
-
-        # Diagnostic: show achieved vs commanded joint angles
-        achieved_q = robot.data.joint_pos[0, robot_entity_cfg.joint_ids][:3].cpu().numpy()
-        q2_droop = q_target[1] - achieved_q[1]
-        q3_droop = q_target[2] - achieved_q[2]
-
-        print(f"    round {round_idx}: residual={residual:.5f}m")
-        if round_idx == 0:  # Print diagnostic details for first round only
-            print(f"      cmd q2/q3: {q_target[1]:.4f} {q_target[2]:.4f}")
-            print(f"      got q2/q3: {achieved_q[1]:.4f} {achieved_q[2]:.4f}")
-            print(f"      droop:     {q2_droop:.4f} {q3_droop:.4f} rad")
-
-        # Check convergence
-        if residual < tol:
-            print(f"    -> Converged (round {round_idx})")
-            break
-
-        # Compute error and nudge the corrected target for next round
-        error = [target_xyz[i] - achieved[i] for i in range(3)]
-        corrected_target = [corrected_target[i] + error[i] for i in range(3)]
-
+    ee_pose_w = robot.data.body_pose_w[:, robot_entity_cfg.body_ids[0]]
+    ee_pos_b, _ = subtract_frame_transforms(
+        robot.data.root_pose_w[:, 0:3], robot.data.root_pose_w[:, 3:7], ee_pose_w[:, 0:3], ee_pose_w[:, 3:7]
+    )
+    target_t = torch.tensor(target_xyz, device=env.device)
+    residual = torch.norm(ee_pos_b[0] - target_t).item()
     return q_target, residual
 
 
@@ -169,6 +155,13 @@ def main() -> None:
     joint_pos_limits = robot.data.joint_pos_limits[:, robot_entity_cfg.joint_ids]
     j2_min, j2_max = joint_pos_limits[0, 1, 0].item(), joint_pos_limits[0, 1, 1].item()
     j3_min, j3_max = joint_pos_limits[0, 2, 0].item(), joint_pos_limits[0, 2, 1].item()
+
+    # Raise the arm's PD gains for this demo (see module docstring) so the
+    # actuator actually tracks its commanded position under gravity load.
+    stiff_t = torch.full((1, len(robot_entity_cfg.joint_ids)), ARM_STIFFNESS, device=env.device)
+    damp_t = torch.full((1, len(robot_entity_cfg.joint_ids)), ARM_DAMPING, device=env.device)
+    robot.write_joint_stiffness_to_sim(stiff_t, joint_ids=robot_entity_cfg.joint_ids)
+    robot.write_joint_damping_to_sim(damp_t, joint_ids=robot_entity_cfg.joint_ids)
 
     os.makedirs(os.path.dirname(VIDEO_PATH), exist_ok=True)
     video_writer = imageio.get_writer(VIDEO_PATH, fps=int(1.0 / env.step_dt), codec="libx264")
@@ -208,14 +201,13 @@ def main() -> None:
             )
         print(f"  -> Check PASSED\n")
 
-        print(f"[INFO] Solving {len(SQUARE_POINTS_B)} square-path waypoints (closed-form IK with gravity-droop correction)...")
+        print(f"[INFO] Solving {len(SQUARE_POINTS_B)} square-path waypoints (closed-form IK, single-shot)...")
         solved_qs = []
         for idx, pt in enumerate(SQUARE_POINTS_B):
-            print(f"\n[INFO] Solving point {idx}: {pt}")
-            q_target, residual = solve_waypoint_with_correction(
+            q_target, residual = solve_waypoint(
                 env, robot, robot_entity_cfg, pt, j2_min, j2_max, j3_min, j3_max, num_arm_joints
             )
-            print(f"  -> final residual {residual:.5f}m, q={['%.4f' % x for x in q_target[:3]]}")
+            print(f"[INFO] point {idx} {pt}: residual {residual:.5f}m, q={['%.4f' % x for x in q_target[:3]]}")
             solved_qs.append(q_target)
 
         print("\n[INFO] All waypoints solved. Executing square path (looping wrist/gripper limp, arm off, then square, then home)...\n")

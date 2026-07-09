@@ -1,11 +1,16 @@
 # tasks/ar4/pickplace_graspgoal_env_cfg.py
 """Grasp/lift/goal variant of the AR4 pick-and-place task (Experiment
 26): reintroduces the gripper after Experiment 25 removed it. Composes
-Experiment 21's proximity-gated gripper, Experiment 22's mirroring
-mechanism (corrected for its own identified reactive-lag bug - see
-tasks/ar4/actions.py's MirroredGripperAction), and Experiment 17's
-antipodal grasp gate, with a 30s episode and a 4-stage extension of
-Experiment 25's validated monotonic reward mechanism. See
+Experiment 21's proximity-gated gripper and Experiment 17's antipodal
+grasp gate, with a 30s episode and a 4-stage extension of Experiment
+25's validated monotonic reward mechanism.
+
+Originally also planned to reuse Experiment 22's mirroring mechanism
+(corrected for its own identified reactive-lag bug); final whole-branch
+review found that fix is an unconditional no-op under this action space
+(BinaryJointAction assigns both jaws the same commanded value already -
+see ActionsCfg's own docstring below for the full trace) and retired it
+rather than attempt a fourth jaw-synchronization-specific fix. See
 docs/superpowers/specs/2026-07-09-ar4-experiment26-gripper-reintroduction-design.md.
 
 Additive/parallel to pickplace_touchgoal_env_cfg.py: deliberately does
@@ -36,7 +41,7 @@ from isaaclab.utils.configclass import configclass
 from isaaclab_tasks.manager_based.manipulation.lift import mdp
 
 from . import mdp as ar4_mdp
-from .actions import MirroredGripperActionCfg
+from .actions import ProximityGatedBinaryJointPositionActionCfg
 from .objects_cfg import CUBE_CFG
 from .pickplace_env_cfg import _EE_OFFSET
 from .robot_cfg import (
@@ -54,6 +59,12 @@ GOAL_OFFSET = (-0.40, 0.0, 0.144)
 
 REACH_DIST_NORM = 0.3
 LIFT_MINIMAL_HEIGHT = 0.03
+# NOTE: `lifted` latches at LIFT_MINIMAL_HEIGHT (0.03), not this value, so
+# the 0.50-0.75 reward segment this normalizes is only ever traversed to
+# ~0.575 in practice before the formula jumps to the goal segment (whose
+# 3D distance-to-goal term subsumes the remaining lift height anyway) -
+# this constant does not meaningfully shape mid-lift behavior, flagged by
+# final whole-branch review, not a bug.
 LIFT_TARGET_HEIGHT = 0.10
 GOAL_TOLERANCE = 0.02
 FORCE_THRESHOLD = 0.05
@@ -66,11 +77,26 @@ CUBE_TO_GOAL_DIST = math.sqrt(GOAL_OFFSET[0] ** 2 + GOAL_OFFSET[1] ** 2 + GOAL_O
 
 @configclass
 class ActionsCfg:
-    """Arm (Experiment 25's proven scale=0.5) + gripper (proximity-gated,
-    lag-corrected mirroring - see tasks/ar4/actions.py)."""
+    """Arm (Experiment 25's proven scale=0.5) + gripper (proximity-gated
+    only - no jaw-mirroring, see note below).
+
+    Final whole-branch review of this experiment found MirroredGripperActionCfg
+    (jaw2 tracks jaw1's target) is an unconditional no-op here: BinaryJointAction
+    already assigns both jaws the IDENTICAL commanded value (open_command_expr/
+    close_command_expr use the same constant for both joint names), so there is
+    nothing for jaw2 to diverge from at the command level in the first place -
+    the actual jaw asymmetry happens at the physics/actuator level under contact,
+    which no command-level mirroring can address. This is the third jaw-
+    synchronization-specific fix attempt to prove ineffective (Experiment 19's
+    PhysxMimicJointAPI made things worse; Experiment 22's original mirror-actual
+    had a reactive-lag bug; this pass's lag fix, mirror-commanded, is a true
+    no-op) - retired as a lever per this project's own "3 failed fixes means
+    question the architecture, not patch again" discipline, not attempted a
+    fourth time. Uses plain ProximityGatedBinaryJointPositionActionCfg
+    (Experiment 21's validated fix, unaffected by this finding) instead."""
 
     joint_positions = isaaclab_mdp.JointPositionActionCfg(asset_name="robot", joint_names=ARM_JOINT_NAMES, scale=0.5)
-    gripper_position = MirroredGripperActionCfg(
+    gripper_position = ProximityGatedBinaryJointPositionActionCfg(
         asset_name="robot",
         joint_names=GRIPPER_JOINT_NAMES,
         open_command_expr={name: GRIPPER_OPEN_POS for name in GRIPPER_JOINT_NAMES},
@@ -195,10 +221,8 @@ class TerminationsCfg:
         params={
             "threshold": GOAL_TOLERANCE,
             "object_cfg": SceneEntityCfg("cube"),
-            "ee_frame_cfg": SceneEntityCfg("ee_frame"),
             "jaw1_contact_cfg": SceneEntityCfg("gripper_jaw1_contact"),
             "jaw2_contact_cfg": SceneEntityCfg("gripper_jaw2_contact"),
-            "reach_dist_norm": REACH_DIST_NORM,
             "lift_minimal_height": LIFT_MINIMAL_HEIGHT,
             "force_threshold": FORCE_THRESHOLD,
             "antipodal_cos_threshold": ANTIPODAL_COS_THRESHOLD,

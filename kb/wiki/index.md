@@ -105,6 +105,12 @@ see the coverage boundary note below.)*
   spatially opposed; the generalized lesson from Experiment 25's
   pre-training dead-zone catch (2026-07-09, also post-dates the rest of
   this first pass).
+- [[hyperparameter-registry]] — table-first, edit-in-place reference for
+  every actively-tuned hyperparameter (physics/PPO/actuator/task-reward):
+  current value, where it's set, why, what changed it last. Unlike the
+  other concept articles, meant to be updated per-value as things change,
+  not rewritten as narrative (2026-07-09, also post-dates the rest of
+  this first pass).
 
 ## Scope of this first pass
 

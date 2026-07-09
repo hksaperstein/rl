@@ -111,7 +111,65 @@ running concurrently with this pass and is intentionally left open here,
 not preempted. What's confirmed so far is only that the miss is real,
 exactly zero (not partial), and not explained by the settle-time bug.
 
+## The pivot: dropping grasp/lift entirely, not fixing it again (Experiment 25)
+
+This section jumps ahead of the numbered arc above by ten-plus experiments
+— Experiments 15 through 24 are not yet compiled into their own articles,
+the same acknowledged gap as the classical-IK section above (see
+`index.md`'s coverage-boundary note) — to record a genuinely new kind of
+stage in this gap's history: for the first time, the response to "grasp/
+lift still doesn't reliably work" was not another mechanism fix, but a
+direct structural decision to remove the requirement.
+
+By the time Experiment 25 was scoped (ROADMAP.md item 10, 2026-07-09), two
+separate findings closed off "train `pickplace_mirror_env_cfg.py` from
+scratch" as the next step, each on its own: **(a)** six consecutive prior
+experiments (17-22) had each targeted a different angle on the same
+underlying mechanical defect — the gripper's two jaws are not actually
+mechanically coupled (the source URDF's `mimic` constraint is confirmed
+unenforced by Isaac Sim's USD import) — and both a physics-level fix
+(Experiment 19) and a software-level fix (Experiment 22) made it worse
+rather than better; **(b)** `pickplace_mirror_env_cfg.py`'s own production
+reward (`staged_milestone_bonus`, built on `_raw_lift_progress_mirrored`)
+turned out to still combine reach/grasp/lift/goal as a plain **ungated**
+weighted sum — precisely the exploitable shape Experiment 16 already
+diagnosed (the wrist-wedging finding: a policy scoring well on a lift-
+shaped reward while the cube was never actually gripped by the fingers at
+all, confirmed only after the user directly challenged the controller's
+own video read and a fresh instrumented rollout was run — see
+[[sim-physics-fidelity]]'s discipline of verifying visual/behavioral claims
+with real sensor data rather than eyeballed frames) — without Experiment
+17's grasp-gating fix, which lives only in a separate env-cfg lineage
+(`pickplace_graspgated_env_cfg.py`) that `pickplace_mirror_env_cfg.py` never
+inherited.
+
+Flagged to the user rather than trained blind against those two known
+risks. The user's direct decision: stop attempting a seventh fix to the
+same jaw-coupling defect, and stop reusing a reward shape already known to
+be exploitable — instead, **drop grasp/lift from the task entirely**,
+reducing scope to two-stage sequential end-effector reaching (touch the
+cube's top, then reach a fixed goal point), leaning on the one sub-behavior
+that has converged reliably (~0.92-0.95) across nearly every experiment in
+this project's history, independent of reward or action-space design. See
+[[experiment-25-touch-goal-reach]] for the full design and a second,
+distinct finding this pivot surfaced on its own — a running-max reward
+mechanism, sound for the lift task it was built for, turning out to be
+unsound for this new pair of spatially-opposed stages (see
+[[staged-reward-co-satisfiability]]), caught by review before any training
+run.
+
+This is a different kind of stage than 1 through 9 above: those are all
+attempts to close the gap by finding the right mechanism; this is the first
+point in the project's history where the gap itself was judged not worth
+continuing to chase with the current object/gripper hardware and reward
+family, at least for now. The North Star's broader manipulation goal is
+unchanged, but this specific narrow phase's definition of success was
+renegotiated rather than the mechanism retried an eighth time.
+
 ## Related experiments
 
 All 14 — this is the connecting narrative across the entire numbered
-sequence.
+sequence — plus [[experiment-25-touch-goal-reach]], a later structural
+pivot away from this gap rather than a further attempt to close it (see the
+section above; Experiments 15-24 in between remain an acknowledged
+uncompiled gap).

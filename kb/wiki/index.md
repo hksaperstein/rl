@@ -66,6 +66,17 @@ observed in evaluation video.
     pregrasp pose, skipping reach; no improvement on the success criterion,
     plus a new base-collapse failure mode.
 
+*(Experiments 15 through 24 are not yet compiled into their own articles —
+see the coverage boundary note below.)*
+
+25. [[experiment-25-touch-goal-reach]] — direct user structural decision to
+    drop grasp/lift entirely after six prior mechanism-fix attempts (17-22)
+    failed and the task's own reward reintroduced Experiment 16's
+    diagnosed wedging-exploit shape; reduces scope to two-stage sequential
+    end-effector reaching. A pre-training review caught a running-max
+    dead-zone defect before any training run; the actual training run
+    itself has not yet been executed as of this pass.
+
 ### Concepts
 
 - [[reward-rate-arithmetic]] — the "grasp and freeze" bug class: net
@@ -89,6 +100,11 @@ observed in evaluation video.
   verification methodology, and the settle-time/dt coupling bug class
   (2026-07-09, post-dates the rest of this first pass — see the coverage
   boundary note below).
+- [[staged-reward-co-satisfiability]] — running-max/potential-based staged
+  rewards require stages that are co-satisfiable along one trajectory, not
+  spatially opposed; the generalized lesson from Experiment 25's
+  pre-training dead-zone catch (2026-07-09, also post-dates the rest of
+  this first pass).
 
 ## Scope of this first pass
 
@@ -106,16 +122,23 @@ chronological source record.
 ## Coverage boundary as of 2026-07-09
 
 `ROADMAP.md`'s "Known follow-ups" section has grown substantially since the
-2026-07-07 pass above — it now runs through item 9, covering (at minimum)
+2026-07-07 pass above — it now runs through item 10, covering (at minimum)
 Experiment 24 Gate 1's scripted-oracle stall (item 6), the classical
-(non-RL) IK reachability investigation (items 7-8), and a 2026-07-09
-physics-fidelity verification pass (item 9). **None of items 6-9 are
-individually compiled into experiment articles yet** — that backfill is a
-separate, larger gap left for a future pass, not attempted here. The one
-exception is item 9: its physics-fidelity content (dt/decimation, collision
-offsets, EE-frame verification methodology, and a settle-time/dt coupling
-bug class) is covered now, in [[sim-physics-fidelity]], and item 9's
-classical-IK contact-sensor finding is cross-linked from
-[[reach-grasp-lift-gap]]'s new closing section. Silence on items 6-8 here
-means "not yet compiled," not "nothing happened" — see `ROADMAP.md` itself
-for the full record of those items in the meantime.
+(non-RL) IK reachability investigation (items 7-8), a 2026-07-09
+physics-fidelity verification pass (item 9), and Experiment 25's
+touch-goal-reach structural pivot (item 10). **Items 6-8, and the numbered
+Experiments 15 through 24 that fall between this wiki's first pass and
+Experiment 25, are not individually compiled into their own articles yet**
+— that backfill is a separate, larger gap left for a future pass, not
+attempted here. Two exceptions exist so far: item 9's physics-fidelity
+content (dt/decimation, collision offsets, EE-frame verification
+methodology, and a settle-time/dt coupling bug class) is covered in
+[[sim-physics-fidelity]], with item 9's classical-IK contact-sensor finding
+cross-linked from [[reach-grasp-lift-gap]]'s closing sections; and item
+10 (Experiment 25) is covered in [[experiment-25-touch-goal-reach]], with
+its structural-pivot narrative folded into [[reach-grasp-lift-gap]]'s
+newest closing section and its running-max dead-zone finding generalized
+in [[staged-reward-co-satisfiability]]. Silence on items 6-8 and
+Experiments 15-24 here means "not yet compiled," not "nothing happened" —
+see `ROADMAP.md` itself for the full record of those items in the
+meantime.

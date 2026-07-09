@@ -77,6 +77,40 @@ covered) continues on the reward-rate axis rather than this structural
 axis — worth flagging as a candidate gap for a future pass to assess once
 its own ROADMAP entry lands.
 
+## A related but distinct instance: the same gap, on the classical (non-RL) path
+
+ROADMAP.md item 9 (2026-07-09, not yet compiled as its own experiment
+article; see [[sim-physics-fidelity]] for what that pass covered) surfaced
+a version of this same reach-grasp gap that is worth distinguishing clearly
+from everything above, because it did not arise from an RL training run at
+all. Every numbered stage in this article so far is about a trained
+policy's behavior; this finding is about a purely classical, closed-form-IK
+pick-cycle demo (`scripts/interactive_joint_demo.py`, fixed wrist held at
+q4=q5=q6=0) that had never previously been run with its own gripper
+contact sensors enabled. Once instrumented, it showed exactly 0.0N contact
+force on both jaws across every cycle tested - not a partial or near-miss
+contact, a total miss: the gripper closes on empty space, with jaw
+terminal positions varying cycle-to-cycle rather than showing the
+consistent stopping position real contact would produce. A first
+hypothesis (settle time silently halving in real duration when `sim.dt`
+was halved earlier in the same pass, since the script counts raw substeps
+rather than deriving wait time from `env.physics_dt`; see
+[[sim-physics-fidelity]]'s writeup of this bug class) was tested, fixed
+(commit `e00dd11`), and did not resolve the miss, ruling it out as the
+cause.
+
+This connects directly to ROADMAP.md item 8's classical-IK finding
+(`scripts/grasp_demo_v2.py`'s DLS-polish-from-grid-search approach getting
+the gripper visibly close to the cube but never achieving contact) - this
+pass's contact-sensor instrumentation confirms that same "gets close but
+doesn't reliably center the object between the open jaws before closing"
+signature with ground-truth force data, rather than inferring it from video
+frames or residual distance alone as item 8 did. The root cause of the
+miss itself is not yet established - a separate investigation into it was
+running concurrently with this pass and is intentionally left open here,
+not preempted. What's confirmed so far is only that the miss is real,
+exactly zero (not partial), and not explained by the settle-time bug.
+
 ## Related experiments
 
 All 14 — this is the connecting narrative across the entire numbered

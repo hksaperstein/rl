@@ -84,6 +84,11 @@ observed in evaluation video.
 - [[citation-verification-practice]] — the recurring pattern of senior
   review catching fabricated or overstated citations in delegated
   literature research, across nearly every research pass this session.
+- [[sim-physics-fidelity]] — dt/decimation control-period-preserving
+  changes, PhysX's opaque auto-compute collision offsets, EE-frame
+  verification methodology, and the settle-time/dt coupling bug class
+  (2026-07-09, post-dates the rest of this first pass — see the coverage
+  boundary note below).
 
 ## Scope of this first pass
 
@@ -97,3 +102,20 @@ still training as of this pass and has no ROADMAP entry yet — not covered
 here, to be added in a later pass. See `kb/README.md` for the wiki's
 structure and conventions, and `ROADMAP.md` for the full, unabridged
 chronological source record.
+
+## Coverage boundary as of 2026-07-09
+
+`ROADMAP.md`'s "Known follow-ups" section has grown substantially since the
+2026-07-07 pass above — it now runs through item 9, covering (at minimum)
+Experiment 24 Gate 1's scripted-oracle stall (item 6), the classical
+(non-RL) IK reachability investigation (items 7-8), and a 2026-07-09
+physics-fidelity verification pass (item 9). **None of items 6-9 are
+individually compiled into experiment articles yet** — that backfill is a
+separate, larger gap left for a future pass, not attempted here. The one
+exception is item 9: its physics-fidelity content (dt/decimation, collision
+offsets, EE-frame verification methodology, and a settle-time/dt coupling
+bug class) is covered now, in [[sim-physics-fidelity]], and item 9's
+classical-IK contact-sensor finding is cross-linked from
+[[reach-grasp-lift-gap]]'s new closing section. Silence on items 6-8 here
+means "not yet compiled," not "nothing happened" — see `ROADMAP.md` itself
+for the full record of those items in the meantime.

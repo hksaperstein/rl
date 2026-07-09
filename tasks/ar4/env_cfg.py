@@ -79,8 +79,8 @@ class Ar4EnvCfg(ManagerBasedEnvCfg):
     recorders: ActionStateRecorderManagerCfg = ActionStateRecorderManagerCfg()
 
     def __post_init__(self) -> None:
-        self.decimation = 2
-        self.sim.dt = 1.0 / 120.0
+        self.decimation = 4
+        self.sim.dt = 1.0 / 240.0
         self.sim.render_interval = 2
         self.viewer.eye = (1.5, 1.5, 1.2)
         self.viewer.lookat = (0.0, 0.0, 0.4)

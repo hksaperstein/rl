@@ -37,9 +37,9 @@ def _check_wedge_usd_exists() -> str:
 
 CUBE_CFG = RigidObjectCfg(
     prim_path="{ENV_REGEX_NS}/Cube",
-    init_state=RigidObjectCfg.InitialStateCfg(pos=(0.20, 0.28, 0.009)),
+    init_state=RigidObjectCfg.InitialStateCfg(pos=(0.20, 0.28, 0.006)),
     spawn=sim_utils.CuboidCfg(
-        size=(0.018, 0.018, 0.018),
+        size=(0.012, 0.012, 0.012),
         rigid_props=_RIGID_PROPS,
         mass_props=_MASS,
         collision_props=_COLLISION_PROPS,

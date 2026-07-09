@@ -2396,6 +2396,96 @@ follow-ups below.
      with contact-sensor ground truth rather than inferred from video/
      residual distance alone. Left open, not pursued further this pass —
      scope today was physics fidelity, not grasp-approach geometry.
+   - **Follow-up investigation (same day): root-caused item 9's grasp miss
+     as (B) a limitation of the classical demo's fixed-wrist control, not
+     (A) a genuine Isaac Sim integration bug.** Independently confirmed via
+     `scripts/plot_arm_skeleton.py` and direct measurement: gripper jaw
+     collision geometry is present and correct (instance-proxy-aware USD
+     traversal), a real `PhysxMimicJointAPI` coupling exists on the
+     currently-built asset, and an isolated gripper-only test (arm at rest,
+     no IK approach) closes and opens fully and cleanly — ruling out
+     "gripper structurally can't close." The actual failure reproduced live:
+     `interactive_joint_demo.py`'s closed-loop IK refinement *diverges*
+     (1.46cm → 1.74cm residual over 4 rounds) at this cube's low, extended
+     pose, leaving the jaws ~2.9cm from the cube when closing is
+     attempted — a positioning/dynamics miss intrinsic to this one script's
+     fixed-wrist (`q4=q5=q6=0`), open-loop-hold approach, not a sim-wiring
+     defect. Assessed as clear to proceed with RL training (which drives
+     all 6 joints with continuous closed-loop correction, not bound to this
+     demo's simplifications) — **however, see item 10 below: RL training
+     on the existing cube task was not attempted, because a deeper,
+     already-well-documented problem made that a bad bet before even
+     reaching this question.**
+10. **Experiment 25: touch-cube-then-reach-goal, grasp removed entirely
+    (structural pivot, direct user decision).** Before training
+    `pickplace_mirror_env_cfg.py` "from scratch" as originally planned,
+    found two reasons not to: (a) six consecutive prior experiments
+    (17-22) each targeted a different mechanism for the same problem — the
+    gripper's two jaws are not mechanically coupled (the source URDF's
+    `mimic` constraint confirmed unenforced by Isaac Sim's USD import) —
+    and both a physics-level fix (Experiment 19, two configurations, both
+    regressions, reverted) and a software-level fix (Experiment 22, a new
+    "reactive lag" failure mode) failed to resolve it; (b)
+    `pickplace_mirror_env_cfg.py`'s own reward (`staged_milestone_bonus` →
+    `_raw_lift_progress_mirrored`) turned out to combine reach/grasp/
+    lift/goal as a plain **ungated** weighted sum — the exact reward shape
+    Experiment 16 already found exploitable via wrist-wedging, without
+    Experiment 17's grasp-gating fix (which lives only in the separate
+    `pickplace_graspgated_env_cfg.py` lineage). Flagged to the user rather
+    than trained blind; **direct decision: drop grasp/lift entirely**,
+    reduce to two-stage sequential end-effector reaching (touch the cube's
+    top, then reach a fixed goal point) — leaning entirely on the one
+    sub-behavior that has converged reliably (~0.92-0.95) across nearly
+    every experiment in this project's history, independent of reward or
+    action-space design.
+    - Design: `docs/superpowers/specs/2026-07-09-ar4-experiment25-touch-goal-reach-design.md`.
+      Plan: `docs/superpowers/plans/2026-07-09-ar4-experiment25-touch-goal-reach-implementation.md`.
+      New `Ar4PickPlaceTouchGoalEnvCfg` (`tasks/ar4/pickplace_touchgoal_env_cfg.py`):
+      fixed cube `(0.20, 0.28, 0.006)`, fixed goal `(-0.20, 0.28, 0.15)`,
+      **arm-only action space** (no gripper action term at all — the
+      gripper joints stay physically present but unactuated), reusing the
+      already-`_EE_OFFSET`-corrected `ee_frame` as the touch/goal reference
+      point. Built via subagent-driven-development: 4 plan tasks, each
+      independently task-reviewed clean.
+    - **Final whole-branch review (dispatched on the most capable available
+      model, per this project's own SDD convention for architecture-level
+      review) caught a real, would-have-been-expensive Critical defect
+      before any training run: the reused running-max milestone mechanism
+      (`staged_milestone_bonus`'s pattern, valid for the lift task because
+      its stages are co-satisfiable along a success trajectory) is
+      *unsound* here because the touch and goal points are ~0.42m apart —
+      two independent narrow tanh bumps, summed, dip from ~0.3 (at touch)
+      to ~0.02 (partway to goal) before recovering to ~0.7 (at goal), and
+      running-max means once 0.3 is banked, reward stays at exactly zero
+      until raw exceeds 0.3 again — not until ~93% of the way to goal.**
+      This would very likely have produced "touch-and-freeze" behavior
+      indistinguishable from the sphere era's original "reach, grip,
+      freeze" signature, and been misread as "even reduced-to-reaching
+      fails" — precisely the shaped-scalar-looks-fine-behavior-doesn't trap
+      the Tier-1 verification standard exists to prevent. Independently
+      re-derived (not just trusted) by the Principal before dispatching a
+      fix, and again by a second reviewer after the fix landed. Also
+      flagged: the goal was read from the cube's *live* position every
+      step, but the cube is a dynamic (non-kinematic) RigidObject, so an
+      incidental touch-contact nudge could silently move the "fixed" goal;
+      and no test exercised the touch gate's positive branch at all (the
+      smoke test only used all-zero actions).
+    - **Fix** (commit `7170b6b`, plus a trivial follow-up constant-drift
+      fix): extracted the reward math into a new Isaac-Lab-free module
+      (`tasks/ar4/touch_goal_reward.py`) with a genuinely monotonic
+      post-touch potential (`0.3 + 0.7·clamp(1 - goal_dist/touch_to_goal_dist,
+      0, 1)` — linear in distance, provably non-decreasing along the
+      straight touch→goal line, so running-max can never stall once touch
+      registers); added `set_touch_goal_position`, a reset-time event
+      snapshotting the goal once from the cube's position at reset
+      (decoupling it from any live cube displacement); added
+      `tests/test_touch_goal_reward.py`, a genuine sim-independent pytest
+      suite (3/3 passing, no Isaac Sim launch needed) directly proving the
+      monotonicity property the original formula lacked. Independently
+      re-reviewed and confirmed correct by re-deriving the math from
+      scratch, not by re-reading the fix's own claims.
+    - **Status: implementation complete and verified, actual 1500-iteration
+      training run not yet executed as of this entry** — see follow-up.
 
 ## Direction
 

@@ -23,9 +23,9 @@ from isaaclab.utils.configclass import configclass
 
 from .pickplace_graspgoal_env_cfg import Ar4PickPlaceGraspGoalEnvCfg, Ar4PickPlaceGraspGoalSceneCfg
 
-# Eye (0.0, 0.6, 0.2) looking at (0.0, 0.0, 0.15) in world frame - a front,
-# head-on view of the robot itself (not the wider workspace), ~0.6m (~2ft)
-# away. CORRECTED SIDE: the robot's front faces +Y (toward the cube/goal
+# Eye (0.0, 0.85, 0.22) looking at (0.0, 0.0, 0.15) in world frame - a
+# front, head-on view of the robot itself (not the wider workspace).
+# CORRECTED SIDE: the robot's front faces +Y (toward the cube/goal
 # workspace, established empirically from the graspgoal task's cube/goal
 # world positions - both at y=0.28 while the robot base sits at y=0, per
 # tasks/ar4/pickplace_graspgoal_env_cfg.py), so to see its FRONT the camera
@@ -34,13 +34,17 @@ from .pickplace_graspgoal_env_cfg import Ar4PickPlaceGraspGoalEnvCfg, Ar4PickPla
 # (confirmed directly: that render showed a rear access panel/vents, not a
 # face). Height/target unchanged from the prior fix (z=0.2/0.15 - the very
 # first attempt at z=0.3/0.3 only caught a sliver of the gripper, since most
-# of the arm's resting bulk sits lower than shoulder height). Quaternion
+# of the arm's resting bulk sits lower than shoulder height). Distance
+# pulled back from 0.6m to ~0.85m to pair with the narrower 35mm lens below
+# (was 24mm/~80deg FOV, visibly distorted this close - a WIDER FOV would
+# make that worse, not better; narrowing the FOV and pulling back to
+# compensate is what actually flattens the perspective). Quaternion
 # computed via Isaac Lab's own create_rotation_matrix_from_view/
 # quat_from_matrix (OpenGL: -Z forward, +Y up), not hand-derived, matching
 # touchgoal_democam_env_cfg.py's own convention and rationale for avoiding
 # convention errors.
-_DEMO_CAMERA_POS = (0.0, 0.6, 0.2)
-_DEMO_CAMERA_QUAT_OPENGL = (0.7358822822570801, -0.6771095395088196, -0.0, -0.0)
+_DEMO_CAMERA_POS = (0.0, 0.85, 0.22)
+_DEMO_CAMERA_QUAT_OPENGL = (0.7355525493621826, -0.6774676442146301, -0.0, -0.0)
 
 # Dark backdrop wall, positioned behind the robot from the camera's new
 # vantage (beyond the robot on the -Y side) - eliminates the washed-out
@@ -84,7 +88,7 @@ class Ar4GraspGoalDemoSceneCfg(Ar4PickPlaceGraspGoalSceneCfg):
         width=640,
         data_types=["rgb"],
         spawn=sim_utils.PinholeCameraCfg(
-            focal_length=24.0, focus_distance=400.0, horizontal_aperture=40.0, clipping_range=(0.05, 3.0)
+            focal_length=35.0, focus_distance=400.0, horizontal_aperture=40.0, clipping_range=(0.05, 3.0)
         ),
         offset=CameraCfg.OffsetCfg(pos=_DEMO_CAMERA_POS, rot=_DEMO_CAMERA_QUAT_OPENGL, convention="opengl"),
     )

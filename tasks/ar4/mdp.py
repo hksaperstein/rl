@@ -17,10 +17,11 @@ from isaaclab.managers import SceneEntityCfg
 from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
 from isaaclab.utils.math import combine_frame_transforms, quat_apply, sample_uniform, subtract_frame_transforms
 
+import isaaclab.envs.mdp as isaaclab_mdp
 import isaaclab.sim as sim_utils
 
 from .touch_goal_reward import touch_goal_progress
-from .grasp_goal_reward import grasp_goal_progress
+from .grasp_goal_reward import grasp_goal_progress, slow_near_object_bonus
 
 if TYPE_CHECKING:
     from isaaclab.assets import Articulation, RigidObject
@@ -1283,3 +1284,70 @@ def orientation_alignment_bonus(
     world_down[:, 2] = -1.0
     dot_with_down = torch.sum(approach_dir_w * world_down, dim=-1)
     return (dot_with_down + 1.0) / 2.0
+
+
+def arm_ground_contact_penalty(
+    env: ManagerBasedRLEnv,
+    sensor_cfg: SceneEntityCfg,
+    threshold: float,
+) -> torch.Tensor:
+    """Dense -1.0/0.0 penalty for the arm's upper-arm links (whichever
+    bodies sensor_cfg's ContactSensor was configured to track - see
+    arm_ground_contact ContactSensorCfg in pickplace_graspgoal_env_cfg.py,
+    deliberately excluding the gripper jaws and link_6/wrist, which
+    legitimately approach ground level to reach the cube) registering
+    contact force above threshold. Reuses isaaclab_mdp.illegal_contact's
+    own condition directly (same net_forces_w_history rolling-max check
+    used by the paired hard termination of the same name, this file's
+    TerminationsCfg) rather than re-deriving the force-history logic, so
+    the reward penalty and the termination can never disagree about what
+    counts as an illegal contact. Direct user request: "heavily punish it
+    for collision w the ground" - this reward term supplies the penalty
+    *gradient* leading up to that termination (a bare termination gives no
+    signal about how close the agent got to the illegal event; a reward
+    that only fires the instant the episode already ends can't shape
+    behavior beforehand).
+    """
+    illegal = isaaclab_mdp.illegal_contact(env, threshold=threshold, sensor_cfg=sensor_cfg)
+    return -illegal.float()
+
+
+def slow_near_cube_bonus(
+    env: ManagerBasedRLEnv,
+    object_cfg: SceneEntityCfg,
+    ee_frame_cfg: SceneEntityCfg,
+    robot_cfg: SceneEntityCfg,
+    reach_dist_threshold: float,
+    speed_cap: float,
+) -> torch.Tensor:
+    """Dense, per-step (NOT running-max) caller for
+    grasp_goal_reward.slow_near_object_bonus - direct engineering fix for
+    the discovered flaw in grasp_goal_milestone_bonus (undiscounted
+    running-max: pays only for a NEW best-ever reach, nothing for staying
+    close or slowing down once that best is already banked). Direct user
+    request: "when it gets closer to the cube reward it for slowing
+    down." reach_dist is computed identically to
+    grasp_goal_milestone_bonus's own reach term (ee_frame's target_pos_w
+    vs the cube's root_pos_w). ee_speed is the end-effector's CARTESIAN
+    linear speed - robot.data.body_lin_vel_w at link_6's body index (NOT
+    joint-space velocity: the intent is physical hand speed, independent
+    of how many joints happen to be moving to produce it), found via the
+    same robot.data.body_names.index("link_6") introspection pattern
+    scripts/_check_ee_vs_gripper_fk.py already uses in this repo. The
+    link_6 index is cached on env on first call (a fixed articulation
+    property, not per-step state) rather than looked up by name every
+    step.
+    """
+    object: RigidObject = env.scene[object_cfg.name]
+    ee_frame: FrameTransformer = env.scene[ee_frame_cfg.name]
+    robot: Articulation = env.scene[robot_cfg.name]
+
+    ee_pos_w = ee_frame.data.target_pos_w[:, 0, :]
+    reach_dist = torch.norm(ee_pos_w - object.data.root_pos_w, dim=-1)
+
+    if not hasattr(env, "_slow_near_cube_link6_idx"):
+        env._slow_near_cube_link6_idx = robot.data.body_names.index("link_6")
+    link6_idx = env._slow_near_cube_link6_idx
+    ee_speed = torch.linalg.vector_norm(robot.data.body_lin_vel_w[:, link6_idx], dim=-1)
+
+    return slow_near_object_bonus(reach_dist, ee_speed, reach_dist_threshold, speed_cap)

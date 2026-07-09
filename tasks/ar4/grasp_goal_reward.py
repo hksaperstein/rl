@@ -54,3 +54,36 @@ def grasp_goal_progress(
     goal_stage = 0.75 + 0.25 * goal_progress
 
     return torch.where(lifted, goal_stage, torch.where(grasped, grasp_stage, reach_stage))
+
+
+def slow_near_object_bonus(
+    reach_dist: torch.Tensor,
+    ee_speed: torch.Tensor,
+    reach_dist_threshold: float,
+    speed_cap: float,
+) -> torch.Tensor:
+    """Dense, per-step (NOT running-max) bonus for being both close to the
+    object AND moving slowly - the direct engineering fix for
+    grasp_goal_milestone_bonus's discovered flaw (this repo's Experiment
+    26 trajectory trace: the policy reaches ~2.4cm from the cube fast,
+    then wanders for the rest of the episode because the running-max
+    reach bonus is already banked and pays nothing further for staying
+    close or holding still). Unlike grasp_goal_progress above, this
+    function must NOT be wrapped in a running-max by its caller - the
+    whole point is an ongoing per-step incentive to settle near the
+    object and slow down, not a one-time discoverable milestone.
+
+    proximity_factor ramps 0->1 linearly as reach_dist shrinks from
+    reach_dist_threshold to 0 (0 at/beyond the threshold, 1 at reach_dist=0).
+    slowness_factor ramps 0->1 linearly as ee_speed shrinks from speed_cap
+    to 0 (0 at/above the cap, 1 at ee_speed=0). The product is 0 unless
+    BOTH conditions hold simultaneously (close AND slow), reaching its max
+    of 1.0 only at the ideal point (reach_dist=0, ee_speed=0) - this
+    multiplicative (not additive) combination is deliberate: an additive
+    sum would pay out for being slow far away from the cube or fast right
+    next to it, neither of which is the intended "slow down as you
+    approach" behavior.
+    """
+    proximity_factor = torch.clamp(1.0 - reach_dist / reach_dist_threshold, min=0.0, max=1.0)
+    slowness_factor = torch.clamp(1.0 - ee_speed / speed_cap, min=0.0, max=1.0)
+    return proximity_factor * slowness_factor

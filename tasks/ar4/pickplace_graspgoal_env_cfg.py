@@ -70,6 +70,27 @@ GOAL_TOLERANCE = 0.02
 FORCE_THRESHOLD = 0.05
 ANTIPODAL_COS_THRESHOLD = -0.7071
 PROXIMITY_THRESHOLD = 0.05
+# Direct user request: "heavily punish it for collision w the ground."
+# Conservative starting threshold - the jaw contact sensors use
+# FORCE_THRESHOLD=0.05N for detecting a deliberate, controlled grasp
+# pinch; 1.0N is ~20x that, chosen so ordinary micro-contacts/sensor
+# noise on the upper-arm links (which should never touch anything in
+# correct operation) don't trip it, while still catching a real
+# arm-into-ground collision early. Adjust if a smoke test shows it firing
+# spuriously or never firing.
+ARM_GROUND_CONTACT_FORCE_THRESHOLD = 1.0
+# "when it gets closer to the cube reward it for slowing down" - tighter
+# than REACH_DIST_NORM (0.3, the reach-stage milestone's own normalizer)
+# since "close" here should mean genuinely near the cube, not just
+# somewhere in the broad reach-progress ramp.
+SLOW_NEAR_CUBE_REACH_DIST_THRESHOLD = 0.12
+# The verified per-step trajectory trace (logs/train/2026-07-09_15-18-06/
+# model_1499.pt) showed the arm covering its approach in ~0.4-0.6s -
+# roughly 0.5-1.0 m/s average Cartesian speed during that fast reach
+# phase. speed_cap=0.25 m/s sits well below that cruise speed, so genuine
+# slowing/settling near the cube is required to earn this bonus, not
+# just an incidental slow moment during transit.
+SLOW_NEAR_CUBE_SPEED_CAP = 0.25
 # Derived, not hardcoded - matches Experiment 25's final-review lesson on
 # geometry constants silently drifting from what they measure.
 CUBE_TO_GOAL_DIST = math.sqrt(GOAL_OFFSET[0] ** 2 + GOAL_OFFSET[1] ** 2 + GOAL_OFFSET[2] ** 2)
@@ -155,6 +176,36 @@ class Ar4PickPlaceGraspGoalSceneCfg(InteractiveSceneCfg):
         debug_vis=False,
         filter_prim_paths_expr=["{ENV_REGEX_NS}/Cube"],
     )
+    # Upper-arm-only ground/self collision safety sensor - deliberately
+    # excludes gripper_jaw1_link/gripper_jaw2_link and link_6 (the wrist),
+    # which legitimately approach the ground plane (cube rests at
+    # z=0.006) to reach the cube. Body names confirmed via direct
+    # robot.data.body_names introspection (this project's own convention -
+    # see scripts/smoke_test_graspgoal_ground_penalty.py, which printed
+    # the live body list: ['world', 'base_link', 'link_1'..'link_5',
+    # 'link_6', 'gripper_base_link', 'gripper_jaw1_link',
+    # 'gripper_jaw2_link'] - confirming 'world' is a virtual fixed-base
+    # root body and 'gripper_base_link' is the jaw-housing body, neither
+    # of which belongs in this upper-arm-only set either), matching
+    # scripts/plot_arm_skeleton.py's independently-verified expected_chain.
+    # A single ContactSensorCfg can track multiple bodies at once: Isaac
+    # Lab's ContactSensor._initialize_impl (contact_sensor.py) treats the
+    # prim_path's final path segment as a regex against sibling prim
+    # names (sim_utils.find_matching_prims tokenizes prim_path_regex on
+    # "/" and regex-matches each segment independently), so a single
+    # sensor with an alternation in the leaf segment resolves to all
+    # matching sibling links - confirmed empirically, not just "no
+    # exception", by inspecting this sensor's own num_bodies/body_names
+    # once constructed. No filter_prim_paths_expr - unlike the jaw
+    # sensors (filtered to the cube specifically), these links shouldn't
+    # be contacting anything at all, so raw net_forces_w is the right
+    # signal, which isaaclab_mdp.illegal_contact reads directly.
+    arm_ground_contact: ContactSensorCfg = ContactSensorCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/root_joint/(base_link|link_1|link_2|link_3|link_4|link_5)",
+        update_period=0.0,
+        history_length=6,
+        debug_vis=False,
+    )
 
 
 @configclass
@@ -229,13 +280,40 @@ class TerminationsCfg:
         },
     )
 
+    # Direct user request: "heavily punish it for collision w the
+    # ground." Reuses Isaac Lab's own built-in illegal_contact
+    # termination (isaaclab.envs.mdp.terminations.py:153) against the
+    # upper-arm-only arm_ground_contact sensor above - no body_names
+    # override needed on this SceneEntityCfg, since that sensor already
+    # tracks exactly (and only) the upper-arm links.
+    arm_ground_contact = DoneTerm(
+        func=isaaclab_mdp.illegal_contact,
+        params={
+            "threshold": ARM_GROUND_CONTACT_FORCE_THRESHOLD,
+            "sensor_cfg": SceneEntityCfg("arm_ground_contact"),
+        },
+    )
+
 
 @configclass
 class RewardsCfg:
     """Four-stage gated running-max milestone bonus: reach, grasp
     (antipodal gate), lift, goal - no ungated additive sum (Experiment
     16's wedging exploit), no separately-weighted independent terms
-    (Experiment 17/18's discoverability gap)."""
+    (Experiment 17/18's discoverability gap) FOR THE STAGE-PROGRESS SIGNAL
+    ITSELF. arm_ground_contact_penalty and slow_near_cube_bonus (below)
+    are deliberately separate, independently-weighted terms rather than
+    additional stages folded into that same milestone mechanism - both
+    are safety/settling signals orthogonal to stage progress (a ground
+    collision or a wandering-after-reach failure mode isn't itself a new
+    "stage" of the task), not new discoverable sub-goals subject to
+    Experiment 17/18's original discoverability concern, and
+    arm_ground_contact_penalty in particular must remain an ordinary
+    dense per-step penalty (not gated behind the running-max) precisely
+    so it can never be "banked past" the way the milestone bonus's own
+    reach term was found to be (see grasp_goal_milestone_bonus's own
+    known flaw, root-caused via a verified per-step trajectory trace of
+    logs/train/2026-07-09_15-18-06/model_1499.pt)."""
 
     grasp_goal_milestone_bonus = RewTerm(
         func=ar4_mdp.grasp_goal_milestone_bonus,
@@ -257,6 +335,48 @@ class RewardsCfg:
     action_rate = RewTerm(func=mdp.action_rate_l2, weight=-1e-4)
 
     joint_vel = RewTerm(func=mdp.joint_vel_l2, weight=-1e-4, params={"asset_cfg": SceneEntityCfg("robot")})
+
+    # Direct user request: "heavily punish it for collision w the
+    # ground." Weight -20.0 is clearly dominant relative to
+    # action_rate/joint_vel's -1e-4 (a single illegal-contact step
+    # outweighs an entire episode's worth of those two combined many
+    # times over), while staying well below the milestone bonus's own
+    # scale (weight=25.0, raw progress in [0, 1] so max single-step payout
+    # is 25.0) - a single spurious trip shouldn't be able to swamp an
+    # otherwise-good episode's accumulated milestone reward outright, but
+    # the penalty must still be unambiguously the dominant signal the
+    # instant real ground contact occurs.
+    arm_ground_contact_penalty = RewTerm(
+        func=ar4_mdp.arm_ground_contact_penalty,
+        weight=-20.0,
+        params={
+            "sensor_cfg": SceneEntityCfg("arm_ground_contact"),
+            "threshold": ARM_GROUND_CONTACT_FORCE_THRESHOLD,
+        },
+    )
+
+    # Direct user request: "when it gets closer to the cube reward it for
+    # slowing down." Dense per-step term (NOT running-max, unlike
+    # grasp_goal_milestone_bonus) - the direct engineering fix for the
+    # discovered flaw where that running-max bonus pays nothing further
+    # once its best-ever reach is banked. weight=5.0 is modest relative to
+    # the milestone bonus's weight=25.0 (whose raw progress is in [0, 1]
+    # per new milestone), since this term is dense/per-step and
+    # accumulates continuously over the full 30s/1500-step episode rather
+    # than paying out once - a naive weight matching 25.0 would let this
+    # single term dominate the entire episode's return. Tune later via
+    # scripts/sweep.py if it proves too weak/strong in practice.
+    slow_near_cube_bonus = RewTerm(
+        func=ar4_mdp.slow_near_cube_bonus,
+        weight=5.0,
+        params={
+            "object_cfg": SceneEntityCfg("cube"),
+            "ee_frame_cfg": SceneEntityCfg("ee_frame"),
+            "robot_cfg": SceneEntityCfg("robot"),
+            "reach_dist_threshold": SLOW_NEAR_CUBE_REACH_DIST_THRESHOLD,
+            "speed_cap": SLOW_NEAR_CUBE_SPEED_CAP,
+        },
+    )
 
 
 @configclass

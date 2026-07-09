@@ -6,12 +6,15 @@ project_pytest-needs-isaac-sim-python memory)."""
 
 import torch
 
-from tasks.ar4.grasp_goal_reward import grasp_goal_progress
+from tasks.ar4.grasp_goal_reward import grasp_goal_progress, slow_near_object_bonus
 
 REACH_DIST_NORM = 0.3
 LIFT_MINIMAL_HEIGHT = 0.03
 LIFT_TARGET_HEIGHT = 0.10
 CUBE_TO_GOAL_DIST = 0.4251
+
+REACH_DIST_THRESHOLD = 0.12
+SPEED_CAP = 0.25
 
 
 def test_reach_stage_monotonic_and_bounded():
@@ -98,3 +101,51 @@ def test_lift_and_goal_stages_monotonic_and_bounded():
     goal_deltas = goal_raw[1:] - goal_raw[:-1]
     assert torch.all(goal_deltas >= -1e-6), f"goal stage decreased: min delta {goal_deltas.min().item()}"
     assert abs(goal_raw[-1].item() - 1.0) < 1e-5, f"goal stage should reach ~1.0 at goal_dist=0, got {goal_raw[-1].item()}"
+
+
+def test_slow_near_object_bonus_monotonic_in_reach_dist():
+    """Holding ee_speed fixed at 0 (fully slow), reward must rise
+    monotonically as reach_dist shrinks toward 0."""
+    reach_dist = torch.linspace(REACH_DIST_THRESHOLD, 0.0, 100)
+    ee_speed = torch.zeros(100)
+
+    bonus = slow_near_object_bonus(reach_dist, ee_speed, REACH_DIST_THRESHOLD, SPEED_CAP)
+
+    deltas = bonus[1:] - bonus[:-1]
+    assert torch.all(deltas >= -1e-6), f"bonus decreased as reach_dist shrank: min delta {deltas.min().item()}"
+
+
+def test_slow_near_object_bonus_monotonic_in_ee_speed():
+    """Holding reach_dist fixed at 0 (fully close), reward must rise
+    monotonically as ee_speed shrinks toward 0."""
+    reach_dist = torch.zeros(100)
+    ee_speed = torch.linspace(SPEED_CAP, 0.0, 100)
+
+    bonus = slow_near_object_bonus(reach_dist, ee_speed, REACH_DIST_THRESHOLD, SPEED_CAP)
+
+    deltas = bonus[1:] - bonus[:-1]
+    assert torch.all(deltas >= -1e-6), f"bonus decreased as ee_speed shrank: min delta {deltas.min().item()}"
+
+
+def test_slow_near_object_bonus_zero_outside_thresholds():
+    """Bonus must be exactly 0.0 when reach_dist is at/beyond
+    reach_dist_threshold (regardless of speed), and exactly 0.0 when
+    ee_speed is at/beyond speed_cap (regardless of proximity)."""
+    far_reach = torch.tensor([REACH_DIST_THRESHOLD, REACH_DIST_THRESHOLD * 2.0])
+    zero_speed = torch.tensor([0.0, 0.0])
+    bonus_far = slow_near_object_bonus(far_reach, zero_speed, REACH_DIST_THRESHOLD, SPEED_CAP)
+    assert torch.all(bonus_far.abs() < 1e-6), f"expected 0.0 at/beyond reach threshold, got {bonus_far.tolist()}"
+
+    zero_reach = torch.tensor([0.0, 0.0])
+    fast_speed = torch.tensor([SPEED_CAP, SPEED_CAP * 2.0])
+    bonus_fast = slow_near_object_bonus(zero_reach, fast_speed, REACH_DIST_THRESHOLD, SPEED_CAP)
+    assert torch.all(bonus_fast.abs() < 1e-6), f"expected 0.0 at/beyond speed cap, got {bonus_fast.tolist()}"
+
+
+def test_slow_near_object_bonus_ideal_point_is_one():
+    """At the ideal point (reach_dist=0, ee_speed=0), bonus must be
+    exactly 1.0."""
+    bonus = slow_near_object_bonus(
+        torch.tensor([0.0]), torch.tensor([0.0]), REACH_DIST_THRESHOLD, SPEED_CAP
+    )
+    assert abs(bonus.item() - 1.0) < 1e-6, f"expected 1.0 at ideal point, got {bonus.item()}"

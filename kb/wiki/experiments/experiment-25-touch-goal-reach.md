@@ -118,17 +118,48 @@ math from scratch, not by re-reading the fix's own claims.
 
 ## Verdict
 
-**Implementation complete and independently verified; the actual
-1500-iteration training run has not yet been executed as of this article**
-— there is no quantitative or video result to report yet. What this pass
-does establish is a process result, not a training result: a structurally
-unsound reward mechanism was caught and fixed *before* it could produce a
-misleading null result on the reduced-scope task, by the same
+**Touch is solved; reach-to-goal converges but the deployed (deterministic)
+policy stalls just outside the 2cm goal tolerance, consistently, not
+randomly.**
+
+Two training runs. Run 1 (`episode_length_s=5.0`, copied from
+`pickplace_mirror_env_cfg.py`) showed `goal_reached` peak at ~0.37-0.39
+then decline to ~0.01-0.03, with episodes running to the timeout almost
+every time — stopped before completion. Run 2 (`episode_length_s=20.0`,
+re-derived from Isaac Lab's own reference-task episode-length conventions
+— see [[hyperparameter-registry]]) completed cleanly: `goal_reached`
+climbed and held at ~0.55-0.65, finishing at 0.5987, with
+`Loss/value_function` small and bounded throughout.
+
+An instrumented rollout of the trained checkpoint found the training-time
+rate reflects PPO's own exploration-noise sampling, not the deployed
+policy's reliability: deterministic action (`ActorCritic.act_inference`,
+what a deployed policy actually uses) touched the cube in 32/32 rollout
+episodes but reached the goal in only 2/32 (6.25%) — the misses cluster
+tightly at 0.0175-0.0285m past the touch point, just outside the 0.02m
+tolerance, not scattered. Stochastic action (`ActorCritic.act`, the same
+sampling used during training) reached the goal in 29/32 (90.6%).
+Independent recomputation from raw end-effector/cube/goal state agreed
+with the actual termination signal on 100% of episodes in both
+conditions, ruling out an instrumentation bug. A close-up single-env
+camera (built for this check — the wide multi-env training camera proved
+too low-resolution to confirm behavior, twice) shows the same shape
+directly: the arm curls onto the cube by step ~22 (0.44s in), extends
+toward the goal, and stops short of it at timeout.
+
+This is also a process result, not just a training result: a
+structurally unsound reward mechanism (two independent tanh proximity
+bumps summed under a running-max mechanism, leaving a reward-free dead
+zone across most of the touch-to-goal traverse) was caught and fixed
+*before* it could produce a misleading null result, by the same
 research-both-directions discipline (re-derive the defect independently,
 don't trust a self-report) this project applies elsewhere. See
-[[staged-reward-co-satisfiability]] for the generalized lesson this defect
-exposes, in case a future staged/sequential reward mechanism is proposed
-again.
+[[staged-reward-co-satisfiability]] for the generalized lesson, and
+[[hyperparameter-registry]] for the episode-length derivation.
+
+Superseded by a direct user decision to reintroduce the gripper next
+(grasp/lift back in scope) rather than continue narrowing the goal
+tolerance on this reduced task.
 
 ## Related concepts
 

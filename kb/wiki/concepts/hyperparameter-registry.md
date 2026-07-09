@@ -90,7 +90,7 @@ maintaining every historical task's full parameter set in this file.
 
 | Parameter | Current value | Why |
 |---|---|---|
-| `episode_length_s` | `20.0` | Was `5.0` (copied from `pickplace_mirror_env_cfg.py`'s single-object lift task). First run showed episodes always hitting the timeout; re-derived from Isaac Lab's own reference tasks, which scale episode length with task *structure*: Reach 12.0s, Lift 5.0s, Cabinet 8.0s, Stack (sequential multi-stage, the closest analog) 30.0s. 20.0s sits inside that range. See the 2026-07-09 conversation record; not yet its own ROADMAP entry as of this writing. |
+| `episode_length_s` | `20.0` | Was `5.0` (copied from `pickplace_mirror_env_cfg.py`'s single-object lift task). Run 1 (5.0s) showed episodes always hitting the timeout with `goal_reached` peaking then declining; re-derived from Isaac Lab's own reference tasks, which scale episode length with task *structure*: Reach 12.0s, Lift 5.0s, Cabinet 8.0s, Stack (sequential multi-stage, the closest analog) 30.0s. Run 2 (20.0s) converged and held `goal_reached` at ~0.60 — see ROADMAP.md's Experiment 25 entry ("Training run 1"/"Training run 2") for the full comparison. |
 | `touch_std` | `0.05` | Tanh-kernel width for the pre-touch proximity shaping term — tighter than general `reach_std=0.1` (used elsewhere) since touching specifically needs closer proximity than general reaching. |
 | `touch_tolerance` | `0.02` | Distance at which the touch latch (`env._touched_cube`) flips true. Matches this project's standard 2cm goal-tolerance convention (`cube_reached_goal`'s own threshold). |
 | `GOAL_TOLERANCE` | `0.02` | Termination distance-to-goal threshold, same convention. |

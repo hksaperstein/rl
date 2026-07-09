@@ -2486,6 +2486,58 @@ follow-ups below.
       scratch, not by re-reading the fix's own claims.
     - **Status: implementation complete and verified, actual 1500-iteration
       training run not yet executed as of this entry** — see follow-up.
+    - **Training run 1 (episode_length_s=5.0, copied from
+      pickplace_mirror_env_cfg.py): `goal_reached` rose to a peak of
+      ~0.37-0.39 partway through training, then declined to ~0.01-0.03 by
+      the end, with `Mean episode length` at 248-250 of the 250-step max —
+      most episodes running to timeout rather than succeeding.** Stopped
+      before completion (iteration ~979/1500) once the decline pattern was
+      clear; a wide multi-env training-camera video review at this point
+      was inconclusive at that camera's zoom level.
+    - **Episode length re-derived from Isaac Lab's own reference
+      manipulation tasks, extended 5.0s -> 20.0s.** Isaac Lab's tasks scale
+      episode length with task *structure*, not object count: Reach
+      (single target) 12.0s, Lift (reach+grasp+lift, one object) 5.0s,
+      Cabinet (reach+grasp+open) 8.0s, Stack (reach+grasp+lift+move+place,
+      sequential multi-stage — the closest structural analog to
+      touch-then-goal) 30.0s. External literature on long-horizon/
+      multi-stage manipulation RL (Relay Policy Learning's hierarchical
+      fixed-step budgets, SLIM's multi-stage pick-and-place benchmark,
+      Meta-World's 500-step-per-episode convention) consistently uses
+      proportionally longer horizons for multi-stage tasks. 20.0s sits
+      inside the range Isaac Lab's own tasks establish.
+    - **Training run 2 (episode_length_s=20.0): completed cleanly.
+      `Episode_Termination/goal_reached` climbed from 0 and held in the
+      0.5-0.7 band for the back half of training, finishing at 0.5987;
+      `time_out` finished at 0.4015; `Loss/value_function` stayed small
+      and bounded throughout (no divergence signature).** A materially
+      different shape from run 1 (sustained, not peak-then-decline).
+    - **Instrumented rollout of the trained checkpoint (`model_1499.pt`)
+      found the training-time rate reflects exploration noise, not the
+      deployed policy's actual reliability.** Deterministic action
+      (`ActorCritic.act_inference`, what a deployed policy actually
+      uses): 32/32 rollout episodes touched the cube, 2/32 (6.25%) reached
+      the goal — the failures cluster tightly at 0.0175-0.0285m past the
+      touch point, just outside the 0.02m goal tolerance, not scattered.
+      Stochastic action (`ActorCritic.act`, the same sampling used during
+      training rollouts): 32/32 touched, 29/32 (90.6%) reached goal.
+      Independent recomputation from raw `ee_frame`/cube/goal state agreed
+      with the actual termination signal on 100% of episodes in both
+      conditions, ruling out an instrumentation bug. Close-up single-env
+      video (`tasks/ar4/touchgoal_democam_env_cfg.py`, a new close-camera
+      variant built for this check after the wide training camera proved
+      inconclusive twice) confirms the shape directly: the arm curls down
+      to the cube by step ~22 (0.44s into a 1000-step episode), extends
+      toward the goal, and stops short of it at timeout in the
+      deterministic-only sample recorded.
+    - **Net assessment: touch is solved; reach-to-goal is close but not
+      solved by the mean policy — it lands just outside a 2cm tolerance
+      band, consistently.** Candidate next steps, not yet tried: widen
+      `GOAL_TOLERANCE` (the simplest lever, directly targets the observed
+      gap), or continue training longer to sharpen precision under the
+      existing tolerance. Not pursued further in this pass — superseded by
+      the next direction (reintroducing the gripper) per direct user
+      instruction.
 
 ## Direction
 

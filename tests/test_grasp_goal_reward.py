@@ -52,6 +52,24 @@ def test_grasp_jump_is_at_least_a_quarter():
     assert abs(raw[1].item() - 0.50) < 1e-5, f"grasp stage floor should be exactly 0.50, got {raw[1].item()}"
 
 
+def test_lift_to_goal_transition_is_non_negative():
+    """Achieving lift (lifted flips true) must produce a non-negative
+    raw-progress jump to the goal stage, regardless of other state."""
+    reach_dist = torch.tensor([0.0, 0.0])
+    grasped = torch.tensor([True, True])
+    lifted = torch.tensor([False, True])
+    cube_height = torch.tensor([LIFT_TARGET_HEIGHT / 2, LIFT_TARGET_HEIGHT / 2])
+    goal_dist = torch.tensor([CUBE_TO_GOAL_DIST, CUBE_TO_GOAL_DIST])
+
+    raw = grasp_goal_progress(
+        reach_dist, grasped, lifted, cube_height, goal_dist,
+        REACH_DIST_NORM, LIFT_MINIMAL_HEIGHT, LIFT_TARGET_HEIGHT, CUBE_TO_GOAL_DIST,
+    )
+
+    assert raw[1].item() - raw[0].item() >= -1e-6, f"lift transition jumped backward: {(raw[1] - raw[0]).item()}"
+    assert abs(raw[1].item() - 0.75) < 1e-5, f"goal stage floor should be exactly 0.75, got {raw[1].item()}"
+
+
 def test_lift_and_goal_stages_monotonic_and_bounded():
     """Once grasped (not yet lifted), raw progress ramps 0.50->0.75 with
     cube height. Once lifted, raw progress ramps 0.75->1.00 with

@@ -1,0 +1,168 @@
+"""Parameter-sweep orchestrator: run a batch of training trials over a
+task's parameter space with a chosen search strategy, scoring each trial on
+the REAL success-termination rate and recording everything to a queryable
+SQLite store.
+
+This is the generalized Tier-2 tuning tool (see CLAUDE.md's Workflow
+section and docs/superpowers/specs/2026-07-09-ar4-parameter-sweep-framework-design.md).
+It supersedes scripts/hillclimb_rewards.py's single-task/single-file/greedy-
+only design while preserving its discipline: real success metric as ground
+truth, automatic value-function-divergence reject, bounded cheap proxy runs,
+every attempt logged, and NEVER a git push (nor, here, any source edit -
+trials apply config overrides at construction time, they do not mutate or
+commit env-cfg files).
+
+Plain python3 invocation (it only orchestrates isaaclab.sh subprocesses; it
+does not import isaaclab itself):
+
+    # single-parameter greedy hillclimb, 15 rounds (round 0 = baseline)
+    python3 scripts/sweep.py --task touchgoal --strategy hillclimb --rounds 15
+
+    # random search: 20 trials over the whole space
+    python3 scripts/sweep.py --task touchgoal --strategy random --trials 20
+
+    # random search over a chosen subset of parameters
+    python3 scripts/sweep.py --task touchgoal --strategy random --trials 20 \
+        --params learning_rate entropy_coef action_scale
+
+    # grid search over 2-3 parameters (keep the axis set small)
+    python3 scripts/sweep.py --task graspgoal --strategy grid \
+        --params milestone_bonus_weight action_scale --grid_points 3
+
+Every trial defaults to the cheap diagnostic scale (num_envs=4096,
+max_iterations=300, ~3-5 min each) - a sweep NEVER silently balloons into a
+full 1500-iteration run. Override with --num_envs/--max_iterations only for
+a deliberate longer-proxy batch.
+
+IMPORTANT: only one Isaac Sim process may run at a time on this machine.
+This script launches training subprocesses back-to-back; do not start it
+while another Isaac Sim run is active (check `ps aux | grep -i isaac`).
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import subprocess
+import sys
+import uuid
+from datetime import datetime
+
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, REPO_ROOT)
+
+from sweeps.runner import DEFAULT_VF_MAX_REJECT, TrialRunner  # noqa: E402
+from sweeps.spaces import TASK_SPACES, resolve_overrides  # noqa: E402
+from sweeps.store import TrialRecord, TrialStore  # noqa: E402
+from sweeps.strategies import GridStrategy, HillclimbStrategy, RandomStrategy  # noqa: E402
+
+
+def git_head_sha() -> str:
+    result = subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, capture_output=True, text=True)
+    return result.stdout.strip()
+
+
+def build_strategy(args, space):
+    if args.strategy == "hillclimb":
+        return HillclimbStrategy(space, rounds=args.rounds, param_names=args.params, seed=args.seed)
+    if args.strategy == "random":
+        return RandomStrategy(space, n_trials=args.trials, param_names=args.params, seed=args.seed)
+    if args.strategy == "grid":
+        if not args.params:
+            raise SystemExit("--strategy grid requires --params (the small axis set to grid over).")
+        return GridStrategy(space, param_names=args.params, points_per_param=args.grid_points, max_trials=args.trials)
+    raise SystemExit(f"Unknown strategy {args.strategy!r}")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Run a parameter sweep over an AR4 task's tunable space.")
+    parser.add_argument("--task", required=True, choices=sorted(TASK_SPACES), help="Task space to sweep.")
+    parser.add_argument("--strategy", required=True, choices=["hillclimb", "random", "grid"])
+    parser.add_argument("--rounds", type=int, default=15, help="hillclimb: total rounds incl. round 0 (baseline).")
+    parser.add_argument("--trials", type=int, default=20, help="random: number of trials. grid: cap on combinations.")
+    parser.add_argument("--grid_points", type=int, default=3, help="grid: points per parameter axis.")
+    parser.add_argument("--params", nargs="*", default=None, help="Restrict to these parameter names (default: all).")
+    parser.add_argument("--num_envs", type=int, default=4096, help="Parallel envs per trial (diagnostic scale).")
+    parser.add_argument("--max_iterations", type=int, default=300, help="Iterations per trial (diagnostic scale).")
+    parser.add_argument("--vf_max_reject", type=float, default=DEFAULT_VF_MAX_REJECT,
+                        help="value_function loss max above which a trial is auto-rejected as unstable.")
+    parser.add_argument("--seed", type=int, default=0, help="RNG seed for the search strategy.")
+    parser.add_argument("--db", default="logs/sweeps/sweeps.db", help="SQLite store path.")
+    parser.add_argument("--sweep_id", default=None, help="Group id for this batch (default: autogenerated).")
+    args = parser.parse_args()
+
+    os.chdir(REPO_ROOT)
+    space = TASK_SPACES[args.task]
+    if args.params:
+        known = {p.name for p in space.parameters}
+        unknown = [p for p in args.params if p not in known]
+        if unknown:
+            raise SystemExit(f"Unknown parameter(s) for task {args.task!r}: {unknown}. Known: {sorted(known)}")
+
+    sweep_id = args.sweep_id or f"{args.task}-{args.strategy}-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4]}"
+    baseline_sha = git_head_sha()
+    store = TrialStore(args.db)
+    runner = TrialRunner(
+        num_envs=args.num_envs,
+        max_iterations=args.max_iterations,
+        vf_max_reject=args.vf_max_reject,
+    )
+    strat = build_strategy(args, space)
+
+    print(f"=== Sweep {sweep_id} ===")
+    print(f"task={args.task} strategy={args.strategy} baseline_git={baseline_sha[:10]}")
+    print(f"success_metric={space.success_metric}  stability_metric={space.stability_metric}")
+    print(f"scale: num_envs={args.num_envs} max_iterations={args.max_iterations}  db={args.db}")
+
+    trial_num = 0
+    while (param_values := strat.next_trial()) is not None:
+        overrides = resolve_overrides(space, param_values)
+        trial_tag = f"{sweep_id}_t{trial_num}"
+        print(f"\n--- Trial {trial_num} ({strat.name}) ---")
+        print(f"param_values={param_values}")
+
+        result = runner.run(space, overrides, trial_tag)
+        outcome = strat.record(param_values, result)
+
+        rec = TrialRecord(
+            sweep_id=sweep_id,
+            task=args.task,
+            strategy=strat.name,
+            param_values=param_values,
+            overrides=overrides,
+            baseline_git_sha=baseline_sha,
+            num_envs=args.num_envs,
+            max_iterations=args.max_iterations,
+            success_metric_tag=space.success_metric,
+            stability_metric_tag=space.stability_metric,
+            success_metric=result.success_metric,
+            stability_metric=result.stability_metric,
+            outcome=outcome,
+            run_dir=result.run_dir,
+            log_path=os.path.join("logs/sweeps", f"{trial_tag}.log"),
+        )
+        trial_id = store.insert(rec)
+        print(
+            f"trial_id={trial_id} outcome={outcome} "
+            f"success={result.success_metric} stability_max={result.stability_metric} "
+            f"run_dir={result.run_dir}"
+        )
+
+        # Hillclimb's baseline round is load-bearing: without a baseline
+        # success value there is nothing to compare against. Fail loud rather
+        # than silently hillclimbing against a None best.
+        if strat.name == "hillclimb" and trial_num == 0 and result.errored:
+            print("FATAL: hillclimb baseline round errored - cannot establish a comparison metric. Stopping.")
+            store.close()
+            sys.exit(1)
+
+        trial_num += 1
+
+    print(f"\nSweep {sweep_id} complete: {trial_num} trial(s) recorded to {args.db}")
+    print("This script never runs `git push` and never edits source. Review the batch with:")
+    print(f"    python3 scripts/sweep_report.py --task {args.task}")
+    store.close()
+
+
+if __name__ == "__main__":
+    main()

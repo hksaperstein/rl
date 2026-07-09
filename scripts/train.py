@@ -23,6 +23,21 @@ from isaaclab.app import AppLauncher
 parser = argparse.ArgumentParser(description="Train the AR4 pick-and-place policy with PPO (rsl_rl).")
 parser.add_argument("--num_envs", type=int, default=4096, help="Number of parallel environments.")
 parser.add_argument("--max_iterations", type=int, default=None, help="Override the agent config's max_iterations.")
+parser.add_argument(
+    "--overrides_file",
+    type=str,
+    default=None,
+    help=(
+        "Optional path to a JSON file of config field overrides applied AFTER the env/agent cfgs are "
+        "constructed and BEFORE the env/runner are built. Keys are dotted paths prefixed with 'env.' "
+        "(applied to env_cfg) or 'agent.' (applied to agent_cfg), values are JSON scalars, e.g. "
+        '{"env.rewards.touch_goal_milestone_bonus.weight": 30.0, "agent.algorithm.learning_rate": 3e-4}. '
+        "Path segments resolve as attributes, or as dict keys when the current object is a dict (so "
+        "reward-term params dicts like '...params.touch_std' are reachable). Used by the sweep "
+        "framework (sweeps/, scripts/sweep.py) to run parameter trials without editing source files; "
+        "omitting it leaves training behavior exactly as before."
+    ),
+)
 parser.add_argument("--video", action="store_true", default=False, help="Record videos periodically during training.")
 parser.add_argument("--video_length", type=int, default=200, help="Length of each recorded video (steps).")
 parser.add_argument("--video_interval", type=int, default=2000, help="Steps between recorded videos.")
@@ -316,6 +331,17 @@ def main() -> None:
     agent_cfg.device = args_cli.device
     if args_cli.max_iterations is not None:
         agent_cfg.max_iterations = args_cli.max_iterations
+
+    if args_cli.overrides_file is not None:
+        import json
+
+        from sweeps.overrides import apply_overrides
+
+        with open(args_cli.overrides_file) as f:
+            overrides = json.load(f)
+        print(f"Applying {len(overrides)} config override(s) from {args_cli.overrides_file}")
+        apply_overrides(env_cfg, agent_cfg, overrides)
+
     env_cfg.seed = agent_cfg.seed
 
     log_dir = os.path.join(LOG_ROOT, datetime.now().strftime("%Y-%m-%d_%H-%M-%S"))

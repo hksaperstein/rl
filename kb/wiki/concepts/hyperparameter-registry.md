@@ -108,18 +108,55 @@ post-touch, monotonic by construction. The `0.3`/`0.7` split itself
 tuned — it mirrors `_raw_lift_progress_mirrored`'s increasing-weight-per-
 stage convention without a specific derivation.
 
-### Tier 2: reward-weight hillclimbing
+### Tier 2: parameter sweeping (framework)
 
-For **weight/threshold tuning within an already-validated mechanism**
-(not new terms), this project uses a separate fast, unattended, git-based
-loop rather than hand-editing this table per attempt —
-`scripts/hillclimb_rewards.py`, design in
-`docs/superpowers/specs/2026-07-07-ar4-hillclimb-loop-design.md`, running
-results table in `docs/superpowers/plans/2026-07-07-ar4-hillclimb-results.md`
-(one row per attempt: parameter, old/new value, proxy metric, outcome,
-timestamp — kept, reverted-if-worse). That table is the authoritative
-history for anything tuned through it; don't duplicate its rows here,
-just link to it.
+For **weight/threshold + training-hyperparameter tuning within an already-
+validated mechanism** (not new terms/mechanisms), this project uses the
+general **parameter-sweep framework** (`sweeps/` + `scripts/sweep.py` +
+`scripts/sweep_report.py`) rather than hand-editing this table per attempt.
+Design: `docs/superpowers/specs/2026-07-09-ar4-parameter-sweep-framework-design.md`.
+
+This registry is the durable catalog of *what knobs exist*; the framework is
+the tool that *iterates over them* and records *what was tried and with what
+outcome*. The two are complementary — add a knob here when it becomes known;
+declare it tunable (bounds/step) in `sweeps/spaces.py`'s `TASK_SPACES` when a
+sweep should be allowed to move it.
+
+Key properties (see the design doc for the full rationale):
+
+- **Any task, declaratively.** A `TaskSpace` in `sweeps/spaces.py` says, per
+  task: launch flag, real success metric, stability metric, and the tunable
+  `ParameterSpec`s (override key(s), baseline, bounds, hillclimb step).
+  Registered today: `touchgoal`, `graspgoal`, `baseproximity`. Adding a task
+  is one registry entry, no execution-code change.
+- **Both reward params and training hyperparameters** are in scope (reward
+  `weight`s and `params` entries, action `scale`, `episode_length_s`, and PPO
+  `learning_rate`/`entropy_coef`/`num_steps_per_env`, ...).
+- **Config-override, not source-edit.** Trials apply overrides to the
+  constructed cfgs via `scripts/train.py --overrides_file` (resolver in
+  `sweeps/overrides.py`); they do **not** mutate or commit source files.
+  Boundary: only live cfg fields are sweepable this way (a bare module
+  constant used directly in a function body would still need a source edit —
+  none currently in scope). Promoting a winning value into source stays a
+  manual Principal step after batch review.
+- **Search strategies:** single-parameter greedy `hillclimb` (the old
+  `hillclimb_rewards.py` behavior, generalized), multi-parameter `random`
+  search, and small-axis `grid` — all sharing one space definition, one
+  runner, one store.
+- **Queryable store, not a markdown table.** Every trial (kept or not) is
+  recorded to `logs/sweeps/sweeps.db` (SQLite) with its full parameter
+  vector, real success metric, stability metric, config-identity hash,
+  baseline git sha, and scale. Query coverage-vs-outcome with
+  `scripts/sweep_report.py`.
+- **Disciplines preserved:** real success-termination rate as ground truth
+  (never a shaped scalar), automatic value-function-divergence reject,
+  bounded diagnostic-scale proxy runs, every attempt logged, never a
+  `git push` (nor source commit) from the automation.
+
+The original `scripts/hillclimb_rewards.py` and its markdown results table
+(`docs/superpowers/plans/2026-07-07-ar4-hillclimb-results.md`) remain as the
+authoritative history of what was tuned through the old loop; new tuning goes
+through the framework.
 
 ## Coverage boundary
 

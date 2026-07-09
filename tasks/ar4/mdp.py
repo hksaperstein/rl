@@ -20,6 +20,7 @@ from isaaclab.utils.math import combine_frame_transforms, quat_apply, sample_uni
 import isaaclab.sim as sim_utils
 
 from .touch_goal_reward import touch_goal_progress
+from .grasp_goal_reward import grasp_goal_progress
 
 if TYPE_CHECKING:
     from isaaclab.assets import Articulation, RigidObject
@@ -478,6 +479,174 @@ def touch_goal_position_in_robot_root_frame(
     if not hasattr(env, "_touch_goal_pos_w"):
         env._touch_goal_pos_w = torch.zeros(env.num_envs, 3, device=env.device)
     goal_pos_b, _ = subtract_frame_transforms(robot.data.root_pos_w, robot.data.root_quat_w, env._touch_goal_pos_w)
+    return goal_pos_b
+
+
+def set_cube_goal_position(
+    env: ManagerBasedRLEnv,
+    env_ids: torch.Tensor,
+    object_cfg: SceneEntityCfg,
+    goal_offset: tuple[float, float, float],
+) -> None:
+    """Event term (mode="reset"): snapshot the goal position once, from
+    the cube's position at reset time - same decoupling rationale as
+    Experiment 25's set_touch_goal_position (this file), now measuring
+    where the CUBE itself must end up (carried there by the arm), not
+    an end-effector waypoint."""
+    object: RigidObject = env.scene[object_cfg.name]
+    if not hasattr(env, "_cube_goal_pos_w"):
+        env._cube_goal_pos_w = torch.zeros(env.num_envs, 3, device=env.device)
+    goal_offset_t = torch.tensor(goal_offset, device=env.device)
+    env._cube_goal_pos_w[env_ids] = object.data.root_pos_w[env_ids] + goal_offset_t
+
+
+def _grasp_lift_state(
+    env: ManagerBasedRLEnv,
+    object_cfg: SceneEntityCfg,
+    jaw1_contact_cfg: SceneEntityCfg,
+    jaw2_contact_cfg: SceneEntityCfg,
+    force_threshold: float,
+    antipodal_cos_threshold: float,
+    lift_minimal_height: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Shared helper: computes and latches env._grasped/env._lifted from
+    live state. Called by every reward/termination/observation function
+    below that needs this state, so the latch is always up to date
+    regardless of which manager (reward/termination/observation) happens
+    to run first in a given step - same idempotent-|=-latch pattern
+    Experiment 25 used for env._touched_cube."""
+    object: RigidObject = env.scene[object_cfg.name]
+    antipodal_now = antipodal_grasp_bonus(
+        env, force_threshold, antipodal_cos_threshold, jaw1_contact_cfg, jaw2_contact_cfg,
+    ).bool()
+
+    if not hasattr(env, "_grasped"):
+        env._grasped = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+    env._grasped |= antipodal_now
+
+    cube_height_above_ground = object.data.root_pos_w[:, 2] - 0.006  # cube half-size, resting height
+    if not hasattr(env, "_lifted"):
+        env._lifted = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+    env._lifted |= env._grasped & (cube_height_above_ground > lift_minimal_height)
+
+    return env._grasped, env._lifted
+
+
+def grasp_goal_milestone_bonus(
+    env: ManagerBasedRLEnv,
+    object_cfg: SceneEntityCfg,
+    ee_frame_cfg: SceneEntityCfg,
+    jaw1_contact_cfg: SceneEntityCfg,
+    jaw2_contact_cfg: SceneEntityCfg,
+    reach_dist_norm: float = 0.3,
+    lift_minimal_height: float = 0.03,
+    lift_target_height: float = 0.10,
+    force_threshold: float = 0.05,
+    antipodal_cos_threshold: float = -0.7071,
+    cube_to_goal_dist: float = 0.4251,
+) -> torch.Tensor:
+    """Undiscounted running-max milestone bonus over grasp_goal_progress
+    - same mechanism as staged_milestone_bonus/touch_goal_milestone_bonus
+    (this file): reward = (new best-ever raw progress) - (previous
+    best-ever raw progress), never negative."""
+    object: RigidObject = env.scene[object_cfg.name]
+    ee_frame: FrameTransformer = env.scene[ee_frame_cfg.name]
+    ee_pos_w = ee_frame.data.target_pos_w[:, 0, :]
+
+    grasped, lifted = _grasp_lift_state(
+        env, object_cfg, jaw1_contact_cfg, jaw2_contact_cfg,
+        force_threshold, antipodal_cos_threshold, lift_minimal_height,
+    )
+
+    reach_dist = torch.norm(ee_pos_w - object.data.root_pos_w, dim=-1)
+    cube_height_above_ground = object.data.root_pos_w[:, 2] - 0.006
+
+    if not hasattr(env, "_cube_goal_pos_w"):
+        env._cube_goal_pos_w = torch.zeros(env.num_envs, 3, device=env.device)
+    goal_dist = torch.norm(object.data.root_pos_w - env._cube_goal_pos_w, dim=-1)
+
+    raw = grasp_goal_progress(
+        reach_dist, grasped, lifted, cube_height_above_ground, goal_dist,
+        reach_dist_norm, lift_minimal_height, lift_target_height, cube_to_goal_dist,
+    )
+
+    if not hasattr(env, "_grasp_goal_milestone_max"):
+        env._grasp_goal_milestone_max = torch.zeros(env.num_envs, device=env.device)
+    prev = env._grasp_goal_milestone_max.clone()
+    env._grasp_goal_milestone_max = torch.maximum(env._grasp_goal_milestone_max, raw)
+    return env._grasp_goal_milestone_max - prev
+
+
+def reset_grasp_goal_milestone(env: ManagerBasedRLEnv, env_ids: torch.Tensor) -> None:
+    """Event term (mode="reset"): zero the running-max milestone buffer
+    and the grasped/lifted latches for resetting envs."""
+    if not hasattr(env, "_grasp_goal_milestone_max"):
+        env._grasp_goal_milestone_max = torch.zeros(env.num_envs, device=env.device)
+    if not hasattr(env, "_grasped"):
+        env._grasped = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+    if not hasattr(env, "_lifted"):
+        env._lifted = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+    env._grasp_goal_milestone_max[env_ids] = 0.0
+    env._grasped[env_ids] = False
+    env._lifted[env_ids] = False
+
+
+def cube_reached_goal_after_lift(
+    env: ManagerBasedRLEnv,
+    threshold: float,
+    object_cfg: SceneEntityCfg,
+    ee_frame_cfg: SceneEntityCfg,
+    jaw1_contact_cfg: SceneEntityCfg,
+    jaw2_contact_cfg: SceneEntityCfg,
+    reach_dist_norm: float = 0.3,
+    lift_minimal_height: float = 0.03,
+    force_threshold: float = 0.05,
+    antipodal_cos_threshold: float = -0.7071,
+) -> torch.Tensor:
+    """Termination: cube within threshold of env._cube_goal_pos_w AND
+    env._lifted true for that env (genuine grasp+lift occurred at some
+    point this episode, not just incidental cube-goal proximity)."""
+    object: RigidObject = env.scene[object_cfg.name]
+    _, lifted = _grasp_lift_state(
+        env, object_cfg, jaw1_contact_cfg, jaw2_contact_cfg,
+        force_threshold, antipodal_cos_threshold, lift_minimal_height,
+    )
+    if not hasattr(env, "_cube_goal_pos_w"):
+        env._cube_goal_pos_w = torch.zeros(env.num_envs, 3, device=env.device)
+    goal_dist = torch.norm(object.data.root_pos_w - env._cube_goal_pos_w, dim=-1)
+    return (goal_dist < threshold) & lifted
+
+
+def grasp_state_observation(
+    env: ManagerBasedRLEnv,
+    object_cfg: SceneEntityCfg,
+    jaw1_contact_cfg: SceneEntityCfg,
+    jaw2_contact_cfg: SceneEntityCfg,
+    force_threshold: float = 0.05,
+    antipodal_cos_threshold: float = -0.7071,
+    lift_minimal_height: float = 0.03,
+) -> torch.Tensor:
+    """Observation: [grasped_float, lifted_float] latched state, shape
+    (num_envs, 2) - gives the policy direct access to its own stage
+    progress rather than requiring it to infer this from raw
+    contact/height signals alone."""
+    grasped, lifted = _grasp_lift_state(
+        env, object_cfg, jaw1_contact_cfg, jaw2_contact_cfg,
+        force_threshold, antipodal_cos_threshold, lift_minimal_height,
+    )
+    return torch.stack([grasped.float(), lifted.float()], dim=-1)
+
+
+def cube_goal_position_in_robot_root_frame(
+    env: ManagerBasedRLEnv,
+    robot_cfg: SceneEntityCfg,
+) -> torch.Tensor:
+    """env._cube_goal_pos_w (set once at reset by set_cube_goal_position)
+    expressed in the robot's root frame."""
+    robot: RigidObject = env.scene[robot_cfg.name]
+    if not hasattr(env, "_cube_goal_pos_w"):
+        env._cube_goal_pos_w = torch.zeros(env.num_envs, 3, device=env.device)
+    goal_pos_b, _ = subtract_frame_transforms(robot.data.root_pos_w, robot.data.root_quat_w, env._cube_goal_pos_w)
     return goal_pos_b
 
 

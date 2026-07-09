@@ -3,12 +3,21 @@ progress math (Experiment 25) - no Isaac Lab import needed, run with
 plain pytest: `pytest tests/test_touch_goal_reward.py -v`
 """
 
+import math
+
 import torch
 
 from tasks.ar4.touch_goal_reward import touch_goal_progress
 
 TOUCH_STD = 0.05
-TOUCH_TO_GOAL_DIST = 0.4231437
+# Derived the same way pickplace_touchgoal_env_cfg.py computes
+# TOUCH_TO_GOAL_DIST (from GOAL_OFFSET=(-0.40, 0.0, 0.144) and
+# CUBE_HALF_SIZE=0.006) rather than a hardcoded literal, so this can't
+# silently drift apart from the production value if either constant
+# changes.
+_GOAL_OFFSET = (-0.40, 0.0, 0.144)
+_CUBE_HALF_SIZE = 0.006
+TOUCH_TO_GOAL_DIST = math.sqrt(_GOAL_OFFSET[0] ** 2 + _GOAL_OFFSET[1] ** 2 + (_GOAL_OFFSET[2] - _CUBE_HALF_SIZE) ** 2)
 
 
 def test_monotonic_non_decreasing_along_touch_to_goal_path():

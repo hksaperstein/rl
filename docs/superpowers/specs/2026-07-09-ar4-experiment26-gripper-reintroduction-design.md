@@ -77,19 +77,30 @@ evidence — legitimate grounding per CLAUDE.md)
 
 ## Hypothesis
 
-Composing three previously-individually-validated fixes (Experiment 21's
-proximity gate, Experiment 22's mirroring mechanism corrected for its
-own identified lag bug, Experiment 17's antipodal gate) with a
+Composing two previously-individually-validated fixes (Experiment 21's
+proximity gate, Experiment 17's antipodal gate) with a
 Stack-task-precedented 30s episode length and today's corrected physics,
 using Experiment 25's now-validated monotonic staged-potential reward
 mechanism (extended from 2 stages to 4: reach → grasp → lift → goal)
 instead of either Experiment 16's ungated sum or Experiment 17/18's
 separately-weighted gated terms, will produce measurably more reliable
 grasp discovery than any prior single-variable attempt — because the
-compound behavior's three previously-separate obstacles (jaw asymmetry,
-lag-prone mirroring, insufficient episode time under coarser physics)
-are addressed together rather than one at a time, and Experiment 25 has
-already validated the positioning precision this design assumes.
+compound behavior's obstacles (premature/asymmetric closing,
+insufficient episode time under coarser physics) are addressed together
+rather than one at a time, and Experiment 25 has already validated the
+positioning precision this design assumes.
+
+**Amended (post-implementation, final whole-branch review):** a third
+originally-planned fix, Experiment 22's jaw-mirroring mechanism, was
+found to be an unconditional no-op under this action space (see the
+Action space section below) and retired rather than shipped — the
+hypothesis now rests on two composed fixes, not three. Jaw
+synchronization itself is retired as a lever entirely (three
+independent fix attempts across two experiments have now failed for
+three different specific reasons); this pass no longer claims to
+address it, and treats any resulting jaw asymmetry as a physics-level
+condition for the antipodal gate to correctly tolerate or reject on its
+own merits.
 
 **Falsifiable as**: if `antipodal_grasp_bonus`'s underlying antipodal
 contact condition (or the new staged milestone's grasp-stage component)
@@ -151,16 +162,31 @@ gripper_position = MirroredGripperActionCfg(
 )
 ```
 
-Same wiring Experiment 22 already used. `MirroredGripperAction` itself
-gets the one-line fix described above (track `_processed_actions[:, 0]`
-— jaw1's own commanded target, already gate-processed this step — not
-`self._asset.data.joint_pos[:, self._joint_ids[0]]`). This is a
-correctness fix to existing, shared code (`tasks/ar4/actions.py`), used
-by both this new task and the existing `pickplace_jawmirror_env_cfg.py`
-— re-verify `pickplace_jawmirror_env_cfg.py` isn't silently relying on
-the buggy lag behavior for anything (unlikely, since Experiment 22's own
-conclusion was that the lag was actively harmful, not incidentally
-load-bearing) before relying on this shared-code change.
+Same wiring Experiment 22 already used, with the one-line lag fix
+described above (track `_processed_actions[:, 0]` — jaw1's own
+commanded target — not `self._asset.data.joint_pos[:,
+self._joint_ids[0]]`) applied to `MirroredGripperAction`.
+
+**Amendment (post-implementation, final whole-branch review):** this
+turned out to be moot. `BinaryJointAction` (Isaac Lab's own base class)
+assigns both jaws the *identical* commanded value from the start
+(`open_command_expr`/`close_command_expr` use the same constant for
+both joint names) — there is no command-level divergence for jaw2 to
+mirror in the first place, so `MirroredGripperAction`'s override
+(whichever version) reassigns jaw2's target to a value it already
+holds. This is the third jaw-synchronization-specific fix to prove
+ineffective (Experiment 19's `PhysxMimicJointAPI`: made things worse;
+Experiment 22's original mirror-actual: reactive-lag bug; this pass's
+lag fix, mirror-commanded: true no-op) — retired as a lever per this
+project's "3 failed fixes means question the architecture" discipline,
+rather than attempting a fourth. **Actually shipped**: plain
+`ProximityGatedBinaryJointPositionActionCfg` (Experiment 21's validated
+fix, unaffected by this finding), not `MirroredGripperActionCfg`. This
+reduces the hypothesis from a three-fix composition to two (proximity
+gate + antipodal gate) — jaw asymmetry under contact is accepted as a
+possibly-genuine remaining physics-level limitation that the antipodal
+gate's real contact-force/direction check will either tolerate or
+correctly reject on its own merits.
 
 ### Reward: 4-stage gated monotonic potential
 

@@ -56,37 +56,50 @@ means:
   severity judgment that doesn't hold up under independent verification) —
   don't just surface the finding and wait to be told what to do about it.
 
-Work follows a three-tier delegation model, already reflected in this repo's
-`.superpowers/sdd/` practice:
+Work follows a fan-out delegation model (2026-07-09 decision, superseding
+the earlier Principal-does-all-research-directly model), already reflected
+in this repo's `.superpowers/sdd/` practice for execution mechanics:
 
-- **Principal** (top-level session): does the bulk of technical/literature
-  research directly — reads papers, searches Google Scholar/arXiv, verifies
-  citations itself — rather than delegating research to a junior subagent.
-  Sources aren't limited to formal academic literature: GitHub repos/READMEs
-  (real implementation detail papers often omit), engineering blog posts,
-  and reputable tech-news coverage are all legitimate for grounding
-  *methodology/implementation practice* specifically — academic papers
-  remain the standard for citing a formal claim/result, but "how this is
-  actually built/tuned in practice" is frequently only documented outside
-  academic venues, and background research shouldn't be artificially
-  restricted to Scholar/arXiv when the question calls for the former.
-  Uses that research to design experiments and methodology (reward design,
-  architecture, algorithm choices), owns spec/plan authorship (brainstorm →
-  spec → plan), and decides when work is done. Does not do hands-on
-  implementation itself.
-- **Junior** (implementer subagents): executes, experiments, and iterates —
-  implements plan tasks, runs training/eval loops, tries variations, iterates
-  on results.
-- **Senior** (reviewer subagents): reviews junior's work and presents
-  findings/results/decisions back up to Principal, rather than Principal
-  re-deriving everything from scratch.
+- **Principal** (top-level session): defines the overarching research
+  questions/directions worth investigating in parallel (a hyperparameter, a
+  candidate paradigm, a design axis), owns spec/plan authorship for Tier 1
+  work, and decides when a direction is done or should pivot. Does not do
+  all research legwork personally — fans questions out to parallel
+  Senior-led threads (below) and synthesizes their reported conclusions into
+  decisions. Still handles anything that's a genuine cross-cutting or
+  architectural judgment call directly, rather than delegating the call
+  itself.
+- **Senior** (research-lead subagents): each Senior owns one assigned
+  research question end-to-end — does its own literature and
+  implementation-precedent research on that question (papers, GitHub
+  repos/READMEs, engineering blog posts, reputable tech-news coverage —
+  sources aren't restricted to formal academic literature, especially for
+  "how this is actually built/tuned in practice" questions academic venues
+  often don't cover), then spawns its own Junior subagents to build and
+  queue the actual experiments validating it. Reviews its Juniors' results,
+  forms conclusions/recommendations, and reports back to Principal. Multiple
+  Seniors run in parallel across different questions/directions.
+- **Junior** (implementer subagents, spawned by a Senior): executes,
+  experiments, and iterates on their owning Senior's assigned question —
+  implements the experiment, runs training/eval loops, tries variations.
+  Junior experiment runs queue for execution on shared compute; a Senior's
+  own research/design work continues in parallel while its Juniors' runs
+  are queued rather than blocking on the queue (this parallelism improves
+  further once cloud compute removes the current single-GPU serialization).
 
-Domain skills feed into Principal's decisions: `rl-for-manipulators`
+**Citation handling:** a citation from a real, credible source (peer-reviewed
+journal/proceedings, meaningfully cross-referenced or cited elsewhere) should
+be trusted and learned from, not second-guessed or re-litigated once
+identified as such. The one check that still matters, given this project's
+own history of subagents occasionally inventing or overstating a citation
+(see `kb/wiki/concepts/citation-verification-practice.md`), is a lightweight
+existence/accuracy check — confirm the citation is real (not fabricated) and
+that the claim attributed to it is what the source actually says — not a
+deeper skepticism of legitimate, well-corroborated research.
+
+Domain skills feed into Senior/Principal research: `rl-for-manipulators`
 (algorithm/reward/hyperparameter judgment), `isaac-lab-manipulator-research`
-(Isaac Sim/Lab specifics). Research is done by Principal directly, not
-delegated via `delegating-technical-research`'s junior-researcher pattern —
-that skill's default (delegate the research itself) is overridden for this
-repo specifically.
+(Isaac Sim/Lab specifics).
 
 ## Workflow
 
@@ -106,9 +119,10 @@ gate before spec-writing, not an aspiration — "this seems like a
 reasonable mechanism" from first-principles reasoning alone is not
 sufficient grounding, even when the direction is otherwise well-motivated
 by this repo's own prior results. The research step follows this repo's
-existing research conventions (Principal does it directly — Google
-Scholar/arXiv, real papers, verified citations) and the spec document
-itself must record the hypothesis and cite the research that supports it.
+fan-out delegation model above (Principal defines the question, a Senior
+does the literature/precedent research, real papers and verified-real
+citations) and the spec document itself must record the hypothesis and
+cite the research that supports it.
 This applies even to experiments whose content is directly requested by
 the user — "the user asked for X" is not itself the background research;
 ground X in the literature or this project's own prior verified evidence

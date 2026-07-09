@@ -202,7 +202,18 @@ class Ar4PickPlaceTouchGoalEnvCfg(ManagerBasedRLEnvCfg):
 
     def __post_init__(self) -> None:
         self.decimation = 4
-        self.episode_length_s = 5.0
+        # 5.0s (copied from pickplace_mirror_env_cfg.py's single-object lift
+        # task) gave the arm too little time for a two-stage sequential task:
+        # the first training run (5.0s) showed episodes running to the full
+        # 250-step timeout almost every time, with goal_reached declining
+        # rather than converging. Isaac Lab's own reference manipulation
+        # tasks scale episode length with task structure, not object count -
+        # Reach (single target): 12.0s; Lift (reach+grasp+lift, one object):
+        # 5.0s; Cabinet (reach+grasp+open): 8.0s; Stack (reach+grasp+lift+
+        # move+place, sequential multi-stage - the closest structural analog
+        # to touch-then-goal): 30.0s, 6x Lift's episode length. 20.0s sits
+        # inside that established range for a two-stage sequential task.
+        self.episode_length_s = 20.0
         self.sim.dt = 0.005
         self.sim.render_interval = self.decimation
         self.sim.physics_material = sim_utils.RigidBodyMaterialCfg(static_friction=1.0, dynamic_friction=1.0)

@@ -2349,6 +2349,53 @@ follow-ups below.
    state at each phase transition) is flagged as an open next step, not
    pursued indefinitely this session.** Full evidence trail: see the
    commit `8b72ef7` message and the conversation record.
+9. **Physics-fidelity pass (dt, collision, EE-frame) verified good; surfaced
+   that the classical grasp (item 8) still misses with zero contact force,
+   not just a positioning residual.** Requested directly: smaller physics
+   steps, correct collision behavior, EE frame at the gripper not the wrist.
+   All three independently re-verified (junior-engineer executed, senior-
+   engineer independently re-checked with its own instrumentation, not just
+   re-reading the junior's report):
+   - **dt/decimation**: halved `sim.dt` (120Hz→240Hz for `env_cfg.py`/
+     `grasp_verify_env_cfg.py`; 100Hz→200Hz for `pickplace_mirror_env_cfg.py`),
+     doubled `decimation` in lockstep so control period is unchanged (1/60s
+     and 0.02s respectively) — only PhysX substep fidelity changes, the RL
+     MDP interface (what a trained policy perceives/does/is scored on) is
+     untouched. Commit `eb5f302`.
+   - **Collision**: `objects_cfg.py`'s cube/rect_prism/sphere/wedge
+     `_COLLISION_PROPS` leave `contact_offset`/`rest_offset` at PhysX's
+     auto-compute (`-inf` in the USD schema, no public API exposes the
+     resolved runtime value) — empirically bounded to well under 0.5mm via
+     a 2400Hz free-fall drop test (pure -9.81 m/s² acceleration all the way
+     to a 0.42mm gap, then a clean single-substep arrest, final rest height
+     0.006000m exact). Negligible relative to the cube's 6mm half-extent;
+     no override needed.
+   - **EE frame**: `_EE_OFFSET=(0,0,0.036)` on `link_6` (previously
+     corrected from a wrong 0.09 — see item above/earlier in this file) is
+     confirmed still correct, both numerically (`ee_frame.data.target_pos_w`
+     vs. the real jaw-link midpoint, <0.001mm residual) and — new this
+     pass — **visually**, via `debug_vis=True` in a live GUI run: the
+     rendered marker sits between the jaw tips, not back at link_6/the
+     wrist.
+   - **Not caused by this pass, but surfaced by it**: running the untracked
+     `scripts/interactive_joint_demo.py` (a live-GUI closed-form-IK pick-
+     cycle demo, mid-development, never previously run with its own gripper
+     contact sensors enabled) with `force_matrix_w` instrumentation showed
+     **exactly 0.0N contact force on both jaws across every cycle tested**
+     — the gripper closes on empty space, not partially on the cube. Jaw
+     terminal positions varied cycle-to-cycle (near-fully-open in one,
+     partial/asymmetric in another) rather than the consistent stopping
+     position contact with a real object would produce. A first hypothesis
+     (the script bypasses `env.step()`/decimation and counts settle time in
+     raw substeps that silently halved in real duration when dt halved) was
+     tested and fixed (commit `e00dd11`, settle time now derived from
+     `env.physics_dt`) but did **not** fix the miss — ruling that out as the
+     cause. This is the same unresolved miss as item 8 above (a classical,
+     non-RL closed-form-IK approach that gets close but doesn't reliably
+     center the cube between the open jaws before closing), now confirmed
+     with contact-sensor ground truth rather than inferred from video/
+     residual distance alone. Left open, not pursued further this pass —
+     scope today was physics fidelity, not grasp-approach geometry.
 
 ## Direction
 

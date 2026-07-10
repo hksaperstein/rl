@@ -9,6 +9,10 @@ action space.
     /home/saps/IsaacLab/isaaclab.sh -p scripts/train_franka.py --num_envs 4096
     # bounded probe (real GUI window expected per current instruction, not --headless):
     /home/saps/IsaacLab/isaaclab.sh -p scripts/train_franka.py --num_envs 64 --max_iterations 300
+    # resume a previously-interrupted run from its last checkpoint, continuing on to the SAME
+    # absolute --max_iterations target (not +max_iterations more iterations on top of it):
+    /home/saps/IsaacLab/isaaclab.sh -p scripts/train_franka.py --num_envs 4096 --max_iterations 5000 \
+        --checkpoint logs/train_franka/2026-07-09_22-05-51/model_800.pt
 """
 
 import argparse
@@ -18,6 +22,21 @@ from isaaclab.app import AppLauncher
 parser = argparse.ArgumentParser(description="Train the Franka Panda cube-lift policy with PPO (rsl_rl).")
 parser.add_argument("--num_envs", type=int, default=4096, help="Number of parallel environments.")
 parser.add_argument("--max_iterations", type=int, default=None, help="Override the agent config's max_iterations.")
+parser.add_argument(
+    "--checkpoint",
+    type=str,
+    default=None,
+    help=(
+        "Path to an rsl_rl checkpoint (.pt) to resume from - restores model + optimizer state and the "
+        "checkpoint's own recorded iteration count via rsl_rl.OnPolicyRunner.load(), so training continues "
+        "instead of restarting from scratch. --max_iterations is the ABSOLUTE target iteration count when "
+        "resuming (e.g. resuming a checkpoint saved at iteration 800 with --max_iterations 5000 runs "
+        "iterations 800->5000, not 800->5800 - OnPolicyRunner.learn()'s own num_learning_iterations argument "
+        "is iterations-from-here, not an absolute target, so this script converts between the two). Writes "
+        "to a NEW timestamped log_dir regardless (the checkpoint's weights/optimizer/iteration are what "
+        "carry over - its previous TensorBoard event file is not appended to)."
+    ),
+)
 parser.add_argument("--video", action="store_true", default=False, help="Record videos periodically during training.")
 parser.add_argument("--video_length", type=int, default=200, help="Length of each recorded video (steps).")
 parser.add_argument("--video_interval", type=int, default=2000, help="Steps between recorded videos.")
@@ -91,7 +110,18 @@ def main() -> None:
     dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
     dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
 
-    runner.learn(num_learning_iterations=agent_cfg.max_iterations, init_at_random_ep_len=True)
+    num_learning_iterations = agent_cfg.max_iterations
+    if args_cli.checkpoint is not None:
+        runner.load(args_cli.checkpoint)
+        resumed_at = runner.current_learning_iteration
+        num_learning_iterations = max(agent_cfg.max_iterations - resumed_at, 0)
+        print(
+            f"Resumed from {args_cli.checkpoint} at iteration {resumed_at}; running "
+            f"{num_learning_iterations} more iteration(s) to reach the absolute target "
+            f"{agent_cfg.max_iterations}."
+        )
+
+    runner.learn(num_learning_iterations=num_learning_iterations, init_at_random_ep_len=True)
 
     env.close()
     print(f"Training complete. Checkpoints and logs written to: {log_dir}")

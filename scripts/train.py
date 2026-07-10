@@ -232,6 +232,18 @@ parser.add_argument(
         "docs/superpowers/specs/2026-07-09-ar4-experiment26-gripper-reintroduction-design.md."
     ),
 )
+parser.add_argument(
+    "--hierarchical",
+    action="store_true",
+    default=False,
+    help=(
+        "Train on the hierarchical-decomposition research prototype: a grasp/lift/carry-only "
+        "sub-policy whose episodes start from a real, physically-simulated post-reach state "
+        "harvested from the trained Experiment 25 touch-goal checkpoint (see "
+        "scripts/harvest_reach_handoff_states.py), instead of Experiment 26's flat single-policy "
+        "reach+grasp+lift+goal reward. Requires logs/reach_handoff_states.pt to already exist."
+    ),
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
@@ -279,6 +291,7 @@ from tasks.ar4.pickplace_taskspace_env_cfg import (  # noqa: E402
     Ar4PickPlaceTaskspacePPORunnerCfg,
 )
 from tasks.ar4.pickplace_graspgoal_env_cfg import Ar4PickPlaceGraspGoalEnvCfg  # noqa: E402
+from tasks.ar4.pickplace_hierarchical_env_cfg import Ar4PickPlaceHierarchicalEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_touchgoal_env_cfg import Ar4PickPlaceTouchGoalEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_warmresidual_env_cfg import Ar4PickPlaceWarmResidualEnvCfg  # noqa: E402
 
@@ -288,6 +301,8 @@ LOG_ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 def main() -> None:
     if args_cli.graspgoal:
         env_cfg_cls = Ar4PickPlaceGraspGoalEnvCfg
+    elif args_cli.hierarchical:
+        env_cfg_cls = Ar4PickPlaceHierarchicalEnvCfg
     elif args_cli.touchgoal:
         env_cfg_cls = Ar4PickPlaceTouchGoalEnvCfg
     elif args_cli.warmresidual:

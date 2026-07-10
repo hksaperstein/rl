@@ -18,7 +18,7 @@ parser = argparse.ArgumentParser(description="Render an AR4 color-check still fr
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 args_cli.enable_cameras = True
-args_cli.headless = True
+args_cli.headless = False
 
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app

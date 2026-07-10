@@ -22,6 +22,7 @@ import isaaclab.sim as sim_utils
 
 from .touch_goal_reward import touch_goal_progress
 from .grasp_goal_reward import grasp_goal_progress, slow_near_object_bonus
+from .grasp_only_reward import grasp_lift_goal_progress
 
 if TYPE_CHECKING:
     from isaaclab.assets import Articulation, RigidObject
@@ -1351,3 +1352,109 @@ def slow_near_cube_bonus(
     ee_speed = torch.linalg.vector_norm(robot.data.body_lin_vel_w[:, link6_idx], dim=-1)
 
     return slow_near_object_bonus(reach_dist, ee_speed, reach_dist_threshold, speed_cap)
+
+
+def grasp_lift_goal_milestone_bonus(
+    env: ManagerBasedRLEnv,
+    object_cfg: SceneEntityCfg,
+    jaw1_contact_cfg: SceneEntityCfg,
+    jaw2_contact_cfg: SceneEntityCfg,
+    lift_minimal_height: float = 0.03,
+    lift_target_height: float = 0.10,
+    force_threshold: float = 0.05,
+    antipodal_cos_threshold: float = -0.7071,
+    cube_to_goal_dist: float = 0.4251,
+) -> torch.Tensor:
+    """Undiscounted running-max milestone bonus over grasp_lift_goal_progress
+    (tasks/ar4/grasp_only_reward.py) - a hierarchical-decomposition research
+    prototype variant of grasp_goal_milestone_bonus with NO reach stage:
+    this reward assumes reach has already been achieved by a separate,
+    frozen upstream skill (see reset_arm_from_handoff_bank below), so the
+    full 0-1 budget covers only grasp/lift/goal. Unlike
+    grasp_goal_milestone_bonus, there is no running-max reach term to bank
+    early and then stop differentiating "stay close" from "wander away" -
+    the reward starts at 0 and the entire signal is grasp-onward from step
+    one of every episode."""
+    object: RigidObject = env.scene[object_cfg.name]
+
+    grasped, lifted = _grasp_lift_state(
+        env, object_cfg, jaw1_contact_cfg, jaw2_contact_cfg,
+        force_threshold, antipodal_cos_threshold, lift_minimal_height,
+    )
+
+    cube_height_above_ground = object.data.root_pos_w[:, 2] - 0.006
+
+    if not hasattr(env, "_cube_goal_pos_w"):
+        env._cube_goal_pos_w = torch.zeros(env.num_envs, 3, device=env.device)
+    goal_dist = torch.norm(object.data.root_pos_w - env._cube_goal_pos_w, dim=-1)
+
+    raw = grasp_lift_goal_progress(
+        grasped, lifted, cube_height_above_ground, goal_dist,
+        lift_target_height, cube_to_goal_dist,
+    )
+
+    if not hasattr(env, "_grasp_lift_goal_milestone_max"):
+        env._grasp_lift_goal_milestone_max = torch.zeros(env.num_envs, device=env.device)
+    prev = env._grasp_lift_goal_milestone_max.clone()
+    env._grasp_lift_goal_milestone_max = torch.maximum(env._grasp_lift_goal_milestone_max, raw)
+    return env._grasp_lift_goal_milestone_max - prev
+
+
+def reset_grasp_lift_goal_milestone(env: ManagerBasedRLEnv, env_ids: torch.Tensor) -> None:
+    """Event term (mode="reset"): zero the running-max milestone buffer and
+    the grasped/lifted latches for resetting envs. Uses its own buffer name
+    (_grasp_lift_goal_milestone_max) separate from
+    grasp_goal_milestone_bonus's (_grasp_goal_milestone_max) so the two
+    coexist without interfering, matching this file's per-experiment-buffer
+    convention."""
+    if not hasattr(env, "_grasp_lift_goal_milestone_max"):
+        env._grasp_lift_goal_milestone_max = torch.zeros(env.num_envs, device=env.device)
+    if not hasattr(env, "_grasped"):
+        env._grasped = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+    if not hasattr(env, "_lifted"):
+        env._lifted = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+    env._grasp_lift_goal_milestone_max[env_ids] = 0.0
+    env._grasped[env_ids] = False
+    env._lifted[env_ids] = False
+
+
+def reset_arm_from_handoff_bank(
+    env: ManagerBasedRLEnv,
+    env_ids: torch.Tensor,
+    robot_cfg: SceneEntityCfg,
+    bank_path: str,
+) -> None:
+    """Event term (mode="reset"): loads a bank of REAL (physically-
+    simulated, not IK-teleported) arm joint_pos/joint_vel states recorded
+    from an actual rollout of a separate, already-trained reach policy (see
+    scripts/harvest_reach_handoff_states.py), and on each reset samples one
+    recorded state (with replacement) per resetting env, writing it
+    directly via write_joint_state_to_sim - never solving a fresh one-shot
+    IK target the way Experiment 14's reset_arm_to_pregrasp_pose did. This
+    is the concrete mechanism this research prototype uses to test whether
+    starting a grasp-only sub-policy from a real reach-policy-produced
+    state (rather than a scripted analytic-IK teleport - Experiment 14
+    found that approach could land in an awkward/self-occluding
+    configuration due to elbow-up/down IK ambiguity, on top of an unchanged
+    reward that still had to relearn reach) changes grasp discoverability."""
+    robot: Articulation = env.scene[robot_cfg.name]
+
+    if not hasattr(env, "_handoff_robot_entity_cfg"):
+        env._handoff_robot_entity_cfg = SceneEntityCfg(robot_cfg.name, joint_names=robot_cfg.joint_names)
+        env._handoff_robot_entity_cfg.resolve(env.scene)
+
+    if not hasattr(env, "_handoff_bank"):
+        bank = torch.load(bank_path, map_location=env.device)
+        env._handoff_bank = {
+            "joint_pos": bank["joint_pos"].to(env.device),
+            "joint_vel": bank["joint_vel"].to(env.device),
+        }
+
+    n = env._handoff_bank["joint_pos"].shape[0]
+    sample_idx = torch.randint(0, n, (len(env_ids),), device=env.device)
+    joint_pos = env._handoff_bank["joint_pos"][sample_idx]
+    joint_vel = env._handoff_bank["joint_vel"][sample_idx]
+
+    joint_ids = env._handoff_robot_entity_cfg.joint_ids
+    robot.write_joint_state_to_sim(joint_pos, joint_vel, joint_ids=joint_ids, env_ids=env_ids)
+    robot.set_joint_position_target(joint_pos, joint_ids=joint_ids, env_ids=env_ids)

@@ -38,13 +38,18 @@ from .pickplace_graspgoal_env_cfg import Ar4PickPlaceGraspGoalEnvCfg, Ar4PickPla
 # pulled back from 0.6m to ~0.85m to pair with the narrower 35mm lens below
 # (was 24mm/~80deg FOV, visibly distorted this close - a WIDER FOV would
 # make that worse, not better; narrowing the FOV and pulling back to
-# compensate is what actually flattens the perspective). Quaternion
-# computed via Isaac Lab's own create_rotation_matrix_from_view/
-# quat_from_matrix (OpenGL: -Z forward, +Y up), not hand-derived, matching
-# touchgoal_democam_env_cfg.py's own convention and rationale for avoiding
-# convention errors.
-_DEMO_CAMERA_POS = (0.0, 0.85, 0.22)
-_DEMO_CAMERA_QUAT_OPENGL = (0.7355525493621826, -0.6774676442146301, -0.0, -0.0)
+# compensate is what actually flattens the perspective). Pulled back a
+# further ~0.18m (~7in) to 1.03m per direct user request (2026-07-09) for
+# a bit more headroom in the color-check/demo frame. Then raised from
+# z=0.22 to z=0.40 (eye) with the look-at target lowered from z=0.15 to
+# z=0.12, per a further direct user request (2026-07-09) for a higher
+# vantage with a slight downward angle toward the ground. Quaternion
+# recomputed for the new eye/target via Isaac Lab's own
+# create_rotation_matrix_from_view/quat_from_matrix (OpenGL: -Z forward,
+# +Y up), not hand-derived, matching touchgoal_democam_env_cfg.py's own
+# convention and rationale for avoiding convention errors.
+_DEMO_CAMERA_POS = (0.0, 1.03, 0.40)
+_DEMO_CAMERA_QUAT_OPENGL = (-0.0, 0.0, 0.6073200702667236, 0.7944572567939758)
 
 # Dark backdrop wall, positioned behind the robot from the camera's new
 # vantage (beyond the robot on the -Y side) - eliminates the washed-out

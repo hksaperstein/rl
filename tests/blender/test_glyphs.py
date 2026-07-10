@@ -1909,19 +1909,26 @@ def test_proportional_font_size_shrinks_for_longer_labels():
 
 def test_engrave_depth_fraction_is_shallower_than_prior_value():
     """
-    Explicit user request, repeatedly: 0.04 -> 0.03 -> 0.02 -> 0.01.
-    0.003 was attempted (user asked for fingernail-fraction depth) and
-    reverted: below 0.01 the boolean solvers fragment or silently drop
-    glyph cuts entirely (verified on a real d20 at 0.003 and 0.006, zero
-    warnings raised either time). 0.01 is the reliability floor; the
-    ultra-shallow LOOK comes from the exporter's weighted-normal
-    softening pass instead. Do not lower this again without first
-    building the roadmap item-1 "did the numeral actually engrave"
-    check.
+    Explicit user request, repeatedly, ending at true fingernail-fraction
+    micro depth (0.003 of die size = 0.04-0.07mm). Micro depths
+    originally failed (fragmented/vanished cuts, zero warnings) and
+    looked like a hard solver floor at 0.01 -- the real root cause was
+    the CUTTER construction: extrude == depth put the cutter's top face
+    exactly coplanar with the die face (a documented boolean failure
+    trigger) and made thin slabs at micro depths. With the cutter now
+    thick (ENGRAVE_CUTTER_HALF_THICKNESS_FRACTION) and overshooting the
+    surface, penetration == this constant and micro cuts are clean --
+    verified on the exact d20/greek case that previously shredded.
     """
-    from dice_gen.glyphs import ENGRAVE_DEPTH_FRACTION
+    from dice_gen.glyphs import (
+        ENGRAVE_DEPTH_FRACTION, ENGRAVE_CUTTER_HALF_THICKNESS_FRACTION,
+    )
 
-    assert ENGRAVE_DEPTH_FRACTION == 0.01
+    assert ENGRAVE_DEPTH_FRACTION == 0.003
+    # The decoupling itself is the load-bearing fix: the cutter must stay
+    # much thicker than the cut is deep, or micro cuts regress to the
+    # thin-slab/coplanar failure mode.
+    assert ENGRAVE_CUTTER_HALF_THICKNESS_FRACTION >= 2 * ENGRAVE_DEPTH_FRACTION
 
 
 def run():

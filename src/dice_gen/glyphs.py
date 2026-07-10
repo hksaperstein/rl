@@ -15,18 +15,28 @@ from mathutils import Vector, Matrix
 from .geometry import compute_face_poles, compute_face_inradius
 from .numbering import d4_vertex_values
 
-# 0.01 is the empirically-found FLOOR for reliable boolean text cuts, not
-# an aesthetic choice: the user asked for "a fraction of a fraction of a
-# fraction of a fingernail" (~0.05mm), but at 0.003 the EXACT/FLOAT
-# solvers fragment or entirely drop glyph cuts WITHOUT raising any
-# warning (verified on a real d20: same die/labels cut clean at 0.01,
-# shredded at 0.003, vanished at 0.006 -- the roadmap item-1 "silent
-# partial cut" gap in action). The requested visually-ultra-shallow look
-# comes instead from exporter.export_asset's smooth-shading +
-# weighted-normals pass, which renders the 0.01 recess soft and subtle.
-# History: 0.04 -> 0.03 -> 0.02 -> 0.01, each a user request for
-# shallower; 0.003 attempted and reverted for the above reason.
-ENGRAVE_DEPTH_FRACTION = 0.01
+# TRUE penetration depth of the engraving below the die surface, as a
+# fraction of die size: 0.003 = 0.04-0.07mm across the sampled size range
+# ("a fraction of a fraction of a fraction of a fingernail" -- direct
+# user spec; a fingernail is ~0.4mm). Note the semantic fix: this
+# previously set the cutter's extrude amount with the slab translated a
+# full depth down, which (a) put the cutter's top face exactly COPLANAR
+# with the die face -- a documented Blender boolean failure trigger
+# (developer.blender.org T51389/T82736; the "hotlining" failure in
+# community practice) that fragmented or silently dropped micro cuts --
+# and (b) made the real recess depth 2x the named value. The cutter is
+# now built thick (see ENGRAVE_CUTTER_HALF_THICKNESS_FRACTION) and
+# overshoots well above the surface, penetrating exactly this deep:
+# cut depth and cutter conditioning are decoupled, which is what makes
+# micro depths reliable.
+ENGRAVE_DEPTH_FRACTION = 0.003
+# Half-thickness (Blender curve `extrude` is symmetric: E gives a 2E
+# slab) of the engraving text cutter, as a fraction of die size. Chosen
+# for solver robustness, NOT cut depth -- 0.01 matches the cutter scale
+# of this pipeline's historically-reliable cuts. The cutter protrudes
+# (2 * this - depth) above the face and only ENGRAVE_DEPTH_FRACTION
+# below it.
+ENGRAVE_CUTTER_HALF_THICKNESS_FRACTION = 0.01
 # 3 corner numerals share a d4 face -- scale each down from the single-
 # centered-numeral size so all three fit without crowding the center,
 # each other, or the face edges (0.6 clipped roman labels like "IV"
@@ -749,6 +759,14 @@ def apply_engraved_glyphs(die_obj, die_type, assignment, glyph_style, glyph_fill
         orient = _face_orientation_matrix(face, die_obj.matrix_world, pole_world_co=pole_co)
         planned_cuts.append((value, orient, font_size))
 
+    # Captured against the pristine convex polyhedron, before any cut:
+    # the original face planes, used after all cuts to identify recessed
+    # faces exactly (by depth below the original surface) for fill
+    # painting -- see _assign_fill_material_to_recessed_faces.
+    pristine_planes = [
+        (p.normal.copy(), p.normal.dot(p.center)) for p in die_obj.data.polygons
+    ]
+
     # Phase 2: build and apply each cutter using only the precomputed
     # orientation matrices and font sizes — no further indexing into
     # die_obj.data.polygons.
@@ -774,11 +792,20 @@ def apply_engraved_glyphs(die_obj, die_type, assignment, glyph_style, glyph_fill
             txt_obj.data.align_x = 'CENTER'
             txt_obj.data.align_y = 'CENTER'
             txt_obj.data.size = font_size
-            txt_obj.data.extrude = depth
+            # Thick cutter, micro penetration: curve extrude is symmetric
+            # (E gives a slab spanning [-E, +E]), so translating by
+            # (E - depth) puts the slab's bottom exactly `depth` below
+            # the face plane and its top well ABOVE the surface -- never
+            # coplanar with it, which is the documented boolean failure
+            # trigger the old construction (extrude=depth, translate
+            # -depth, top face flush at z=0) kept hitting at micro
+            # depths. See ENGRAVE_DEPTH_FRACTION's comment.
+            cutter_half_t = size_mm * ENGRAVE_CUTTER_HALF_THICKNESS_FRACTION
+            txt_obj.data.extrude = cutter_half_t
             bpy.context.view_layer.objects.active = txt_obj
             bpy.ops.object.convert(target='MESH')
             _weld_cutter_mesh(txt_obj)
-            txt_obj.matrix_world = orient @ Matrix.Translation((0, 0, -depth))
+            txt_obj.matrix_world = orient @ Matrix.Translation((0, 0, cutter_half_t - depth))
             cut_warning = _boolean_diff_apply(die_obj, txt_obj)
             if cut_warning is not None:
                 warnings.append(cut_warning)
@@ -792,28 +819,40 @@ def apply_engraved_glyphs(die_obj, die_type, assignment, glyph_style, glyph_fill
         warnings.append(debris_warning)
 
     if glyph_fill == "painted":
-        _assign_fill_material_to_recessed_faces(die_obj)
+        _assign_fill_material_to_recessed_faces(
+            die_obj, pristine_planes, min_depth=depth * 0.3,
+        )
 
     return warnings
 
 
-def _assign_fill_material_to_recessed_faces(die_obj):
+def _assign_fill_material_to_recessed_faces(die_obj, pristine_planes, min_depth):
     """
-    Heuristic: the boolean engrave cuts create small new faces at the bottom
-    of each recess, which are noticeably smaller than the die's flat body
-    faces. Faces well below the mesh's average face area get material slot 1
-    (the fill color); materials.py is responsible for populating slot 1 with
-    an actual material.
+    A face belongs to an engraving recess iff its center sits measurably
+    BELOW the pristine convex polyhedron's surface. For a convex solid,
+    a point's signed distance to the surface is max_i(n_i . p - d_i)
+    over the original face planes (pristine_planes, captured in Phase 1
+    before any cut): ~0 for genuine surface faces, about -depth for
+    recess floors, roughly -depth/2 for recess walls. min_depth (a
+    fraction of the cut depth) cleanly separates recess from surface at
+    ANY engraving depth.
+
+    This replaces an area heuristic ("faces much smaller than average
+    are recess faces"), which failed both ways at micro depths --
+    missing large connected recess-floor faces entirely (numerals with
+    unpainted floors) while painting unrelated small surface slivers the
+    boolean tessellation leaves around each glyph outline (both
+    confirmed visually on a real micro-depth d20).
     """
     if len(die_obj.data.materials) < 2:
         die_obj.data.materials.append(None)
 
     bm = bmesh.new()
     bm.from_mesh(die_obj.data)
-    bm.faces.ensure_lookup_table()
-    avg_area = sum(f.calc_area() for f in bm.faces) / len(bm.faces)
     for f in bm.faces:
-        if f.calc_area() < avg_area * 0.15:
+        center = f.calc_center_median()
+        dist = max(n.dot(center) - d for n, d in pristine_planes)
+        if dist < -min_depth:
             f.material_index = 1
     bm.to_mesh(die_obj.data)
     die_obj.data.update()

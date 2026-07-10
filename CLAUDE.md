@@ -195,6 +195,14 @@ from this repo's root — never plain `python` for anything that touches Isaac
 Sim/Lab. GPU is an RTX 5070 Ti; keep that in mind for `num_envs` sizing
 choices.
 
+**Run non-headless for the time being — the user wants to watch.** Direct
+instruction, repeated multiple times (2026-07-09): don't set
+`args_cli.headless = True` / don't pass `--headless` for any Isaac-Sim-
+touching script. A display is available and confirmed working
+(`DISPLAY=:1`). Include this explicitly in every dispatch prompt that
+might launch Isaac Sim — it does not carry over automatically just
+because a prior dispatch mentioned it.
+
 **Only one Isaac Sim process at a time — enforce it with `flock`, not
 polling.** Wrap every Isaac-Sim-touching invocation with the shared lock
 file, e.g.:

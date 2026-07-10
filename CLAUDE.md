@@ -21,13 +21,39 @@ Keep this in mind when a design choice for the current AR4/cube work could
 go either a generalizable way or an AR4-or-task-specific-shortcut way.
 
 **Scope discipline: one thing at a time, in sequence, not in parallel.**
-Current focus is narrow and explicit: one AR4 arm, one cube, pick it up and
+Current focus is narrow and explicit: one arm, one cube, pick it up and
 move it to a goal location. Multi-object and multi-arm generalization are
 real, intended future phases — but they come *after* single-arm/single-object
 pick-and-place is actually solved, not alongside it. Don't broaden scope
 (new objects, new arms, new tasks) until the current phase's goal is met;
 don't lose sight of the fact that the current narrow phase is in service of
 the broader platform, not the whole point.
+
+**Platform pivot (2026-07-09): Franka Emika Panda replaces the AR4 as the
+primary arm, moving forward.** Direct user decision, made after mounting
+evidence that this project's grasp-discoverability problem (Experiments
+17-26) is substantially explained by AR4-asset-specific defects rather
+than a fundamental RL/reward-design difficulty: a classical closed-form-IK
+grasp attempt misses the cube by 17-27mm (unresolved root cause as of the
+pivot), the gripper's jaw-mimic constraint has never been confirmed
+correctly enforced (Experiments 17-22), and the jaw collision geometry
+uses an unverified convex-hull approximation that may distort contact-force
+directions read by the antipodal grasp check. Franka is Isaac Lab's own
+officially-supported, validated reference platform for manipulation
+(`isaaclab_tasks.manager_based.manipulation.lift.config.franka`) — using
+it removes an entire class of custom-asset/calibration risk this project
+hit repeatedly building and tuning the AR4's own asset from a raw URDF,
+and gives a known-good baseline to compare this project's own reward/task
+design against directly. This work is being done on a separate git branch
+(`franka-panda-pivot`), not directly on `main`, per direct instruction —
+an explicit, deliberate exception to this repo's normal "commit straight
+to main" convention (see Git conventions below) for the duration of this
+pivot specifically. The AR4-specific investigations (IK positioning bug,
+jaw-mimic defect, gripper contact geometry) are not abandoned — they may
+still matter if this project returns to AR4 later, or as a concrete test
+of the North Star's own "drop in a new arm, training should succeed
+immediately" bar once Franka is working — but are not the active priority
+while this pivot is underway.
 
 ## Claude's role
 
@@ -209,6 +235,12 @@ Private, solo repo — no PR workflow. Commit straight to `main` directly.
 Push to `origin/main` regularly during a session (after each finished
 experiment/task/plan, not just at the end) rather than letting commits
 accumulate unpushed.
+
+**Exception**: the Franka platform pivot (see North Star above) is being
+built on a dedicated `franka-panda-pivot` branch, not `main`, per direct
+instruction — `main` stays on the validated AR4 line until/unless the
+pivot proves out and a merge decision is made. Push this branch to
+`origin` too, just not to `main`.
 
 ## Status
 

@@ -2,13 +2,14 @@ import random
 from dataclasses import dataclass
 from typing import Optional
 
-DIE_TYPES = ["d4", "d6", "d8", "d10", "d12", "d20"]
+DIE_TYPES = ["d4", "d6", "d8", "d10", "d10_pct", "d12", "d20"]
 
 SIZE_RANGES_MM = {
     "d4": (14.0, 20.0),
     "d6": (12.0, 20.0),
     "d8": (14.0, 20.0),
     "d10": (14.0, 20.0),
+    "d10_pct": (14.0, 20.0),
     "d12": (16.0, 22.0),
     "d20": (16.0, 24.0),
 }
@@ -47,6 +48,8 @@ def sample_variant(seed: int) -> DiceVariantParams:
 
     if die_type in ("d6", "d4"):
         glyph_style = rng.choice(["arabic_numerals", "pips"])
+    elif die_type == "d10_pct":
+        glyph_style = "arabic_numerals"
     else:
         glyph_style = rng.choice([s for s in GLYPH_STYLES if s != "pips"])
 
@@ -91,13 +94,14 @@ def sample_set(seed: int) -> dict:
         lo, hi = SIZE_RANGES_MM[die_type]
         size_mm = rng.uniform(lo, hi)
         d4_placement = rng.choice(D4_PLACEMENT_STYLES) if die_type == "d4" else None
+        die_glyph_style = "arabic_numerals" if die_type == "d10_pct" else glyph_style
 
         variants[die_type] = DiceVariantParams(
             die_type=die_type,
             size_mm=size_mm,
             bevel_fraction=bevel_fraction,
             numbering_scheme=f"standard_{die_type}",
-            glyph_style=glyph_style,
+            glyph_style=die_glyph_style,
             glyph_method=glyph_method,
             glyph_fill=glyph_fill,
             font_or_style_id=font_or_style_id,

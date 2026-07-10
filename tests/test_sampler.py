@@ -64,7 +64,7 @@ def test_sample_set_has_exactly_the_expected_die_type_keys():
     for seed in range(10):
         variants = sampler.sample_set(seed)
         assert set(variants.keys()) == set(sampler.DIE_TYPES)
-        assert set(variants.keys()) == {"d4", "d6", "d8", "d10", "d12", "d20"}
+        assert set(variants.keys()) == {"d4", "d6", "d8", "d10", "d10_pct", "d12", "d20"}
 
 
 def test_sample_set_glyph_style_is_never_pips():
@@ -111,3 +111,19 @@ def test_sample_set_seed_field_matches_input_seed_for_all_dice():
         variants = sampler.sample_set(seed)
         for v in variants.values():
             assert v.seed == seed
+
+
+def test_sample_variant_d10_pct_glyph_style_is_always_arabic_numerals():
+    seen_d10_pct = False
+    for seed in range(300):
+        v = sampler.sample_variant(seed)
+        if v.die_type == "d10_pct":
+            seen_d10_pct = True
+            assert v.glyph_style == "arabic_numerals"
+    assert seen_d10_pct, "expected at least one d10_pct sample across 300 seeds"
+
+
+def test_sample_set_d10_pct_glyph_style_is_always_arabic_numerals():
+    for seed in range(50):
+        variants = sampler.sample_set(seed)
+        assert variants["d10_pct"].glyph_style == "arabic_numerals"

@@ -182,6 +182,20 @@ free, then runs, then releases automatically on exit — this is how
 concurrent Senior/Junior threads under this repo's fan-out model (see
 "Claude's role" above) should coordinate GPU access, instead of each one
 independently `ps aux`-polling in a sleep loop (2026-07-09 finding: a
+
+**Known gap: a hung process still holds the lock.** Isaac Sim has a known
+failure mode (hit repeatedly this session) where it hangs during its own
+Kit/extension shutdown teardown *after* the script's actual work is
+already done and written to disk — the process keeps holding the flock
+lock indefinitely, blocking every other queued job with no indication
+anything is wrong. If a queued job seems stuck for an unusually long time,
+check the suspected holder's actual GPU/CPU activity (`nvidia-smi` for GPU
+utilization, `ps` for CPU%), not just whether the process exists —
+near-idle GPU/CPU with the process still alive and its log already
+showing a completion/`[DONE]` line means it's hung in teardown, not doing
+real work. `kill -TERM <pid>` is safe in that case (the real output was
+already written before the hang) and releases the lock immediately for
+the next queued job.
 Junior burned ~40 minutes/72 tool calls doing exactly that while another
 thread's unlocked process held the GPU). Include this exact pattern in
 every dispatch prompt that might launch Isaac Sim. Plain Isaac-Sim-free

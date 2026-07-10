@@ -169,6 +169,26 @@ from this repo's root — never plain `python` for anything that touches Isaac
 Sim/Lab. GPU is an RTX 5070 Ti; keep that in mind for `num_envs` sizing
 choices.
 
+**Only one Isaac Sim process at a time — enforce it with `flock`, not
+polling.** Wrap every Isaac-Sim-touching invocation with the shared lock
+file, e.g.:
+
+```bash
+flock /tmp/rl_isaac_sim.lock -c "PYTHONUNBUFFERED=1 /home/saps/IsaacLab/isaaclab.sh -p scripts/<script>.py ..."
+```
+
+This blocks natively (kernel-level mutex, zero polling) until the lock is
+free, then runs, then releases automatically on exit — this is how
+concurrent Senior/Junior threads under this repo's fan-out model (see
+"Claude's role" above) should coordinate GPU access, instead of each one
+independently `ps aux`-polling in a sleep loop (2026-07-09 finding: a
+Junior burned ~40 minutes/72 tool calls doing exactly that while another
+thread's unlocked process held the GPU). Include this exact pattern in
+every dispatch prompt that might launch Isaac Sim. Plain Isaac-Sim-free
+scripts (e.g. a `gymnasium`/`stable_baselines3` toy prototype) don't need
+the lock at all and are the better choice when a research question
+doesn't specifically require Isaac Sim's physics.
+
 ## Git conventions
 
 Private, solo repo — no PR workflow. Commit straight to `main` directly.

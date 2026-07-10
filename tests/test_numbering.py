@@ -75,8 +75,8 @@ def test_d10_pct_assignment_is_d10_assignment_scaled_by_ten():
 def test_d10_pct_assignment_respects_hemisphere_parity_split():
     face_pairs = [(i, i + 5) for i in range(5)]
     hemisphere_of_face = {
-        0: "top", 1: "top", 2: "bottom", 3: "bottom", 4: "top",
-        5: "bottom", 6: "bottom", 7: "top", 8: "bottom", 9: "top",
+        0: "top", 1: "top", 2: "top", 3: "top", 4: "top",
+        5: "bottom", 6: "bottom", 7: "bottom", 8: "bottom", 9: "bottom",
     }
     d10_assignment = numbering.assign_values_to_opposite_pairs(
         "d10", face_pairs, hemisphere_of_face=hemisphere_of_face,
@@ -85,3 +85,6 @@ def test_d10_pct_assignment_respects_hemisphere_parity_split():
         "d10_pct", face_pairs, hemisphere_of_face=hemisphere_of_face,
     )
     assert pct_assignment == {face: value * 10 for face, value in d10_assignment.items()}
+    assert numbering.verify_opposite_sum("d10_pct", face_pairs, pct_assignment)
+    assert len(set(pct_assignment.values())) == 10, "expected 10 unique values, got duplicates"
+    assert set(pct_assignment.values()) == {0, 10, 20, 30, 40, 50, 60, 70, 80, 90}

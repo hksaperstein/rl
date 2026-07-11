@@ -108,3 +108,5 @@ idle rather than reacting to it.
 The session records to `logs/videos/ar4_interactive_demo.mp4` with the
 detection overlay burned in, and keeps running (watching for the next drag)
 until you close the window.
+
+**Monorepo note (2026-07-10):** perception/synthetic-data platform (former Dice-Detection repo) lives under `vision/` — see `vision/README.md` and `CLAUDE.md`'s runtime rules.

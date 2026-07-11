@@ -35,6 +35,58 @@ and was independently validated: the "world"-convention forward axis
 (R_world @ [1,0,0]) and the derived "ros"-convention forward axis
 (R_ros @ [0,0,1]) were checked to agree to 1e-6, and R_ros was checked to be
 a proper rotation matrix (orthonormal, det=1).
+
+GATE G d10 FIX (2026-07-11, "d10 fix pass"): on the Gate G frame
+(`outputs/dice_demo/gate_g/`, same dice layout as Gate A, brighter RTX
+render), the detector boxed the table's mounting hole at image center as
+"d10" (conf 0.52, deprojected world z=-0.0036m - below the table surface,
+physically impossible for a die) while missing the real d10 die (small
+white die, upper-center in frame) entirely. Two fixes were added to
+`detect()`, always applied, in this order:
+
+1. **Geometric plausibility filter** (`z_min`/`z_max`, default
+   `[0.0, 0.05]` m): any detection whose deprojected world z falls outside
+   this band is rejected - dice rest at 0.002-0.011m (measured, see
+   `scripts/dice_pick_demo.py::_DIE_REST_HEIGHT_M`) and the tallest
+   plausible surface point (e.g. a d20 vertex pointing up) is ~33mm, so
+   0.05m leaves headroom above that while still excluding the table's
+   mounting hole (whose recessed geometry makes the depth ray return a
+   BELOW-table z). Rejected detections are never silently dropped - they
+   are recorded in `meta["geometric_rejections"]` (class, confidence,
+   world_pos, bbox, rejection_reason) for audit.
+2. **Scene-contract recovery + one-per-class assignment** (`expected_classes`,
+   default `("d4", "d8", "d10", "d12", "d20")`; `enable_scene_contract_recovery`,
+   default `True`). This is SCENE-SPECIFIC knowledge, not general detector
+   behavior: the dice-pick demo scene (`tasks/franka/dice_scene_cfg.py`)
+   always places exactly one die of each of these five types on the table -
+   never zero, never two of the same type. After the primary + mitigation
+   passes and the plausibility filter, if any expected class has no
+   plausible detection, `_recovery_sweep` runs additional passes (a
+   higher-upscale, `recovery_upscale`=4x by default, crop of the known
+   spawn region, plus a full-frame pass, at each rung of
+   `recovery_conf_ladder`, default `(0.25, 0.10, 0.05)`), admitting only
+   plausibility-passing candidates of the still-missing classes. Every
+   attempt (rung, counts, which classes were recovered) is recorded in
+   `meta["scene_contract"]["recovery_attempts"]` even when it finds
+   nothing. `_one_per_class_resolve` then picks exactly one detection per
+   expected class (highest confidence among plausible candidates); if two
+   different expected classes' chosen detections sit within
+   `colocation_tol_m` (default 0.02m/20mm) of each other in world space -
+   i.e. they're almost certainly the same physical die claimed under two
+   labels - the lower-confidence one is displaced and its class is
+   re-searched via another recovery sweep. A class that still has no
+   plausible candidate after all attempts is reported as missing
+   (`meta["scene_contract"]["still_missing"]`) - never fabricated.
+   Detections of classes NOT in `expected_classes` (e.g. a genuine `d6`
+   false positive) pass through this stage untouched, so
+   `d6_false_positives` accounting downstream is unaffected.
+
+Both fixes operate purely on already-deprojected world positions and class
+labels already available from the primary/mitigation passes (or new passes
+run identically to them) - neither reads `gt_dice.json` or any other
+ground-truth source; `expected_classes` is scene-contract knowledge (baked
+into the demo scene's design, same category as the detector's own class
+list), not measured ground truth.
 """
 
 from __future__ import annotations
@@ -177,6 +229,13 @@ def _load_camera_pose(camera_params: dict) -> tuple[np.ndarray, np.ndarray, bool
 
 DEFAULT_WEIGHTS = os.path.join(REPO_ROOT, "vision", "models", "runs", "s_plus_r", "weights", "best.pt")
 D10_ALIASES = {"d10", "d10_pct"}
+EXPECTED_SCENE_CLASSES = ("d4", "d8", "d10", "d12", "d20")
+
+
+def _canon_class(cls_name: str) -> str:
+    """Maps a detector class name to its scene-contract class name (folds
+    d10_pct into d10 - same physical die, see D10_ALIASES)."""
+    return "d10" if cls_name in D10_ALIASES else cls_name
 
 
 def _median_patch_depth(depth: np.ndarray, u: int, v: int, half: int = 2) -> float | None:
@@ -345,6 +404,274 @@ def _project_scene_region_to_image_bbox(
     return (x0, y0, x1, y1)
 
 
+# ---------------------------------------------------------------------------
+# Fix 1: geometric plausibility filter (see module docstring, "GATE G d10 FIX")
+# ---------------------------------------------------------------------------
+
+
+def _apply_plausibility_filter(
+    dets: list[dict], z_min: float, z_max: float
+) -> tuple[list[dict], list[dict]]:
+    """Splits detections into (plausible, rejected) by deprojected world z.
+    A detection with `world_pos is None` (invalid/missing depth) is passed
+    through as plausible unchanged - there's no z to judge, and this
+    matches prior behavior (such detections were already excluded from GT
+    matching downstream). Rejected detections are recorded, not dropped
+    silently - each rejected dict is a copy of the original detection plus
+    a human-readable `rejection_reason`."""
+    plausible, rejected = [], []
+    for det in dets:
+        world_pos = det.get("world_pos")
+        if world_pos is None:
+            plausible.append(det)
+            continue
+        z = world_pos[2]
+        if z_min <= z <= z_max:
+            plausible.append(det)
+        else:
+            rejected.append(
+                {
+                    "class": det["class"],
+                    "is_d10_alias": det["is_d10_alias"],
+                    "confidence": det["confidence"],
+                    "bbox_xyxy": det["bbox_xyxy"],
+                    "center_px": det["center_px"],
+                    "world_pos": world_pos,
+                    "rejection_reason": (
+                        f"deprojected world z={z:.4f}m outside plausible die-resting "
+                        f"band [{z_min:.3f}, {z_max:.3f}]m - physically impossible for "
+                        f"a die resting on the table (likely a depth-ray hit on a "
+                        f"recessed/raised table feature, e.g. a mounting hole)"
+                    ),
+                }
+            )
+    return plausible, rejected
+
+
+# ---------------------------------------------------------------------------
+# Fix 2: scene-contract recovery + one-per-class assignment (see module
+# docstring, "GATE G d10 FIX"). SCENE-SPECIFIC knowledge: the dice-pick demo
+# scene always contains exactly one die of each of EXPECTED_SCENE_CLASSES.
+# ---------------------------------------------------------------------------
+
+
+def _one_per_class_resolve(
+    pool: list[dict], expected_classes: tuple[str, ...], colocation_tol_m: float
+) -> tuple[dict[str, dict], list[dict]]:
+    """From a pool of plausible detections (possibly multiple per class,
+    possibly classes with none), resolves to at most one detection per
+    expected class: highest confidence wins within a class. Then checks for
+    cross-class collisions - if two different expected classes' chosen
+    detections are within `colocation_tol_m` of each other in world space,
+    they're almost certainly claims on the same physical die under two
+    labels; the lower-confidence one is displaced (dropped from `resolved`,
+    its class becomes unresolved again) so the caller can re-search for it.
+    Returns (resolved: {class -> det}, displaced: [det, ...])."""
+    buckets: dict[str, list[dict]] = {c: [] for c in expected_classes}
+    for det in pool:
+        c = _canon_class(det["class"])
+        if c in buckets:
+            buckets[c].append(det)
+
+    resolved: dict[str, dict] = {}
+    for c, cands in buckets.items():
+        if cands:
+            resolved[c] = max(cands, key=lambda d: d["confidence"])
+
+    displaced: list[dict] = []
+    # Bounded loop: at most one displacement per expected class can ever
+    # happen (each displacement permanently removes a class from `resolved`
+    # or replaces it with a non-colocated candidate), so len(expected_classes)
+    # iterations is a safe upper bound - never actually infinite.
+    for _ in range(len(expected_classes)):
+        conflict = None
+        classes_with_pos = [c for c in resolved if resolved[c]["world_pos"] is not None]
+        for i in range(len(classes_with_pos)):
+            for j in range(i + 1, len(classes_with_pos)):
+                c1, c2 = classes_with_pos[i], classes_with_pos[j]
+                p1 = np.array(resolved[c1]["world_pos"])
+                p2 = np.array(resolved[c2]["world_pos"])
+                if float(np.linalg.norm(p1 - p2)) < colocation_tol_m:
+                    conflict = (c1, c2)
+                    break
+            if conflict:
+                break
+        if conflict is None:
+            break
+        c1, c2 = conflict
+        loser_c = c1 if resolved[c1]["confidence"] < resolved[c2]["confidence"] else c2
+        loser_det = resolved.pop(loser_c)
+        displaced.append(loser_det)
+        remaining = [d for d in buckets[loser_c] if d is not loser_det]
+        if remaining:
+            resolved[loser_c] = max(remaining, key=lambda d: d["confidence"])
+        # else loser_c has no other candidate - stays unresolved, caller re-searches
+
+    return resolved, displaced
+
+
+def _tight_recrop_detect(
+    input_dir: str,
+    depth: np.ndarray,
+    intrinsic_matrix: np.ndarray,
+    cam_pos_w: np.ndarray,
+    cam_quat_w_ros: np.ndarray,
+    model,
+    bbox_xyxy: list[float],
+    conf: float,
+    pad_px: int = 50,
+    scale: int = 6,
+) -> list[dict]:
+    """Crops the ORIGINAL rgb image tightly around a single candidate's own
+    bbox (+padding) and upscales heavily, then re-runs the detector on just
+    that patch. Distinct from `_crop_upscale_detect`'s whole-scene-region
+    crop: empirically (see "GATE G d10 FIX" in the module docstring),
+    upscaling the whole ~390x390px scene region does NOT change a small
+    die's classification even at 8x, because ultralytics' `predict()`
+    letterbox-resizes any input to the network's fixed inference size
+    (e.g. 640x640) before inference - so what matters is what FRACTION of
+    that fixed input the die occupies, not the crop's raw pixel count.
+    A tight recrop directly around a specific candidate's own small bbox
+    makes the die occupy a much larger fraction of the network's input,
+    closer to the detector's training distribution - this is what actually
+    flips a misclassified low-confidence box (e.g. a real d10 die
+    classified `d8` at conf 0.06 in the whole-region crop) to its correct
+    class at usable confidence (measured: same die, same pixels, conf 0.57
+    as `d10` once tightly recropped)."""
+    rgb_path = os.path.join(input_dir, "rgb.png")
+    img = Image.open(rgb_path).convert("RGB")
+    w, h = img.size
+    x0, y0, x1, y1 = bbox_xyxy
+    x0 = max(0, int(x0 - pad_px))
+    y0 = max(0, int(y0 - pad_px))
+    x1 = min(w, int(x1 + pad_px))
+    y1 = min(h, int(y1 + pad_px))
+    if x1 <= x0 or y1 <= y0:
+        return []
+    crop = img.crop((x0, y0, x1, y1))
+    crop_up = crop.resize((crop.width * scale, crop.height * scale), Image.LANCZOS)
+    result = model.predict(crop_up, conf=conf, verbose=False)[0]
+    return _boxes_to_detections(
+        result.boxes, result.names, depth, intrinsic_matrix, cam_pos_w, cam_quat_w_ros,
+        x_offset=x0, y_offset=y0, scale=float(scale),
+    )
+
+
+def _recovery_sweep(
+    input_dir: str,
+    depth: np.ndarray,
+    intrinsic_matrix: np.ndarray,
+    cam_pos_w: np.ndarray,
+    cam_quat_w_ros: np.ndarray,
+    model,
+    region_bounds: tuple[tuple[float, float], tuple[float, float]],
+    table_z: float,
+    missing_classes: set[str],
+    conf_ladder: tuple[float, ...],
+    upscale: int,
+    z_min: float,
+    z_max: float,
+    resolved_positions: list[np.ndarray],
+    colocation_tol_m: float,
+    max_recrop_candidates: int = 5,
+) -> tuple[list[dict], list[dict]]:
+    """Progressively lowers the confidence threshold across `conf_ladder`.
+    At each rung: (1) a higher-upscale crop pass over the known scene spawn
+    region (`_crop_upscale_detect` at `upscale`, higher than the standard
+    mitigation pass's 2x) plus a full-frame pass, admitting any
+    plausibility-passing (z-band) candidate whose class already matches a
+    still-missing class; (2) a targeted tight-recrop pass
+    (`_tight_recrop_detect`) around every OTHER plausibility-passing
+    candidate from step 1 that isn't already claimed by a resolved class
+    (within `colocation_tol_m`) - up to `max_recrop_candidates`, highest-
+    confidence first - re-detecting just that small patch to see whether
+    the detector's classification flips to a still-missing class once the
+    candidate fills more of the network's fixed input (see
+    `_tight_recrop_detect`'s docstring for why this is necessary, not
+    optional: the region-wide crop alone does not recover a real,
+    misclassified-at-low-confidence die). Stops early once every missing
+    class has a candidate. Returns (recovered_detections, attempts) -
+    `attempts` records every rung tried (even ones that find nothing), for
+    honest reporting: this project never silently reports a class as found
+    without a paper trail, and never fabricates a detection for a class
+    that's never actually found."""
+    still_missing = set(missing_classes)
+    recovered: list[dict] = []
+    attempts: list[dict] = []
+    rgb_path = os.path.join(input_dir, "rgb.png")
+
+    def _is_plausible(det: dict) -> bool:
+        wp = det.get("world_pos")
+        return wp is not None and z_min <= wp[2] <= z_max
+
+    def _near_resolved(det: dict) -> bool:
+        wp = det.get("world_pos")
+        if wp is None:
+            return False
+        p = np.array(wp)
+        return any(float(np.linalg.norm(p - rp)) < colocation_tol_m for rp in resolved_positions)
+
+    for conf_thresh in conf_ladder:
+        if not still_missing:
+            break
+
+        crop_dets, _crop_meta = _crop_upscale_detect(
+            input_dir, depth, intrinsic_matrix, cam_pos_w, cam_quat_w_ros, model,
+            region_bounds, table_z=table_z, conf=conf_thresh, scale=upscale,
+        )
+        full_result = model.predict(rgb_path, conf=conf_thresh, verbose=False)[0]
+        full_dets = _boxes_to_detections(
+            full_result.boxes, full_result.names, depth, intrinsic_matrix,
+            cam_pos_w, cam_quat_w_ros,
+        )
+        candidates = crop_dets + full_dets
+
+        found_this_rung: dict[str, dict] = {}
+        leftover_candidates: list[dict] = []
+        for det in candidates:
+            c = _canon_class(det["class"])
+            plausible = _is_plausible(det)
+            if plausible and c in still_missing:
+                if c not in found_this_rung or det["confidence"] > found_this_rung[c]["confidence"]:
+                    found_this_rung[c] = det
+            elif plausible and not _near_resolved(det):
+                leftover_candidates.append(det)
+
+        # Step 2: tight recrop around the highest-confidence leftover
+        # candidates not yet explained by a resolved or missing-class match.
+        recrop_attempts = 0
+        for det in sorted(leftover_candidates, key=lambda d: d["confidence"], reverse=True):
+            if not still_missing or recrop_attempts >= max_recrop_candidates:
+                break
+            recrop_attempts += 1
+            recrop_dets = _tight_recrop_detect(
+                input_dir, depth, intrinsic_matrix, cam_pos_w, cam_quat_w_ros, model,
+                det["bbox_xyxy"], conf=conf_thresh,
+            )
+            for rdet in recrop_dets:
+                rc = _canon_class(rdet["class"])
+                if rc in still_missing and _is_plausible(rdet):
+                    if rc not in found_this_rung or rdet["confidence"] > found_this_rung[rc]["confidence"]:
+                        found_this_rung[rc] = rdet
+
+        attempts.append(
+            {
+                "conf_threshold": conf_thresh,
+                "upscale": upscale,
+                "missing_before": sorted(still_missing),
+                "candidates_considered": len(candidates),
+                "leftover_candidates_recropped": recrop_attempts,
+                "recovered_classes": sorted(found_this_rung.keys()),
+            }
+        )
+
+        for c, det in found_this_rung.items():
+            recovered.append(det)
+            still_missing.discard(c)
+
+    return recovered, attempts
+
+
 def detect(
     input_dir: str,
     conf: float = 0.25,
@@ -352,24 +679,42 @@ def detect(
     region_bounds: tuple[tuple[float, float], tuple[float, float]] | None = None,
     table_z: float = 0.01,
     model=None,
+    z_min: float = 0.0,
+    z_max: float = 0.05,
+    expected_classes: tuple[str, ...] = EXPECTED_SCENE_CLASSES,
+    enable_scene_contract_recovery: bool = True,
+    recovery_conf_ladder: tuple[float, ...] = (0.25, 0.10, 0.05),
+    recovery_upscale: int = 4,
+    colocation_tol_m: float = 0.02,
 ) -> tuple[list[dict], dict]:
     """Runs the FULL detection pipeline: primary pass on full frame, then
-    mitigation (crop the known spawn region and upscale), then deduplicates
-    and returns the best detections. Gate G will call this and must never
-    get a degraded 4/5 result - the mitigation is ALWAYS applied.
+    mitigation (crop the known spawn region and upscale), then deduplicates,
+    then applies a geometric plausibility filter, then (if enabled) a
+    scene-contract recovery sweep + one-per-class assignment. See the
+    module docstring's "GATE G d10 FIX" section for the full rationale -
+    this pipeline was extended to fix a reproduced failure mode where the
+    detector boxed the table's mounting hole as "d10" while missing the
+    real d10 die. Gate G will call this and must never get a degraded
+    result - the mitigation, plausibility filter, and (by default) scene-
+    contract recovery are ALWAYS applied.
 
-    Returns (detections, meta) where detections is the final merged list
-    (best result across both passes, duplicates removed).
+    Returns (detections, meta) where detections is the final list: one
+    physically-plausible detection per expected class (when
+    `enable_scene_contract_recovery` is True) plus any detections of
+    classes outside `expected_classes` (e.g. a genuine d6 false positive),
+    unchanged from the merged+filtered pool.
 
     Does NOT read gt_dice.json and does NOT write any files (importable
-    core for Gate G).
+    core for Gate G). `expected_classes` is scene-contract knowledge (this
+    demo scene always has exactly one die per type), not ground truth.
 
     Each detection dict: {class, is_d10_alias, confidence, bbox_xyxy,
     center_px, depth_m, world_pos}. world_pos is [x, y, z] in meters in
     the world frame (or None if depth invalid); z is on the visible surface,
     not the die's volumetric center, so expect ~surface-offset error
     (up to ~die-radius, ≤~16mm). `meta` includes the camera pose, pass
-    counts, region used, and mitigation crop details for audit.
+    counts, region used, mitigation crop details, geometric rejections, and
+    scene-contract recovery attempts, for audit.
     """
     from ultralytics import YOLO  # local import: keep module importable without ultralytics for pure math reuse
 
@@ -407,7 +752,70 @@ def detect(
     )
 
     # -- Deduplication: merge primary + mitigation, remove spatial duplicates
-    final_dets = _deduplicate_detections(primary_dets, mitigation_dets)
+    merged_dets = _deduplicate_detections(primary_dets, mitigation_dets)
+
+    # -- Fix 1: geometric plausibility filter (always applied - not gated by
+    # enable_scene_contract_recovery, since a die can't physically sit below
+    # the table regardless of scene-contract assumptions).
+    plausible_dets, geometric_rejections = _apply_plausibility_filter(merged_dets, z_min, z_max)
+
+    scene_contract_meta = {
+        "enabled": enable_scene_contract_recovery,
+        "expected_classes": list(expected_classes),
+        "initially_missing": [],
+        "recovery_attempts": [],
+        "displaced_by_colocation": [],
+        "still_missing": [],
+    }
+
+    if not enable_scene_contract_recovery:
+        final_dets = plausible_dets
+    else:
+        # -- Fix 2: scene-contract recovery + one-per-class assignment
+        non_expected_pool = [d for d in plausible_dets if _canon_class(d["class"]) not in expected_classes]
+        expected_pool = [d for d in plausible_dets if _canon_class(d["class"]) in expected_classes]
+
+        resolved, displaced = _one_per_class_resolve(expected_pool, expected_classes, colocation_tol_m)
+        initially_missing = [c for c in expected_classes if c not in resolved]
+        scene_contract_meta["initially_missing"] = initially_missing
+
+        all_displaced = list(displaced)
+        missing = [c for c in expected_classes if c not in resolved]
+
+        # Up to 2 recovery rounds: round 1 covers classes missing from the
+        # start; round 2 covers any class newly displaced by a colocation
+        # conflict inside round 1's re-resolve. Bounded, not unbounded
+        # recursion - a colocation conflict discovered in round 2 is
+        # reported as still_missing rather than chased indefinitely.
+        for _round in range(2):
+            if not missing:
+                break
+            resolved_positions = [
+                np.array(d["world_pos"]) for d in resolved.values() if d["world_pos"] is not None
+            ]
+            recovered, attempts = _recovery_sweep(
+                input_dir, depth, intrinsic_matrix, cam_pos_w, cam_quat_w_ros, model,
+                region_bounds, table_z, set(missing), recovery_conf_ladder, recovery_upscale,
+                z_min, z_max, resolved_positions, colocation_tol_m,
+            )
+            scene_contract_meta["recovery_attempts"].extend(attempts)
+            if recovered:
+                expected_pool = expected_pool + recovered
+                resolved, displaced = _one_per_class_resolve(expected_pool, expected_classes, colocation_tol_m)
+                all_displaced.extend(displaced)
+            missing = [c for c in expected_classes if c not in resolved]
+
+        scene_contract_meta["displaced_by_colocation"] = [
+            {
+                "class": d["class"],
+                "confidence": d["confidence"],
+                "world_pos": d["world_pos"],
+            }
+            for d in all_displaced
+        ]
+        scene_contract_meta["still_missing"] = missing
+
+        final_dets = non_expected_pool + sorted(resolved.values(), key=lambda d: d["confidence"], reverse=True)
 
     meta = {
         "cam_pos_w_used": cam_pos_w.tolist(),
@@ -419,10 +827,14 @@ def detect(
         "table_z": table_z,
         "primary_detections_count": len(primary_dets),
         "mitigation_detections_count": len(mitigation_dets),
+        "merged_detections_count": len(merged_dets),
         "final_merged_count": len(final_dets),
         "mitigation_crop_region_xyz": mitigation_meta["crop_region_xyz"],
         "mitigation_crop_xyxy": mitigation_meta["crop_xyxy"],
         "mitigation_upscale": mitigation_meta["upscale"],
+        "z_band": [z_min, z_max],
+        "geometric_rejections": geometric_rejections,
+        "scene_contract": scene_contract_meta,
     }
     return final_dets, meta
 
@@ -619,25 +1031,46 @@ def run_gate_p(
     weights: str = DEFAULT_WEIGHTS,
     region_bounds: tuple[tuple[float, float], tuple[float, float]] | None = None,
     table_z: float = 0.01,
+    z_min: float = 0.0,
+    z_max: float = 0.05,
+    expected_classes: tuple[str, ...] = EXPECTED_SCENE_CLASSES,
+    enable_scene_contract_recovery: bool = True,
+    recovery_conf_ladder: tuple[float, ...] = (0.25, 0.10, 0.05),
+    recovery_upscale: int = 4,
+    colocation_tol_m: float = 0.02,
 ) -> dict:
     """Thin CLI wrapper around the importable `detect()` function. Calls
     detect() to get final detections (which includes full pipeline:
-    primary + mitigation + dedup), compares against gt_dice.json, writes
-    outputs to JSON and overlay image."""
+    primary + mitigation + dedup + geometric plausibility filter + scene-
+    contract recovery/one-per-class assignment), compares against
+    gt_dice.json, writes outputs to JSON and overlay image."""
     os.makedirs(output_dir, exist_ok=True)
 
     # Call the importable detect() function - this runs the FULL pipeline
     detections, meta = detect(
         input_dir, conf=conf, weights=weights,
-        region_bounds=region_bounds, table_z=table_z
+        region_bounds=region_bounds, table_z=table_z,
+        z_min=z_min, z_max=z_max, expected_classes=expected_classes,
+        enable_scene_contract_recovery=enable_scene_contract_recovery,
+        recovery_conf_ladder=recovery_conf_ladder, recovery_upscale=recovery_upscale,
+        colocation_tol_m=colocation_tol_m,
     )
 
     print(f"[GATE P] Final detections ({meta['final_merged_count']} after merging "
           f"from {meta['primary_detections_count']} primary + "
-          f"{meta['mitigation_detections_count']} mitigation):")
+          f"{meta['mitigation_detections_count']} mitigation, "
+          f"{len(meta['geometric_rejections'])} geometrically rejected):")
     for det in detections:
         print(f"  class={det['class']:<8} conf={det['confidence']:.3f} "
               f"bbox={det['bbox_xyxy']} world_pos={det['world_pos']}")
+    for rej in meta["geometric_rejections"]:
+        print(f"  [REJECTED] class={rej['class']:<8} conf={rej['confidence']:.3f} "
+              f"world_pos={rej['world_pos']} reason={rej['rejection_reason']}")
+    sc = meta["scene_contract"]
+    if sc["enabled"] and (sc["initially_missing"] or sc["still_missing"]):
+        print(f"[GATE P] scene-contract recovery: initially_missing={sc['initially_missing']} "
+              f"still_missing={sc['still_missing']} attempts={len(sc['recovery_attempts'])} "
+              f"displaced_by_colocation={sc['displaced_by_colocation']}")
 
     # GT read ONLY here for final comparison
     with open(os.path.join(input_dir, "gt_dice.json")) as f:
@@ -690,10 +1123,22 @@ def main() -> None:
     parser.add_argument("--y-min", type=float, default=-0.15, help="Scene region Y min (default: -0.15)")
     parser.add_argument("--y-max", type=float, default=0.15, help="Scene region Y max (default: 0.15)")
     parser.add_argument("--table-z", type=float, default=0.01, help="Table surface Z height (default: 0.01)")
+    parser.add_argument("--z-min", type=float, default=0.0,
+                         help="Geometric plausibility filter: min plausible deprojected world z, meters (default: 0.0)")
+    parser.add_argument("--z-max", type=float, default=0.05,
+                         help="Geometric plausibility filter: max plausible deprojected world z, meters (default: 0.05)")
+    parser.add_argument("--no-scene-contract-recovery", action="store_true",
+                         help="Disable the scene-contract recovery + one-per-class assignment pass (on by default)")
+    parser.add_argument("--colocation-tol-m", type=float, default=0.02,
+                         help="Scene-contract recovery: world-space distance (m) below which two expected "
+                              "classes' resolved detections are treated as the same physical die (default: 0.02)")
     args = parser.parse_args()
     region_bounds = ((args.x_min, args.x_max), (args.y_min, args.y_max))
     run_gate_p(args.input_dir, args.output_dir, conf=args.conf, weights=args.weights,
-               region_bounds=region_bounds, table_z=args.table_z)
+               region_bounds=region_bounds, table_z=args.table_z,
+               z_min=args.z_min, z_max=args.z_max,
+               enable_scene_contract_recovery=not args.no_scene_contract_recovery,
+               colocation_tol_m=args.colocation_tol_m)
 
 
 if __name__ == "__main__":

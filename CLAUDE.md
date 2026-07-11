@@ -260,3 +260,24 @@ For current status and open follow-ups, see `ROADMAP.md`.
 research (experiments, concepts, cross-links) — see `kb/README.md` for
 what it is, what counts as its raw source material, and its current
 coverage. Iteratively maintained, not yet complete.
+
+## Monorepo layout & runtimes (2026-07-10)
+
+This repo is a monorepo (direct user decision, 2026-07-10): the former
+`Dice-Detection` repo lives at `vision/` (imported with full git history)
+— synthetic data generation (Blender), dataset plumbing, perception-model
+training/eval, ONNX+manifest export. See
+`docs/superpowers/specs/2026-07-10-monorepo-merge-design.md`.
+
+**Path decides the interpreter — never mix them:**
+- Under `vision/`: use `vision/.venv/bin/python` (PyTorch cu128) and
+  `vision/.venv/bin/pytest -p no:launch_testing`. Never Isaac Lab's
+  python, never bare python3. `vision/CLAUDE.md` governs conventions
+  within that subtree.
+- Everywhere else: Isaac-touching work uses
+  `/home/saps/IsaacLab/isaaclab.sh -p` under the flock lock, exactly as
+  documented above.
+
+**One GPU, shared:** vision training/eval jobs are GPU jobs — wrap them in
+the same `flock /tmp/rl_isaac_sim.lock -c "..."` so they serialize with
+Isaac Sim work.

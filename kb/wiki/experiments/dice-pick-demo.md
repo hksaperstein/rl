@@ -66,6 +66,13 @@ remains open.
 
 ## Open follow-ups
 
+- **Pick fragility (quantified 2026-07-11 post-review):** detector xy
+  error varies 2-8.4mm run-to-run with render lighting; stacked on the
+  ~1-5mm IK residual it occasionally exceeds the ~8mm lateral squeeze-out
+  margin even for the d20 (observed: die pushed 32mm sideways, 1 FAIL in
+  3 d20 runs). Hardening options: multi-frame detection averaging at
+  capture; detect-again retry on zero post-lift z-gain.
+
 - d4 grasp strategy (reorient/edge-grasp/push-assist — flat-pad
   mid-height squeeze fails on a tetrahedron).
 - Phase I: detection-derived observations inside a trained policy

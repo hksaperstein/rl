@@ -243,21 +243,126 @@ def _boxes_to_detections(
     return detections
 
 
+def _deduplicate_detections(primary_dets: list[dict], mitigation_dets: list[dict],
+                             spatial_tol: float = 0.10) -> list[dict]:
+    """Merge detections from primary and mitigation passes, removing
+    spatial duplicates (same/compatible class, <spatial_tol apart in world
+    coords). Keeps the higher-confidence detection of each duplicate pair.
+
+    Compatible classes: d10 and d10_pct are considered the same die."""
+    all_dets = primary_dets + mitigation_dets
+    if not all_dets:
+        return []
+
+    # Sort by confidence descending, so when we encounter a detection,
+    # any prior (higher-conf) detection of the same die is already in merged
+    all_dets_sorted = sorted(all_dets, key=lambda d: d["confidence"], reverse=True)
+
+    def classes_compatible(cls1: str, cls2: str) -> bool:
+        """Check if two classes represent the same die (d10 and d10_pct are aliases)."""
+        if cls1 == cls2:
+            return True
+        # d10 and d10_pct are the same die type
+        if {cls1, cls2} == {"d10", "d10_pct"}:
+            return True
+        return False
+
+    merged = []
+    for det in all_dets_sorted:
+        # Check if this detection is a duplicate of one already in merged
+        is_duplicate = False
+        if det["world_pos"] is not None:
+            det_pos = np.array(det["world_pos"])
+            for existing_det in merged:
+                # Duplicates: compatible class + spatially close
+                if (existing_det["world_pos"] is not None and
+                    classes_compatible(existing_det["class"], det["class"])):
+                    existing_pos = np.array(existing_det["world_pos"])
+                    distance = float(np.linalg.norm(det_pos - existing_pos))
+                    if distance < spatial_tol:
+                        # This detection is a duplicate of an already-merged one
+                        is_duplicate = True
+                        break
+
+        if not is_duplicate:
+            merged.append(det)
+
+    return merged
+
+
+def _project_scene_region_to_image_bbox(
+    region_bounds: tuple[tuple[float, float], tuple[float, float]],
+    table_z: float,
+    cam_pos_w: np.ndarray,
+    cam_quat_w_ros: np.ndarray,
+    intrinsic_matrix: np.ndarray,
+    image_width: int,
+    image_height: int,
+) -> tuple[int, int, int, int] | None:
+    """Projects the 3D scene spawn region (XY bounds, fixed table Z) to
+    image-space bbox. Region format: ((x_min, x_max), (y_min, y_max)).
+    Returns (x0, y0, x1, y1) in image coordinates, or None if the region
+    projects entirely outside the visible image."""
+    (x_min, x_max), (y_min, y_max) = region_bounds
+
+    # 4 corners of the scene region at table height
+    corners_3d = [
+        np.array([x_min, y_min, table_z]),
+        np.array([x_max, y_min, table_z]),
+        np.array([x_min, y_max, table_z]),
+        np.array([x_max, y_max, table_z]),
+    ]
+
+    projected_pixels = []
+    for corner in corners_3d:
+        u, v = world_point_to_pixel(corner, cam_pos_w, cam_quat_w_ros, intrinsic_matrix)
+        # Clamp to image bounds (may project outside frame at the edges)
+        u = max(0.0, min(float(image_width - 1), u))
+        v = max(0.0, min(float(image_height - 1), v))
+        projected_pixels.append((u, v))
+
+    if not projected_pixels:
+        return None
+
+    us = [p[0] for p in projected_pixels]
+    vs = [p[1] for p in projected_pixels]
+    x0 = int(min(us))
+    x1 = int(max(us))
+    y0 = int(min(vs))
+    y1 = int(max(vs))
+
+    # Sanity check: is the bbox non-empty and in-frame?
+    if x0 >= image_width or x1 < 0 or y0 >= image_height or y1 < 0:
+        return None
+    if x0 == x1 or y0 == y1:
+        # Degenerate projection (zero-area region)
+        return None
+
+    return (x0, y0, x1, y1)
+
+
 def detect(
     input_dir: str,
     conf: float = 0.25,
     weights: str = DEFAULT_WEIGHTS,
+    region_bounds: tuple[tuple[float, float], tuple[float, float]] | None = None,
+    table_z: float = 0.01,
     model=None,
 ) -> tuple[list[dict], dict]:
-    """Runs the detector on `input_dir`'s rgb.png, deprojects each detection
-    to world position using depth.npy + camera_params.json (with the Gate-A
-    pose-bug fallback above). Returns (detections, meta) - does NOT read
-    gt_dice.json and does NOT write any files (importable core for Gate G).
+    """Runs the FULL detection pipeline: primary pass on full frame, then
+    mitigation (crop the known spawn region and upscale), then deduplicates
+    and returns the best detections. Gate G will call this and must never
+    get a degraded 4/5 result - the mitigation is ALWAYS applied.
+
+    Returns (detections, meta) where detections is the final merged list
+    (best result across both passes, duplicates removed).
+
+    Does NOT read gt_dice.json and does NOT write any files (importable
+    core for Gate G).
 
     Each detection dict: {class, is_d10_alias, confidence, bbox_xyxy,
     center_px, depth_m, world_pos (or None if depth invalid)}.
-    `meta` includes the camera pose actually used and whether the fallback
-    was triggered.
+    `meta` includes the camera pose, pass counts, and region used.
     """
     from ultralytics import YOLO  # local import: keep module importable without ultralytics for pure math reuse
 
@@ -276,10 +381,26 @@ def detect(
 
     if model is None:
         model = YOLO(weights)
-    result = model.predict(rgb_path, conf=conf, verbose=False)[0]
-    detections = _boxes_to_detections(
-        result.boxes, result.names, depth, intrinsic_matrix, cam_pos_w, cam_quat_w_ros
+
+    if region_bounds is None:
+        # Default: the scene's known spawn region (from dice_pick_demo.py)
+        region_bounds = ((0.40, 0.60), (-0.15, 0.15))
+
+    # -- Primary pass: full frame, default confidence
+    primary_result = model.predict(rgb_path, conf=conf, verbose=False)[0]
+    primary_dets = _boxes_to_detections(
+        primary_result.boxes, primary_result.names, depth, intrinsic_matrix,
+        cam_pos_w, cam_quat_w_ros
     )
+
+    # -- Mitigation: crop the scene's known spawn region + upscale
+    mitigation_dets, mitigation_meta = _crop_upscale_detect(
+        input_dir, depth, intrinsic_matrix, cam_pos_w, cam_quat_w_ros, model,
+        region_bounds, table_z=table_z, conf=conf
+    )
+
+    # -- Deduplication: merge primary + mitigation, remove spatial duplicates
+    final_dets = _deduplicate_detections(primary_dets, mitigation_dets)
 
     meta = {
         "cam_pos_w_used": cam_pos_w.tolist(),
@@ -287,49 +408,56 @@ def detect(
         "used_gate_a_pose_fallback": used_fallback,
         "conf_threshold": conf,
         "weights": str(weights),
+        "region_bounds": list(region_bounds),
+        "table_z": table_z,
+        "primary_detections_count": len(primary_dets),
+        "mitigation_detections_count": len(mitigation_dets),
+        "final_merged_count": len(final_dets),
     }
-    return detections, meta
+    return final_dets, meta
 
 
 def _crop_upscale_detect(
     input_dir: str,
-    seed_detections: list[dict],
     depth: np.ndarray,
     intrinsic_matrix: np.ndarray,
     cam_pos_w: np.ndarray,
     cam_quat_w_ros: np.ndarray,
     model,
+    region_bounds: tuple[tuple[float, float], tuple[float, float]],
+    table_z: float = 0.01,
     conf: float = 0.25,
     pad_px: int = 40,
     scale: int = 2,
 ) -> tuple[list[dict], dict]:
-    """Mitigation ladder step 2 (see module docstring / task brief): crop the
-    dice-cluster region and upscale before re-running the detector, to
-    compensate for the small apparent die size at this camera's 0.55m
-    distance vs. the detector's 0.15-0.35m training distribution. The crop
-    region is the union of `seed_detections`' bboxes (i.e. derived from the
-    detector's own primary-pass output, not from ground truth) padded by
-    `pad_px`. Returns detections mapped back to full-frame pixel/world
-    coordinates, plus a meta dict describing the crop used."""
+    """Mitigation: derive crop region from the scene's known spawn bounds
+    (not from the detector's own output), upscale 2x, and re-run the detector.
+    This removes the blind spot where a die entirely outside the primary
+    detections' hull couldn't be recovered.
+
+    Region_bounds: ((x_min, x_max), (y_min, y_max)). Projects through the
+    camera pose to image space, applies padding, crops, upscales, detects,
+    and maps results back to original frame coordinates."""
     rgb_path = os.path.join(input_dir, "rgb.png")
     img = Image.open(rgb_path).convert("RGB")
     w, h = img.size
 
-    if seed_detections:
-        xs0 = [d["bbox_xyxy"][0] for d in seed_detections]
-        ys0 = [d["bbox_xyxy"][1] for d in seed_detections]
-        xs1 = [d["bbox_xyxy"][2] for d in seed_detections]
-        ys1 = [d["bbox_xyxy"][3] for d in seed_detections]
-        x0, y0, x1, y1 = min(xs0), min(ys0), max(xs1), max(ys1)
-    else:
-        # No seed detections at all: fall back to the full frame.
+    # Project the scene region to image space
+    bbox = _project_scene_region_to_image_bbox(
+        region_bounds, table_z, cam_pos_w, cam_quat_w_ros, intrinsic_matrix, w, h
+    )
+    if bbox is None:
+        # Region projects entirely out of frame - fall back to full image
         x0, y0, x1, y1 = 0, 0, w, h
+    else:
+        x0, y0, x1, y1 = bbox
+        # Apply padding
+        x0 = max(0, int(x0 - pad_px))
+        y0 = max(0, int(y0 - pad_px))
+        x1 = min(w, int(x1 + pad_px))
+        y1 = min(h, int(y1 + pad_px))
 
-    x0 = max(0, int(x0 - pad_px))
-    y0 = max(0, int(y0 - pad_px))
-    x1 = min(w, int(x1 + pad_px))
-    y1 = min(h, int(y1 + pad_px))
-
+    # Crop, upscale, detect
     crop = img.crop((x0, y0, x1, y1))
     crop_up = crop.resize((crop.width * scale, crop.height * scale), Image.LANCZOS)
 
@@ -338,7 +466,12 @@ def _crop_upscale_detect(
         result.boxes, result.names, depth, intrinsic_matrix, cam_pos_w, cam_quat_w_ros,
         x_offset=x0, y_offset=y0, scale=float(scale),
     )
-    meta = {"crop_xyxy": [x0, y0, x1, y1], "upscale": scale, "conf_threshold": conf}
+    meta = {
+        "crop_region_xyz": [list(region_bounds[0]), list(region_bounds[1]), table_z],
+        "crop_xyxy": [x0, y0, x1, y1],
+        "upscale": scale,
+        "conf_threshold": conf,
+    }
     return detections, meta
 
 
@@ -469,110 +602,78 @@ def _draw_overlay(input_dir: str, output_dir: str, detections: list[dict], gt_di
     img.save(os.path.join(output_dir, "overlay.png"))
 
 
-def run_gate_p(input_dir: str, output_dir: str, conf: float = 0.25, weights: str = DEFAULT_WEIGHTS) -> dict:
-    """Runs the honest-measurement mitigation ladder from the task brief:
-    (0) primary pass at `conf` on the full frame; if it doesn't cleanly pass,
-    (1) a lower-confidence full-frame pass (reported honestly either way);
-    if still not passing, (2) a center-crop+upscale second pass (crop
-    region derived from the primary pass's own detections, not from GT).
-    Every attempted pass is recorded in detections.json - the final chosen
-    result is whichever pass has the best objective outcome, never silently
-    swapped in."""
+def run_gate_p(
+    input_dir: str,
+    output_dir: str,
+    conf: float = 0.25,
+    weights: str = DEFAULT_WEIGHTS,
+    region_bounds: tuple[tuple[float, float], tuple[float, float]] | None = None,
+    table_z: float = 0.01,
+) -> dict:
+    """Thin CLI wrapper around the importable `detect()` function. Calls
+    detect() to get final detections (which includes full pipeline:
+    primary + mitigation + dedup), compares against gt_dice.json, writes
+    outputs to JSON and overlay image."""
     os.makedirs(output_dir, exist_ok=True)
 
-    from ultralytics import YOLO
+    # Call the importable detect() function - this runs the FULL pipeline
+    detections, meta = detect(
+        input_dir, conf=conf, weights=weights,
+        region_bounds=region_bounds, table_z=table_z
+    )
 
-    model = YOLO(weights)
-    depth = np.load(os.path.join(input_dir, "depth.npy"))
-    with open(os.path.join(input_dir, "camera_params.json")) as f:
-        camera_params = json.load(f)
-    intrinsic_matrix = np.array(camera_params["intrinsic_matrix"], dtype=np.float64)
-    cam_pos_w, cam_quat_w_ros, used_fallback = _load_camera_pose(camera_params)
+    print(f"[GATE P] Final detections ({meta['final_merged_count']} after merging "
+          f"from {meta['primary_detections_count']} primary + "
+          f"{meta['mitigation_detections_count']} mitigation):")
+    for det in detections:
+        print(f"  class={det['class']:<8} conf={det['confidence']:.3f} "
+              f"bbox={det['bbox_xyxy']} world_pos={det['world_pos']}")
 
-    # Ground truth read ONLY here (and in the mitigation-ladder evaluation
-    # calls below), for the final comparison step - never fed back into
-    # detection/deprojection itself.
+    # GT read ONLY here for final comparison
     with open(os.path.join(input_dir, "gt_dice.json")) as f:
         gt_dice = json.load(f)
 
-    attempts = []
+    # Evaluate against GT
+    eval_result = _evaluate(detections, gt_dice)
 
-    # -- Pass 0: primary, default conf, full frame.
-    primary_dets, primary_meta = detect(input_dir, conf=conf, weights=weights, model=model)
-    primary_eval = _evaluate(primary_dets, gt_dice)
-    attempts.append({"name": "primary", "meta": primary_meta, **primary_eval})
-    print(f"[GATE P] primary pass (conf>={conf}): {len(primary_dets)} raw detections, "
-          f"{primary_eval['n_pass']}/{len(gt_dice)} pass, "
-          f"unmatched_gt={primary_eval['unmatched_gt']}, d6_fp={primary_eval['d6_false_positives']}")
-    for det in primary_dets:
-        print(f"  class={det['class']:<8} conf={det['confidence']:.3f} bbox={det['bbox_xyxy']} "
-              f"depth={det['depth_m']} world_pos={det['world_pos']}")
+    # Draw overlay
+    with open(os.path.join(input_dir, "camera_params.json")) as f:
+        camera_params = json.load(f)
+    intrinsic_matrix = np.array(camera_params["intrinsic_matrix"], dtype=np.float64)
+    cam_pos_w = np.array(meta["cam_pos_w_used"])
+    cam_quat_w_ros = np.array(meta["cam_quat_w_ros_used"])
+    _draw_overlay(input_dir, output_dir, detections, gt_dice, cam_pos_w, cam_quat_w_ros, intrinsic_matrix)
 
-    best = attempts[0]
-
-    if not primary_eval["gate_p_pass"]:
-        # -- Mitigation 1: lower confidence threshold, full frame.
-        low_conf = 0.05
-        low_dets, low_meta = detect(input_dir, conf=low_conf, weights=weights, model=model)
-        low_eval = _evaluate(low_dets, gt_dice)
-        attempts.append({"name": f"low_conf_{low_conf}", "meta": low_meta, **low_eval})
-        print(f"[GATE P] mitigation 1 (conf>={low_conf}): {len(low_dets)} raw detections, "
-              f"{low_eval['n_pass']}/{len(gt_dice)} pass "
-              f"({'IMPROVED' if low_eval['n_pass'] > best['n_pass'] else 'no improvement'})")
-        if low_eval["n_pass"] > best["n_pass"]:
-            best = attempts[-1]
-
-        if not low_eval["gate_p_pass"]:
-            # -- Mitigation 2: center-crop the primary pass's own detected
-            # region + upscale 2x, re-run at the original conf threshold.
-            crop_dets, crop_meta = _crop_upscale_detect(
-                input_dir, primary_dets, depth, intrinsic_matrix, cam_pos_w, cam_quat_w_ros,
-                model, conf=conf, pad_px=40, scale=2,
-            )
-            crop_eval = _evaluate(crop_dets, gt_dice)
-            attempts.append({"name": "crop_upscale_2x", "meta": crop_meta, **crop_eval})
-            print(f"[GATE P] mitigation 2 (center-crop {crop_meta['crop_xyxy']} + {crop_meta['upscale']}x upscale, "
-                  f"conf>={conf}): {len(crop_dets)} raw detections, {crop_eval['n_pass']}/{len(gt_dice)} pass "
-                  f"({'IMPROVED' if crop_eval['n_pass'] > best['n_pass'] else 'no improvement'})")
-            for det in crop_dets:
-                print(f"  class={det['class']:<8} conf={det['confidence']:.3f} bbox={det['bbox_xyxy']} "
-                      f"depth={det['depth_m']} world_pos={det['world_pos']}")
-            if crop_eval["n_pass"] > best["n_pass"] or (
-                crop_eval["n_pass"] == best["n_pass"] and crop_eval["d6_false_positives"] < best["d6_false_positives"]
-            ):
-                best = attempts[-1]
-
-    final_detections = best["detections"]
-    final_table = best["comparison_table"]
-
-    _draw_overlay(input_dir, output_dir, final_detections, gt_dice, cam_pos_w, cam_quat_w_ros, intrinsic_matrix)
-
+    # Write output JSON
     output = {
-        "camera_pose_meta": {
-            "cam_pos_w_used": cam_pos_w.tolist(),
-            "cam_quat_w_ros_used": cam_quat_w_ros.tolist(),
-            "used_gate_a_pose_fallback": used_fallback,
-        },
-        "attempts": [
-            {k: v for k, v in a.items()} for a in attempts
-        ],
-        "final_attempt_name": best["name"],
-        "final_detections": final_detections,
-        "final_comparison_table": final_table,
-        "final_n_pass": best["n_pass"],
-        "n_gt_dice": best["n_gt_dice"],
-        "final_unmatched_detections": best["unmatched_detections"],
-        "final_unmatched_gt": best["unmatched_gt"],
-        "final_d6_false_positives": best["d6_false_positives"],
-        "gate_p_pass": best["gate_p_pass"],
+        "meta": meta,
+        "detections": detections,
+        "comparison_table": eval_result["comparison_table"],
+        "n_pass": eval_result["n_pass"],
+        "n_gt_dice": eval_result["n_gt_dice"],
+        "unmatched_detections": eval_result["unmatched_detections"],
+        "unmatched_gt": eval_result["unmatched_gt"],
+        "d6_false_positives": eval_result["d6_false_positives"],
+        "gate_p_pass": eval_result["gate_p_pass"],
     }
     with open(os.path.join(output_dir, "detections.json"), "w") as f:
         json.dump(output, f, indent=2)
 
-    print(f"[GATE P] FINAL (attempt={best['name']}): {best['n_pass']}/{len(gt_dice)} dice "
-          f"matched+correct-class+within-tolerance. unmatched_detections={len(best['unmatched_detections'])} "
-          f"unmatched_gt={best['unmatched_gt']} d6_false_positives={best['d6_false_positives']}")
-    print(f"[GATE P] {'PASS' if best['gate_p_pass'] else 'FAIL'} (see detections.json / overlay.png)")
+    # Assertion: the importable path returned the same detections we're
+    # writing to JSON - one code path, not two
+    assert len(detections) == len(output["detections"]), \
+        f"Mismatch: detect() returned {len(detections)} but JSON has {len(output['detections'])}"
+    for det, json_det in zip(detections, output["detections"]):
+        assert det["class"] == json_det["class"], f"Class mismatch: {det['class']} vs {json_det['class']}"
+        assert det["confidence"] == json_det["confidence"], f"Confidence mismatch"
+
+    print(f"[GATE P] {eval_result['n_pass']}/{eval_result['n_gt_dice']} dice "
+          f"matched+correct-class+within-tolerance. "
+          f"unmatched_detections={len(eval_result['unmatched_detections'])} "
+          f"unmatched_gt={eval_result['unmatched_gt']} "
+          f"d6_false_positives={eval_result['d6_false_positives']}")
+    print(f"[GATE P] {'PASS' if eval_result['gate_p_pass'] else 'FAIL'} "
+          f"(see detections.json / overlay.png)")
     return output
 
 
@@ -582,8 +683,15 @@ def main() -> None:
     parser.add_argument("--output-dir", type=str, required=True, help="Dir to write detections.json/overlay.png")
     parser.add_argument("--conf", type=float, default=0.25, help="YOLO confidence threshold")
     parser.add_argument("--weights", type=str, default=DEFAULT_WEIGHTS, help="Path to detector weights (best.pt)")
+    parser.add_argument("--x-min", type=float, default=0.40, help="Scene region X min (default: 0.40)")
+    parser.add_argument("--x-max", type=float, default=0.60, help="Scene region X max (default: 0.60)")
+    parser.add_argument("--y-min", type=float, default=-0.15, help="Scene region Y min (default: -0.15)")
+    parser.add_argument("--y-max", type=float, default=0.15, help="Scene region Y max (default: 0.15)")
+    parser.add_argument("--table-z", type=float, default=0.01, help="Table surface Z height (default: 0.01)")
     args = parser.parse_args()
-    run_gate_p(args.input_dir, args.output_dir, conf=args.conf, weights=args.weights)
+    region_bounds = ((args.x_min, args.x_max), (args.y_min, args.y_max))
+    run_gate_p(args.input_dir, args.output_dir, conf=args.conf, weights=args.weights,
+               region_bounds=region_bounds, table_z=args.table_z)
 
 
 if __name__ == "__main__":

@@ -62,11 +62,18 @@ from pxr import PhysxSchema, Usd, UsdGeom, UsdPhysics  # noqa: E402
 
 import isaaclab.sim as sim_utils  # noqa: E402
 from isaaclab.scene import InteractiveScene  # noqa: E402
+from isaaclab.sim import schemas  # noqa: E402
 from isaacsim.core.utils.stage import get_current_stage  # noqa: E402
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # noqa: E402
 
-from tasks.franka.dice_scene_cfg import DIE_TYPES, DiceSceneCfg  # noqa: E402
+from tasks.franka.dice_scene_cfg import (  # noqa: E402
+    DIE_TYPES,
+    DiceSceneCfg,
+    _DICE_COLLISION_PROPS,
+    _DICE_MASS,
+    _DICE_RIGID_PROPS,
+)
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT_DIR = os.path.join(REPO_ROOT, "outputs", "dice_demo", "gate_a")
@@ -82,11 +89,6 @@ _REGION_SLOP = 0.15  # m, allowed x/y drift from the sampled region after settli
 _Z_FLOOR = 0.0  # m, below this -> fell through the table
 _Z_CEIL = 0.10  # m, above this -> exploded/launched
 _SETTLE_SECONDS = 3.0  # sim-time seconds to step before reading final state
-# Matches dice_scene_cfg.py's _DICE_MASS (mass=0.01) - applied here directly since
-# RigidObjectCfg's mass_props only *modifies* an already-present UsdPhysics.MassAPI
-# (isaaclab/sim/schemas/schemas.py's modify_mass_properties silently no-ops if the
-# schema isn't already on the prim), and these die USDs ship with none.
-_DIE_MASS_KG = 0.01
 
 
 def sample_dice_layout(seed: int, num_dice: int) -> list[tuple[float, float, float]]:
@@ -116,34 +118,30 @@ def apply_convex_hull_collision(stage, die_prim_path: str) -> int:
     convex-hull collision, entirely at runtime - the dice USDs ship with NO
     physics schemas baked in at all (see dice_scene_cfg.py's module
     docstring), so `RigidObjectCfg`'s `rigid_props`/`collision_props`/
-    `mass_props` (which only *modify* an already-present schema -
-    `isaaclab/sim/schemas/schemas.py`'s `modify_rigid_body_properties`/
-    `modify_collision_properties` both silently `return False` and do
-    nothing if the API isn't already applied - confirmed by reading that
-    source directly after Gate A's first run hit
-    'Failed to find a rigid body ... ensure the prim has USD RigidBodyAPI
-    applied') leave the die with no RigidBodyAPI, no CollisionAPI, and no
-    mass at all. Applies, directly via pxr (same technique
-    scripts/build_asset.py used for the AR4-era wedge asset):
+    `mass_props` are silently no-op'd (they only *modify* existing schemas).
+
+    Applies schemas directly via pxr then configures them via isaaclab's
+    schema helpers (pattern from scripts/build_asset.py):
       - UsdPhysics.RigidBodyAPI + PhysxSchema.PhysxRigidBodyAPI on the root
-        prim (makes it a dynamic rigid body PhysX will actually simulate).
-      - UsdPhysics.MassAPI on the root prim, mass=_DIE_MASS_KG (skips
-        density-based mass computation, which would depend on the mesh's
-        actual scale/units - not yet independently verified).
+        prim (makes it a dynamic rigid body).
+      - Tuned rigid/mass/collision properties via modify_*_properties helpers
+        (which now work because the schemas exist).
       - UsdPhysics.CollisionAPI + UsdPhysics.MeshCollisionAPI
-        (approximation="convexHull") on every UsdGeom.Mesh prim in the
-        subtree (PhysX rejects an exact-triangle-mesh collider on a
-        dynamic body).
-    Returns the number of mesh prims found/patched (0 is a bug - report it,
-    don't silently proceed)."""
+        (approximation="convexHull") on every UsdGeom.Mesh prim.
+    Returns the number of mesh prims found/patched."""
     root_prim = stage.GetPrimAtPath(die_prim_path)
     if not root_prim.IsValid():
         raise RuntimeError(f"Die prim path not found on stage: {die_prim_path}")
 
+    # Apply bare schemas first (they don't exist on the USD).
     UsdPhysics.RigidBodyAPI.Apply(root_prim)
     PhysxSchema.PhysxRigidBodyAPI.Apply(root_prim)
-    mass_api = UsdPhysics.MassAPI.Apply(root_prim)
-    mass_api.CreateMassAttr(_DIE_MASS_KG)
+    UsdPhysics.MassAPI.Apply(root_prim)
+
+    # Now that schemas exist, apply the tuned properties via isaaclab helpers.
+    schemas.modify_rigid_body_properties(die_prim_path, _DICE_RIGID_PROPS, stage)
+    schemas.modify_mass_properties(die_prim_path, _DICE_MASS, stage)
+    schemas.modify_collision_properties(die_prim_path, _DICE_COLLISION_PROPS, stage)
 
     mesh_count = 0
     for prim in Usd.PrimRange(root_prim):

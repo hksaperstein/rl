@@ -12,21 +12,24 @@ ManagerBasedRLEnv) - same reasoning as lift_env_cfg.py's own docstring: no
 task-specific retuning of the known-good Franka+table recipe.
 
 Dice USDs are visual-only exports (no physics schemas). RigidObjectCfg's
-collision_props only applies UsdPhysics.CollisionAPI to the prim path given -
-it does NOT set UsdPhysics.MeshCollisionAPI's approximation, and USD's own
-default for an un-set MeshCollisionAPI is "none" (exact triangle mesh), which
-PhysX rejects for *dynamic* (non-kinematic) rigid bodies (only static/
-kinematic colliders may use a triangle-mesh approximation). Left at that
-default, the dice would either fail to cook a collider at all (falling
-through the table) or cook an unpredictable fallback - so
-`apply_convex_hull_collision` (called by the demo script, after scene
-construction, before `sim.reset()`) walks each die's prim subtree, finds
-every UsdGeom.Mesh prim, and explicitly applies UsdPhysics.CollisionAPI +
-UsdPhysics.MeshCollisionAPI(approximation="convexHull") directly - the same
-technique scripts/build_asset.py used for the AR4-era wedge asset, just
-applied at runtime instead of as an offline asset-authoring step (these dice
-USDs are shared with vision/'s rendering pipeline, so baking physics into the
-source files themselves is deliberately avoided).
+rigid_props, mass_props, and collision_props all silently no-op: they only
+*modify* existing schemas and return False if none exist (confirmed by reading
+isaaclab/sim/schemas/schemas.py). With schema-less USDs, the configured
+_DICE_RIGID_PROPS, _DICE_MASS, _DICE_COLLISION_PROPS are never applied.
+
+The demo script's `apply_convex_hull_collision` helper (scripts/dice_pick_demo.py)
+fixes this by: (1) applying bare schemas via pxr (UsdPhysics.RigidBodyAPI,
+UsdPhysics.MassAPI, UsdPhysics.CollisionAPI + MeshCollisionAPI on each mesh
+prim), then (2) re-applying the tuned properties via isaaclab's
+modify_rigid_body_properties/modify_mass_properties/modify_collision_properties
+helpers, which now work because the schemas exist. This pattern matches
+scripts/build_asset.py's wedge-asset technique, just applied at runtime
+instead of offline (these dice USDs are shared with vision/'s rendering
+pipeline, so baking physics into the source files is deliberately avoided).
+
+Lighting: DomeLightCfg alone doesn't adequately illuminate camera sensor
+renders; DistantLightCfg was added to the scene to ensure the perception
+camera captures a properly lit frame for detector inference.
 
 Import this module only after an Isaac Sim/Isaac Lab AppLauncher has been
 created.

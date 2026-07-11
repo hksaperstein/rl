@@ -2654,10 +2654,37 @@ running); (2) hyperparameter hill-climb (Tier 2 pattern, scored on a
 real-val slice, frozen test reserved for verdicts) — deferred until the
 dataset loop lands its first win.
 
-**Convergence milestone — dice + Franka + detection:** Phase A: validate
-dice USDs (already exported per-asset in `vision/data/raw/dice_sets_v1/`)
-for Isaac Lab physics, spawn a d6 in the Franka lift env. Phase P: camera
-sensor + ONNX detector on Isaac renders (third eval domain) + deprojection
-to 3D die position. Phase I (gated on cube-lift success, per scope
-discipline): detection-derived object state replaces ground truth in the
-policy; then shape-generalized grasping across die types (d4 last).
+**Convergence milestone — dice + Franka + detection: ACHIEVED (2026-07-11,
+dice-pick demo, `franka-panda-pivot`).** Given a commanded die type among
+{d4, d8, d10, d12, d20}, the Franka arm picks up the CORRECT die on a
+five-die table, with die identity and 3D position coming from the trained
+`vision/` detector (deprojected via the scene depth camera) — sim ground
+truth used for verification only. Result on seed 42: **4/5 die types pick
+successfully** (d20/d12/d10/d8, z-gains 237-241mm, each verified by video
+and GT check); d4 is the sole, pre-declared permitted failure (the
+scripted grasp converges to sub-mm accuracy on the tetrahedron but
+flat-pad closure squeezes it out — a real grasp-strategy problem, open
+follow-up). Demo videos: `outputs/dice_demo/gate_v/dice_pick_<die>.mp4`.
+Implementation: `scripts/dice_pick_demo.py` (gates a/p/g/v) +
+`tasks/franka/dice_scene_cfg.py` + `vision/scripts/detect_for_sim.py`;
+full gate-by-gate history in `.superpowers/sdd/dice-demo-report.md` and
+the task 1-4 reports beside it. Load-bearing findings along the way:
+dice USDs are authored mm-as-m (uniform 0.001 spawn-time scale matches
+the detector's own training-render convention); `RigidObjectCfg`
+`rigid_props`/`collision_props`/`mass_props` silently no-op on
+schema-less USDs (runtime `.Apply()` + `modify_*_properties` required);
+camera-sensor renders need explicit lighting (DistantLight) + RTX
+convergence frames; a scripted DiffIK descent from the default ready
+pose needs a joint-space prep stage + canonical straight-down
+orientation (holding the ready-pose orientation funnels into
+joint-limit branches); grasp-position tolerance must be small relative
+to the object's own radius (15mm tol lost 15-18mm dice); the detector
+needed a geometric-plausibility filter (rejected a table-hole false
+positive that deprojected below the table) and a scene-contract
+one-per-class recovery (tight per-candidate recrop — region-crop
+upscale alone is useless because ultralytics letterboxes crops).
+Original phased plan (kept for reference): Phase A dice-USD physics
+validation; Phase P detector on Isaac renders + deprojection; Phase I
+(still open, gated on RL lift progress): detection-derived state in a
+trained *policy* (this demo is a scripted controller, not RL), then
+shape-generalized *learned* grasping across die types (d4 last).

@@ -88,6 +88,14 @@ see the coverage boundary note below.)*
     holds" claim from a separate rollout) were each resolved against real
     numbers.
 
+- [[dice-pick-demo]] (2026-07-11, unnumbered/scripted, `franka-panda-pivot`)
+  — the dice + Franka + detection convergence milestone, met: commanded
+  die type → trained detector identifies/localizes it among five dice →
+  staged DiffIK picks the correct one, 4/5 die types passing (d4 the
+  pre-declared permitted failure). First perception-in-the-loop pick on
+  this platform; scripted controller, not RL — Phase I (detector state
+  inside a trained policy) stays open.
+
 ### Concepts
 
 - [[reward-rate-arithmetic]] — the "grasp and freeze" bug class: net

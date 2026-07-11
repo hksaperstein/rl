@@ -18,9 +18,16 @@ around four gates:
       pregrasp/grasp/close/lift sequence and verify (sim ground truth, this
       task's ONLY GT use) that the commanded die - and only that die - was
       lifted.
-  P/V - perception bridge (implemented separately, see
-      vision/scripts/detect_for_sim.py) / full demo loop - not implemented
-      here yet.
+  P - perception bridge (implemented separately, see
+      vision/scripts/detect_for_sim.py).
+  V - demo video: runs Gate G's flow wholesale (see run_gate_g) and, via
+      run_pick_sequence's optional `on_step` hook, records the whole
+      pre-pick/approach/descend/close/lift/post-lift-dwell sequence from the
+      scene's DiceCamera to outputs/dice_demo/gate_v/dice_pick_<choice>.mp4
+      (imageio/libx264), with a post-hoc PIL bbox+label overlay (from that
+      run's own detections.json) drawn on the opening ~1.5s showing which
+      die was commanded and what the detector localized. Same GT verdict
+      check as Gate G (must pass/fail the same way).
 
 .. code-block:: bash
 
@@ -29,6 +36,9 @@ around four gates:
 
     flock /tmp/rl_isaac_sim.lock -c "PYTHONUNBUFFERED=1 \\
         /home/saps/IsaacLab/isaaclab.sh -p scripts/dice_pick_demo.py --gate g --choice d20 --seed 42"
+
+    flock /tmp/rl_isaac_sim.lock -c "PYTHONUNBUFFERED=1 \\
+        /home/saps/IsaacLab/isaaclab.sh -p scripts/dice_pick_demo.py --gate v --choice d20 --seed 42"
 
 Never pass --headless - a display exists (DISPLAY=:1) and the user wants to
 watch (see CLAUDE.md's Environment conventions).
@@ -68,9 +78,10 @@ simulation_app = app_launcher.app
 
 """Rest everything follows - isaaclab/pxr imports must come after AppLauncher."""
 
+import imageio  # noqa: E402
 import numpy as np  # noqa: E402
 import torch  # noqa: E402
-from PIL import Image  # noqa: E402
+from PIL import Image, ImageDraw, ImageFont  # noqa: E402
 from pxr import PhysxSchema, Usd, UsdGeom, UsdPhysics  # noqa: E402
 
 import isaaclab.sim as sim_utils  # noqa: E402
@@ -96,6 +107,7 @@ from tasks.franka.dice_scene_cfg import (  # noqa: E402
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GATE_A_DIR = os.path.join(REPO_ROOT, "outputs", "dice_demo", "gate_a")
 GATE_G_DIR = os.path.join(REPO_ROOT, "outputs", "dice_demo", "gate_g")
+GATE_V_DIR = os.path.join(REPO_ROOT, "outputs", "dice_demo", "gate_v")
 VISION_VENV_PYTHON = os.path.join(REPO_ROOT, "vision", ".venv", "bin", "python")
 DETECT_SCRIPT = os.path.join(REPO_ROOT, "vision", "scripts", "detect_for_sim.py")
 DICE_MANIFEST_DIR = os.path.join(REPO_ROOT, "vision", "data", "raw", "dice_sets_v1")
@@ -206,6 +218,15 @@ _MAX_STEPS_JOINT_PREP = 200  # stage 0 budget - open-loop, not convergence-gated
 _GRIPPER_CLOSE_HOLD_STEPS = 90  # fixed-duration hold while the gripper closes (~1.5s)
 _LIFT_SUCCESS_GAIN = 0.15  # m, commanded die must gain at least this much z to count as lifted
 _OTHER_DIE_MAX_Z = 0.05  # m, every OTHER die must stay below this z (not disturbed)
+
+# Gate V (demo video) tuning. Reuses Gate G's flow wholesale (spawn/settle ->
+# detector subprocess -> target select -> run_pick_sequence -> GT verdict)
+# and adds per-step frame capture via run_pick_sequence's optional `on_step`
+# hook (purely additive - Gate G's own call site passes on_step=None, so
+# Gate G's already-validated behavior is completely unchanged).
+_VIDEO_FRAME_STRIDE = 2  # capture every 2nd physics step (halves frame count/memory vs. every step; 60Hz physics -> 30fps video, still smooth enough to check motion continuity around the grasp moment per the brief)
+_PRE_PICK_SECONDS = 1.5  # s, idle-scene segment captured BEFORE run_pick_sequence starts (arm stationary at its post-reset default) - this is ALSO the overlay window (see run_gate_v): the brief asks for the bbox overlay on "the opening ~1.5s", so making the pre-pick segment exactly that long means the overlay covers precisely the pre-pick segment, no separate frame-count math needed
+_POST_LIFT_DWELL_SECONDS = 2.0  # s, held-lift segment captured AFTER run_pick_sequence returns (arm holds its last commanded lift pose/closed gripper via the PD controller - no new commands issued), so the video doesn't cut off right at the last waypoint
 
 # ---------------------------------------------------------------------------
 # Camera projection math (world -> pixel). Ported from
@@ -680,6 +701,7 @@ def run_pick_sequence(
     target_xy: tuple[float, float],
     grasp_height_m: float,
     choice: str,
+    on_step: "callable | None" = None,
 ) -> dict:
     """Drives the Franka arm through a staged pick sequence (joint-space
     ready-to-descend prep -> Cartesian approach -> descend -> close -> lift)
@@ -692,7 +714,14 @@ def run_pick_sequence(
     stage doesn't converge within its step budget - callers should catch
     this rather than treat a stuck stage as silent success. Returns a dict
     of per-stage convergence status (all True if this returns at all, since
-    a non-convergent stage raises instead)."""
+    a non-convergent stage raises instead).
+
+    `on_step`, if given, is called once after EVERY physics step this
+    function takes (stage 0's joint-space prep and every `_step_toward` call
+    inside stages 1/2/3/4) - Gate V's frame-capture hook (see run_gate_v).
+    Purely additive: Gate G's own call site passes on_step=None (the
+    default), so Gate G's already-validated mechanism/timing is completely
+    unchanged by this parameter's existence."""
     robot = scene["robot"]
     sim_dt = sim.get_physics_dt()
 
@@ -883,6 +912,8 @@ def run_pick_sequence(
         scene.write_data_to_sim()
         sim.step()
         scene.update(sim_dt)
+        if on_step is not None:
+            on_step()
         cur_pos_w = robot.data.body_pos_w[0, hand_body_id].cpu().numpy()
         cur_quat_w = robot.data.body_quat_w[0, hand_body_id].cpu().numpy()
         target_pos_w = hand_pos_w_t_for_logging[0]
@@ -1001,6 +1032,8 @@ def run_pick_sequence(
             scene.write_data_to_sim()
             sim.step()
             scene.update(sim_dt)
+            if on_step is not None:
+                on_step()
         final_joint_pos = robot.data.joint_pos[0, robot_entity_cfg.joint_ids].cpu().numpy()
         final_hand_pos = robot.data.body_pos_w[0, hand_body_id].cpu().numpy()
         final_hand_quat = robot.data.body_quat_w[0, hand_body_id].cpu().numpy()
@@ -1243,13 +1276,267 @@ def run_gate_g() -> None:
         print(f"[GATE G] *** FAILED for choice={choice} - see verdict table above/verdict_{choice}.json ***")
 
 
+def _load_overlay_font() -> "ImageFont.ImageFont":
+    """A slightly-larger-than-tiny-default bitmap font for the video overlay
+    label, so class+confidence text is actually readable on a 640x480 frame.
+    `ImageFont.load_default(size=...)` is a newer Pillow API (confirmed
+    supported by vision/.venv's Pillow 12.2.0 this task) - guarded with a
+    try/except in case Isaac's own bundled Pillow is older, since this runs
+    inside Isaac's python (see run_gate_v's docstring for why that's fine -
+    PIL alone needs no torch/ultralytics)."""
+    try:
+        return ImageFont.load_default(size=16)
+    except TypeError:
+        return ImageFont.load_default()
+
+
+def _draw_video_overlay_frame(
+    frame: np.ndarray, bbox_xyxy: list[float], choice: str, det_class: str, confidence: float, font: "ImageFont.ImageFont"
+) -> np.ndarray:
+    """Draws the commanded die's detector bbox + a "commanded vs detected"
+    class/confidence label onto one already-captured video frame - Gate V's
+    post-hoc overlay (see run_gate_v). Style mirrors
+    vision/scripts/detect_for_sim.py's own `_draw_overlay` (rectangle +
+    text label) for visual consistency with Gate P's overlay.png, but uses a
+    brighter/thicker box + a filled text background since this needs to read
+    clearly on a compressed video frame, not just a static PNG."""
+    img = Image.fromarray(frame)
+    draw = ImageDraw.Draw(img)
+    x0, y0, x1, y1 = bbox_xyxy
+    draw.rectangle([x0, y0, x1, y1], outline=(0, 255, 0), width=3)
+    label = f"COMMANDED: {choice}  ->  detected: {det_class} ({confidence:.2f})"
+    text_bbox = draw.textbbox((0, 0), label, font=font)
+    text_w, text_h = text_bbox[2] - text_bbox[0], text_bbox[3] - text_bbox[1]
+    text_x = max(0, min(x0, _IMAGE_WIDTH - text_w - 4))
+    text_y = max(0, y0 - text_h - 6)
+    draw.rectangle([text_x - 2, text_y - 2, text_x + text_w + 2, text_y + text_h + 2], fill=(0, 0, 0))
+    draw.text((text_x, text_y), label, fill=(0, 255, 0), font=font)
+    return np.array(img)
+
+
+def run_gate_v() -> None:
+    """Gate V: the demo video. Reuses Gate G's flow WHOLESALE (spawn/settle
+    -> detector subprocess -> target select -> run_pick_sequence -> GT
+    verdict - see run_gate_g, which this deliberately mirrors line-for-line
+    except for the video capture/encode/overlay additions below) and adds:
+      1. Per-physics-step frame capture (every `_VIDEO_FRAME_STRIDE`'th step)
+         via run_pick_sequence's `on_step` hook, spanning a `_PRE_PICK_SECONDS`
+         idle-scene segment BEFORE the pick sequence, the ENTIRE pick
+         sequence itself (stage 0 through stage 4), and a
+         `_POST_LIFT_DWELL_SECONDS` held-lift segment AFTER it.
+      2. A post-hoc PIL bbox+label overlay (no torch/ultralytics - safe to
+         do directly in Isaac's python, no vision/.venv subprocess needed)
+         drawn on the pre-pick segment's own frames, showing which die was
+         commanded and what the detector localized for it.
+      3. imageio mp4 encoding (pattern: scripts/graspgoal_closeup_video.py),
+         done AFTER the run (frames are captured as raw numpy arrays during
+         the run, kept out of the IK control-loop's own per-step cost).
+    The GT verdict table/pass criteria are byte-for-byte the same check as
+    Gate G's own (same _LIFT_SUCCESS_GAIN/_OTHER_DIE_MAX_Z thresholds)."""
+    choice = _normalize_choice(args_cli.choice)
+    if choice not in DIE_TYPES:
+        raise RuntimeError(f"Normalized choice '{choice}' is not one of the physical dice in this scene: {DIE_TYPES}")
+
+    os.makedirs(GATE_V_DIR, exist_ok=True)
+
+    sim, scene, positions, results = spawn_scene_and_settle(GATE_V_DIR, args_cli.seed)
+    settled_z = {die_type: results[die_type]["z"] for die_type in DIE_TYPES}
+
+    detection_output = run_detector_subprocess(GATE_V_DIR)
+    detections = detection_output["detections"]
+    print(f"[GATE V] perception subprocess returned {len(detections)} detections:")
+    for det in detections:
+        print(f"  class={det['class']:<8} conf={det['confidence']:.3f} world_pos={det['world_pos']}")
+
+    target_det = select_target_detection(detections, choice)
+    det_x, det_y, det_z = target_det["world_pos"]
+    print(
+        f"[GATE V] target detection for '{choice}': class={target_det['class']} "
+        f"conf={target_det['confidence']:.3f} world_pos=({det_x:.4f}, {det_y:.4f}, {det_z:.4f}) "
+        f"bbox_xyxy={target_det['bbox_xyxy']}"
+    )
+
+    # Diagnostic-only GT comparison - identical to Gate G's, never used for
+    # the grasp target itself.
+    gt_pos = np.array([results[choice]["x"], results[choice]["y"], results[choice]["z"]])
+    det_pos = np.array([det_x, det_y, det_z])
+    full_err = float(np.linalg.norm(gt_pos - det_pos))
+    xy_err = float(np.linalg.norm(gt_pos[:2] - det_pos[:2]))
+    print(
+        f"[GATE V] detector-vs-GT offset for '{choice}' [DIAGNOSTIC ONLY, not used for grasp]: "
+        f"xy={xy_err * 1000:.1f}mm full-3d={full_err * 1000:.1f}mm (gt={gt_pos.tolist()}, det={det_pos.tolist()})"
+    )
+
+    half_height_m = _die_half_height_m(choice)
+    grasp_height_m = _die_grasp_height_m(choice)
+    print(
+        f"[GATE V] grasp height for '{choice}': half_height(manifest size_mm/2, DIAGNOSTIC ONLY)="
+        f"{half_height_m * 1000:.1f}mm grasp_height(MEASURED resting height, actually used)="
+        f"{grasp_height_m * 1000:.1f}mm"
+    )
+    target_xy = (det_x, det_y)
+
+    # --- Video capture setup ---
+    camera = scene["camera"]
+    sim_dt = sim.get_physics_dt()
+    video_frames: list[np.ndarray] = []
+    step_counter = [0]
+
+    def _on_step() -> None:
+        step_counter[0] += 1
+        if step_counter[0] % _VIDEO_FRAME_STRIDE == 0:
+            rgb = camera.data.output["rgb"][0, ..., :3].cpu().numpy().astype(np.uint8)
+            video_frames.append(rgb)
+
+    # Pre-pick idle segment: the arm is still at its post-reset default (no
+    # joint targets touched yet by this gate), dice already settled - this
+    # is the segment the overlay below draws onto.
+    pre_pick_steps = int(_PRE_PICK_SECONDS / sim_dt)
+    for _ in range(pre_pick_steps):
+        scene.write_data_to_sim()
+        sim.step()
+        scene.update(sim_dt)
+        _on_step()
+    pre_pick_frame_count = len(video_frames)
+    print(f"[GATE V] captured {pre_pick_frame_count} pre-pick idle frames ({_PRE_PICK_SECONDS}s)")
+
+    # A stage timeout is a "fail loudly" signal (see _StageTimeoutError), not
+    # a script crash - caught here exactly as Gate G catches it, so a stuck
+    # stage still produces a full video + verdict (showing the honest failed
+    # attempt) rather than losing all evidence.
+    pick_sequence_error = None
+    try:
+        waypoint_status = run_pick_sequence(sim, scene, target_xy, grasp_height_m, choice, on_step=_on_step)
+    except _StageTimeoutError as e:
+        pick_sequence_error = str(e)
+        waypoint_status = {"error": pick_sequence_error}
+        print(f"[GATE V] *** pick sequence FAILED for choice={choice}: stage timeout - {pick_sequence_error} ***")
+
+    # Post-lift dwell: keep stepping WITHOUT touching any joint targets (the
+    # PD controller holds the last commanded arm/gripper targets from
+    # whichever stage run_pick_sequence last executed) while continuing to
+    # capture frames, so the video shows the (attempted) lift held for a
+    # couple of seconds rather than cutting off right at the last waypoint.
+    dwell_steps = int(_POST_LIFT_DWELL_SECONDS / sim_dt)
+    for _ in range(dwell_steps):
+        scene.write_data_to_sim()
+        sim.step()
+        scene.update(sim_dt)
+        _on_step()
+    print(f"[GATE V] captured post-lift dwell ({_POST_LIFT_DWELL_SECONDS}s); total frames so far={len(video_frames)}")
+
+    # Post-lift still frame + RTX convergence steps - same pattern as Gate G
+    # (kept separate from the dwell above/not fed into _on_step's stride
+    # counter, so this doesn't perturb the video's own frame cadence).
+    for _ in range(20):
+        scene.write_data_to_sim()
+        sim.step()
+        scene.update(sim_dt)
+    rgb_post = camera.data.output["rgb"][0, ..., :3].cpu().numpy().astype(np.uint8)
+    post_lift_path = os.path.join(GATE_V_DIR, f"post_lift_{choice}.png")
+    Image.fromarray(rgb_post).save(post_lift_path)
+    print(f"[GATE V] saved post-lift frame: {post_lift_path}")
+
+    # Success verification - GT ALLOWED HERE ONLY, byte-for-byte the same
+    # check as Gate G's (same thresholds/logic) so Gate V's pass/fail must
+    # match Gate G's per the brief.
+    verdict_table = []
+    all_ok = True
+    for die_type in DIE_TYPES:
+        die = scene[f"die_{die_type}"]
+        pos = die.data.root_pos_w[0].cpu().numpy() - scene.env_origins[0].cpu().numpy()
+        z_now = float(pos[2])
+        z_before = settled_z[die_type]
+        gain = z_now - z_before
+        is_target = die_type == choice
+        ok = (gain >= _LIFT_SUCCESS_GAIN) if is_target else (z_now < _OTHER_DIE_MAX_Z)
+        if not ok:
+            all_ok = False
+        verdict_table.append(
+            {"die": die_type, "z_before_m": z_before, "z_now_m": z_now, "gain_m": gain, "is_target": is_target, "ok": ok}
+        )
+
+    print(f"[GATE V] post-lift verdict table (commanded die: {choice}):")
+    print(f"{'die':<6}{'z_before(mm)':>14}{'z_now(mm)':>12}{'gain(mm)':>10}  {'target':^8}  verdict")
+    for row in verdict_table:
+        print(
+            f"{row['die']:<6}{row['z_before_m'] * 1000:>14.1f}{row['z_now_m'] * 1000:>12.1f}"
+            f"{row['gain_m'] * 1000:>10.1f}  {'*TARGET*' if row['is_target'] else '':^8}  "
+            f"{'PASS' if row['ok'] else 'FAIL'}"
+        )
+    print(f"[GATE V] {choice}: {'PASS' if all_ok else 'FAIL'} (waypoints={waypoint_status})")
+
+    # --- Overlay: draw the commanded die's detection bbox+label on the
+    # pre-pick segment's frames (post-hoc, after capture, before encode). ---
+    overlay_font = _load_overlay_font()
+    for i in range(pre_pick_frame_count):
+        video_frames[i] = _draw_video_overlay_frame(
+            video_frames[i], target_det["bbox_xyxy"], choice, target_det["class"], target_det["confidence"], overlay_font
+        )
+    print(
+        f"[GATE V] drew detection overlay on {pre_pick_frame_count} opening frames "
+        f"(bbox={target_det['bbox_xyxy']}, class={target_det['class']}, conf={target_det['confidence']:.3f})"
+    )
+
+    # --- Encode video (imageio, writer pattern from
+    # scripts/graspgoal_closeup_video.py) ---
+    fps = max(1, round(1.0 / (sim_dt * _VIDEO_FRAME_STRIDE)))
+    video_path = os.path.join(GATE_V_DIR, f"dice_pick_{choice}.mp4")
+    writer = imageio.get_writer(video_path, fps=fps, codec="libx264")
+    for frame in video_frames:
+        writer.append_data(frame)
+    writer.close()
+    print(
+        f"[GATE V] wrote video: {video_path} "
+        f"({len(video_frames)} frames @ {fps}fps, ~{len(video_frames) / fps:.1f}s)"
+    )
+
+    result = {
+        "choice": choice,
+        "seed": args_cli.seed,
+        "detected_class": target_det["class"],
+        "detection_confidence": target_det["confidence"],
+        "detection_bbox_xyxy": target_det["bbox_xyxy"],
+        "detector_world_pos": det_pos.tolist(),
+        "gt_world_pos_at_settle": gt_pos.tolist(),
+        "detector_vs_gt_xy_error_m": xy_err,
+        "detector_vs_gt_full_error_m": full_err,
+        "half_height_m": half_height_m,
+        "grasp_height_m": grasp_height_m,
+        "waypoint_status": waypoint_status,
+        "pick_sequence_error": pick_sequence_error,
+        "verdict_table": verdict_table,
+        "gate_v_pass": bool(all_ok),
+        "video_path": video_path,
+        "num_video_frames": len(video_frames),
+        "video_fps": fps,
+        "video_frame_stride": _VIDEO_FRAME_STRIDE,
+        "pre_pick_frame_count": pre_pick_frame_count,
+        "overlay_frame_count": pre_pick_frame_count,
+    }
+    verdict_path = os.path.join(GATE_V_DIR, f"verdict_{choice}.json")
+    with open(verdict_path, "w") as f:
+        json.dump(result, f, indent=2)
+    print(f"[GATE V] saved verdict: {verdict_path}")
+    print("[GATE V] DONE")
+
+    if not all_ok:
+        # Report loudly but don't raise - same reasoning as Gate G's own
+        # (a raised exception here would skip simulation_app.close() and hit
+        # this repo's documented teardown-hang failure mode). d4 is the
+        # brief's own permitted failure case.
+        print(f"[GATE V] *** FAILED for choice={choice} (permitted for d4) - see verdict table above/verdict_{choice}.json ***")
+
+
 def main() -> None:
     if args_cli.gate == "a":
         run_gate_a()
     elif args_cli.gate == "g":
         run_gate_g()
+    elif args_cli.gate == "v":
+        run_gate_v()
     else:
-        sys.exit(f"--gate {args_cli.gate} not implemented in this script (only 'a' and 'g' are).")
+        sys.exit(f"--gate {args_cli.gate} not implemented in this script (only 'a', 'g', and 'v' are).")
 
 
 if __name__ == "__main__":

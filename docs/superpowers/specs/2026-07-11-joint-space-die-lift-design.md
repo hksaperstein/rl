@@ -52,8 +52,12 @@ New file `tasks/franka/dice_lift_joint_env_cfg.py`:
   physics-baked COPY of `vision/data/raw/dice_sets_v1/set_00000_d20.usd`
   under `assets/dice/` (one-time offline bake via `scripts/build_asset.py`'s
   technique: apply RigidBody/Mass/CollisionAPI + convexHull approximation
-  + the mm-as-m 0.001 scale INTO the new USD), so the RL env needs no
-  runtime schema patching. Source asset untouched (shared with vision/).
+  into the new USD, and rename the default prim to `Object` so the
+  recipe's `SceneEntityCfg("object", body_names="Object")` terms work
+  unchanged), so the RL env needs no runtime schema patching. The
+  mm-as-m 0.001 scale stays spawn-time (`UsdFileCfg(scale=...)`), the
+  dice-demo-validated convention. Source asset untouched (shared with
+  vision/).
   - Pre-check (from research): compare the d20's real dimensions
     (~19mm size_mm, ~30mm vertex-to-vertex bbox) against the shipped
     recipe's DexCube and this repo's lift task object cfg; record the

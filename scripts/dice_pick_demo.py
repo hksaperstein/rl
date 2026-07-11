@@ -68,6 +68,8 @@ from isaacsim.core.utils.stage import get_current_stage  # noqa: E402
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # noqa: E402
 
 from tasks.franka.dice_scene_cfg import (  # noqa: E402
+    DICE_CAMERA_POS,
+    DICE_CAMERA_QUAT_WORLD,
     DIE_TYPES,
     DiceSceneCfg,
     _DICE_COLLISION_PROPS,
@@ -90,27 +92,113 @@ _Z_FLOOR = 0.0  # m, below this -> fell through the table
 _Z_CEIL = 0.10  # m, above this -> exploded/launched
 _SETTLE_SECONDS = 3.0  # sim-time seconds to step before reading final state
 
+# Camera intrinsics (computed from camera config)
+_FOCAL_LENGTH = 24.0  # mm
+_HORIZONTAL_APERTURE = 20.955  # mm
+_IMAGE_WIDTH = 640
+_IMAGE_HEIGHT = 480
+_FX = _FY = _IMAGE_WIDTH * _FOCAL_LENGTH / _HORIZONTAL_APERTURE  # ≈ 733.0
+_CX = _IMAGE_WIDTH / 2.0  # 320
+_CY = _IMAGE_HEIGHT / 2.0  # 240
+_PROJECTION_MARGIN = 50  # pixels, margin to keep dice away from frame edges
 
-def sample_dice_layout(seed: int, num_dice: int) -> list[tuple[float, float, float]]:
+
+def _world_to_camera_frame(world_pos: np.ndarray, cam_pos: np.ndarray, cam_quat: np.ndarray) -> np.ndarray:
+    """Transform world position to camera frame using camera pose.
+
+    Args:
+        world_pos: [x, y, z] in world frame
+        cam_pos: camera position in world frame
+        cam_quat: camera orientation quaternion (w, x, y, z) in world frame
+
+    Returns:
+        Position in camera frame [x_cam, y_cam, z_cam] where +X is forward, +Z is up.
+    """
+    # Compute world-to-camera rotation: inverse of camera's world rotation
+    # Quat inverse for unit quat is (w, -x, -y, -z)
+    quat_inv = np.array([cam_quat[0], -cam_quat[1], -cam_quat[2], -cam_quat[3]])
+
+    # Translate to camera origin
+    p_rel = world_pos - cam_pos
+
+    # Rotate using quaternion: quat * point * quat_inv
+    # For a vector, quat * v = (w^2 - ||xyz||^2) * v + 2(xyz · v) * xyz + 2w (xyz × v)
+    w, x, y, z = quat_inv
+    xyz = np.array([x, y, z])
+
+    scalar = w * w - np.dot(xyz, xyz)
+    cross = np.cross(xyz, p_rel)
+    dot = np.dot(xyz, p_rel)
+
+    p_cam = scalar * p_rel + 2 * dot * xyz + 2 * w * cross
+    return p_cam
+
+
+def _project_to_image(cam_pos: np.ndarray, z_world: float) -> tuple[float, float] | None:
+    """Project a world position to image coordinates.
+
+    Args:
+        cam_pos: [x, y, z] in world frame
+        z_world: z coordinate in world frame (die height, ~0.01m)
+
+    Returns:
+        (u, v) pixel coordinates, or None if behind camera or outside image.
+    """
+    p_cam = _world_to_camera_frame(np.array(cam_pos + (z_world,)), np.array(DICE_CAMERA_POS), np.array(DICE_CAMERA_QUAT_WORLD))
+
+    # Check if point is in front of camera (z_cam > 0)
+    if p_cam[2] <= 0:
+        return None
+
+    # Project to image: u = fx * x_cam / z_cam + cx, v = fy * y_cam / z_cam + cy
+    u = _FX * p_cam[0] / p_cam[2] + _CX
+    v = _FY * p_cam[1] / p_cam[2] + _CY
+
+    return (u, v)
+
+
+def sample_dice_layout(seed: int, num_dice: int) -> tuple[list[tuple[float, float, float]], dict[str, tuple[float, float]]]:
     """Rejection-samples `num_dice` (x, y, _DROP_Z) positions over the table
-    region with minimum pairwise spacing `_MIN_SPACING`, seeded by `seed` for
-    reproducibility."""
+    region with minimum pairwise spacing `_MIN_SPACING`, and PROJECTION-AWARE
+    framing (all dice must project into image with 50px margin), seeded by
+    `seed` for reproducibility.
+
+    Returns: (positions, projected_uv_dict) where projected_uv_dict maps
+    die index to (u, v) pixel coordinates for auditability."""
     rng = random.Random(seed)
     positions: list[tuple[float, float]] = []
-    max_attempts = 20000
+    projected_uv: dict[int, tuple[float, float]] = {}
+    max_attempts = 50000  # Higher max since projection adds rejection
     attempts = 0
     while len(positions) < num_dice and attempts < max_attempts:
         attempts += 1
         x = rng.uniform(*_REGION_X)
         y = rng.uniform(*_REGION_Y)
-        if all((x - px) ** 2 + (y - py) ** 2 >= _MIN_SPACING**2 for px, py in positions):
-            positions.append((x, y))
+
+        # Check spacing first (cheaper than projection)
+        if not all((x - px) ** 2 + (y - py) ** 2 >= _MIN_SPACING**2 for px, py in positions):
+            continue
+
+        # Project to image and check bounds (with margin)
+        proj = _project_to_image((x, y), _DROP_Z)
+        if proj is None:
+            continue
+        u, v = proj
+
+        if not (_PROJECTION_MARGIN <= u < _IMAGE_WIDTH - _PROJECTION_MARGIN and
+                _PROJECTION_MARGIN <= v < _IMAGE_HEIGHT - _PROJECTION_MARGIN):
+            continue
+
+        # Accept this position
+        positions.append((x, y))
+        projected_uv[len(positions) - 1] = (u, v)
+
     if len(positions) < num_dice:
         raise RuntimeError(
             f"Rejection sampling failed to place {num_dice} dice with min spacing {_MIN_SPACING}m "
-            f"after {max_attempts} attempts (only placed {len(positions)})."
+            f"and projection within image bounds after {max_attempts} attempts (only placed {len(positions)})."
         )
-    return [(x, y, _DROP_Z) for x, y in positions]
+    return ([(x, y, _DROP_Z) for x, y in positions], projected_uv)
 
 
 def apply_convex_hull_collision(stage, die_prim_path: str) -> int:
@@ -155,10 +243,11 @@ def apply_convex_hull_collision(stage, die_prim_path: str) -> int:
 def run_gate_a() -> None:
     os.makedirs(OUT_DIR, exist_ok=True)
 
-    positions = sample_dice_layout(args_cli.seed, len(DIE_TYPES))
+    positions, projected_uv = sample_dice_layout(args_cli.seed, len(DIE_TYPES))
     print(f"[GATE A] sampled dice layout (seed={args_cli.seed}):")
-    for die_type, pos in zip(DIE_TYPES, positions):
-        print(f"  {die_type}: x={pos[0]:.4f} y={pos[1]:.4f} z={pos[2]:.4f}")
+    for idx, (die_type, pos) in enumerate(zip(DIE_TYPES, positions)):
+        u, v = projected_uv[idx]
+        print(f"  {die_type}: x={pos[0]:.4f} y={pos[1]:.4f} z={pos[2]:.4f} (projected: u={u:.0f} v={v:.0f})")
 
     scene_cfg = DiceSceneCfg(num_envs=1, env_spacing=4.0)
     for die_type, pos in zip(DIE_TYPES, positions):

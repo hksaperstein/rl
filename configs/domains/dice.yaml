@@ -1,0 +1,57 @@
+# Domain plugin config for the dice detector (dice-detector-v1, see
+# docs/superpowers/specs/2026-07-10-dice-detector-v1-design.md and
+# docs/superpowers/specs/2026-07-10-training-platform-architecture-design.md).
+#
+# This is the one file library code under src/datasets, src/training,
+# src/evaluation, and src/export reads instead of hardcoding class names/
+# real-data sources/remap rules — adding a new detection domain means a new
+# file here (+ a src/datagen/domains/<name>/ generator plugin), not edits to
+# any of those library packages.
+
+# Class order is load-bearing everywhere downstream (label file class
+# indices, dataset YAMLs, model output head order) — never reorder without
+# regenerating every derived artifact.
+classes: [d4, d6, d8, d10, d10_pct, d12, d20]
+
+# d10_pct (percentile/tens die) is visually indistinguishable from d10 in
+# most real photos, so real-set evaluation merges it into d10 (see
+# evaluation/detection_eval.py's merge_d10). Synthetic data keeps all 7
+# classes distinct (the generator knows which mold variant it rendered).
+merged_classes: [d4, d6, d8, d10, d12, d20]
+
+real_data:
+  # Public Roboflow real-photo dice datasets ingested for fine-tuning +
+  # frozen-test-set sim-to-real evaluation.
+  sources:
+    - workspace: sunib-p9bq2
+      project: dnd-dices-ycaiz
+      slug: dnd_dices
+    - workspace: thomas-phillips-t0qi6
+      project: d-d-dice-detection
+      slug: dd_dice
+
+  # Source class name (lowercased) -> our class name; null = drop the box.
+  # Real sets can't distinguish percentile d10s reliably -> merge into d10.
+  source_name_map:
+    d4: d4
+    d6: d6
+    d8: d8
+    d10: d10
+    d12: d12
+    d20: d20
+    d10%: d10
+    d100: d10
+    d10_percentile: d10
+    d10-percentile: d10
+    dice: null
+    die: null
+    coin: null
+
+  # Source-specific exclusions: stem prefixes to skip (before .rf. suffix).
+  # dd_dice's "all_dice_*" images are multi-dice scenes with only 1-2 boxes
+  # labeled; under-labeled images poison detection training (unlabeled dice
+  # become hard negatives). Visually verified 2026-07-10: 14 images (2
+  # originals, 7 augmented copies each) excluded. All other dd_dice families
+  # single-die, correctly labeled; dnd_dices has no exclusions.
+  exclude_stem_prefixes:
+    dd_dice: [all_dice]

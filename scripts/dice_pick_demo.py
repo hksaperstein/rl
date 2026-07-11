@@ -225,6 +225,14 @@ def run_gate_a() -> None:
         raise AssertionError("Gate A FAILED: see per-die diagnostics above (do not paper over - report actual numbers).")
     print("[GATE A] PASS: all five dice within z/xy bounds after settling.")
 
+    # Ground truth for Gate P: settled world-frame root positions of each die.
+    gt_dice = {die_type: [results[die_type]["x"], results[die_type]["y"], results[die_type]["z"]]
+               for die_type in DIE_TYPES}
+    gt_dice_path = os.path.join(OUT_DIR, "gt_dice.json")
+    with open(gt_dice_path, "w") as f:
+        json.dump(gt_dice, f, indent=2)
+    print(f"[GATE A] saved ground truth: {gt_dice_path}")
+
     # Camera capture - extraction pattern from scripts/_perception_adapter.py.
     camera = scene["camera"]
     rgb = camera.data.output["rgb"][0, ..., :3].cpu().numpy().astype(np.uint8)

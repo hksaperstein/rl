@@ -99,6 +99,12 @@ def main_blender():
     parser.add_argument("--shard", type=int, default=0)
     parser.add_argument("--shards", type=int, default=1)
     parser.add_argument("--outdir", type=str, required=True)
+    parser.add_argument("--closeup", action="store_true",
+                        help="datagen-v2 close-up mode (spec "
+                        "2026-07-11-datagen-v2-closeup-design.md): 1-2 "
+                        "dice per scene, camera distance computed from a "
+                        "target frame-height fraction (decoupled from "
+                        "die class) instead of sampled directly.")
     args = parser.parse_args(argv)
 
     os.makedirs(args.outdir, exist_ok=True)
@@ -212,13 +218,18 @@ def main_blender():
         nt.links.new(env.outputs["Color"], bg.inputs["Color"])
         scene.world = world
 
-        n_dice = rng.randint(3, 8)
+        n_dice = rng.randint(1, 2) if args.closeup else rng.randint(3, 8)
         picks = rng.sample(blend_files, n_dice)
         dice = []
+        # Close-up mode packs dice near the frame center (real close-up
+        # photos are single-die-dominant); the wider 0.075 radius used for
+        # multi-die tabletop scenes would push a second die out of a tight
+        # close-up frame.
+        placement_radius_max = 0.02 if args.closeup else 0.075
         for i, bp in enumerate(picks):
             die = append_die(bp)
             angle = rng.uniform(0, 2 * math.pi)
-            radius = rng.uniform(0.0, 0.075)
+            radius = rng.uniform(0.0, placement_radius_max)
             die.location = (radius * math.cos(angle),
                             radius * math.sin(angle),
                             0.022 + 0.012 * i)
@@ -300,17 +311,68 @@ def main_blender():
 
         # camera
         cam_data = bpy.data.cameras.new("cam")
+        # Blender's default clip_start (0.1m) silently culls anything
+        # closer than 10cm -- never an issue for detection_v1's 0.15-0.35m
+        # camera distances, but closeup mode's computed distances can be
+        # a few cm (found via smoke-test visual inspection: several
+        # renders showed only a distractor/background with the die fully
+        # clipped). 0.005m is well below closeup's clamped 0.05m floor and
+        # harmless for the non-closeup range.
+        cam_data.clip_start = 0.005
         cam_data.lens = rng.uniform(35, 80)
         cam = bpy.data.objects.new("cam", cam_data)
         scene.collection.objects.link(cam)
         scene.camera = cam
         az = rng.uniform(0, 2 * math.pi)
         elev = rng.uniform(math.radians(15), math.radians(65))
-        dist = rng.uniform(0.15, 0.35)
-        cam.location = (dist * math.cos(az) * math.cos(elev),
-                        dist * math.sin(az) * math.cos(elev),
-                        dist * math.sin(elev))
-        look = Vector((0, 0, 0.008)) - cam.location
+        if args.closeup:
+            # Decouple apparent size from die class (datagen-v2 close-up
+            # hypothesis): pick a target frame-height fraction independent
+            # of which class is being rendered, then solve for the camera
+            # distance that achieves it, instead of sampling distance
+            # directly from a fixed range shared by every class. Target
+            # range Uniform(0.28, 0.82) is measured from the real frozen
+            # test set's own label heights, not assumed (see spec).
+            target_frac = rng.uniform(0.28, 0.82)
+            # die.dimensions is the world-space AABB extent post-scale and
+            # is rotation-invariant (local-axis bbox * scale) -- a
+            # deliberate approximation, since real apparent height still
+            # varies with settled orientation, but dice are roughly
+            # isotropic solids (manifest size_mm spans only 14-24mm across
+            # all 7 classes), so the approximation error is small relative
+            # to the size-class confound being removed, and does not
+            # itself depend on class.
+            size = max(max(d.dimensions) for d in dice)
+            # angle_y is Blender's own computed vertical FOV (accounts for
+            # sensor_fit/aspect correctly) -- read directly rather than
+            # hand-deriving the sensor/aspect formula, which empirically
+            # does not match a naive resolution-aspect-scaled calculation
+            # for this project's default (non-VERTICAL) sensor_fit.
+            dist = size / (2 * target_frac * math.tan(cam_data.angle_y / 2))
+            dist = max(dist, 0.05)
+            centroid = Vector((0.0, 0.0, 0.0))
+            for d in dice:
+                centroid += d.matrix_world.translation
+            centroid /= len(dice)
+            # Offset is applied relative to the actual dice centroid (not
+            # a fixed world origin) so the achieved camera-to-subject
+            # distance matches `dist` exactly even when the centroid is
+            # off-origin (always possible at closeup's placement radius,
+            # and would otherwise silently bias the target frame-fraction
+            # since dist can be small, e.g. ~0.05m, comparable to the
+            # placement radius). The non-closeup path below is untouched
+            # (byte-identical to the pre-existing detection_v1 behavior:
+            # camera offset from world origin, look-at a fixed point).
+            cam.location = (centroid.x + dist * math.cos(az) * math.cos(elev),
+                            centroid.y + dist * math.sin(az) * math.cos(elev),
+                            centroid.z + dist * math.sin(elev))
+            look = centroid - cam.location
+        else:
+            dist = rng.uniform(0.15, 0.35)
+            cam.location = (dist * math.cos(az) * math.cos(elev),
+                            dist * math.sin(az) * math.cos(elev),
+                            dist * math.sin(elev))
+            look = Vector((0, 0, 0.008)) - cam.location
         cam.rotation_euler = look.to_track_quat('-Z', 'Y').to_euler()
         if rng.random() < 0.45:
             cam_data.dof.use_dof = True

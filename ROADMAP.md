@@ -2647,3 +2647,17 @@ systematic up-the-shape-ladder confusion — hypothesized apparent-size-as-
 class-cue confound; five datagen-v2 recommendations recorded there. The
 exported `vision/models/export/<variant>/manifest.json` is the deployment
 interface a future robot-camera perception stack consumes.
+
+**Active iteration loops (2026-07-10):** (1) dataset iteration — datagen-v2
+close-up slice testing the apparent-size-confound hypothesis (Senior thread
+running); (2) hyperparameter hill-climb (Tier 2 pattern, scored on a
+real-val slice, frozen test reserved for verdicts) — deferred until the
+dataset loop lands its first win.
+
+**Convergence milestone — dice + Franka + detection:** Phase A: validate
+dice USDs (already exported per-asset in `vision/data/raw/dice_sets_v1/`)
+for Isaac Lab physics, spawn a d6 in the Franka lift env. Phase P: camera
+sensor + ONNX detector on Isaac renders (third eval domain) + deprojection
+to 3D die position. Phase I (gated on cube-lift success, per scope
+discipline): detection-derived object state replaces ground truth in the
+policy; then shape-generalized grasping across die types (d4 last).

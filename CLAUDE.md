@@ -95,23 +95,23 @@ in this repo's `.superpowers/sdd/` practice for execution mechanics:
   decisions. Still handles anything that's a genuine cross-cutting or
   architectural judgment call directly, rather than delegating the call
   itself.
-- **Senior** (research-lead subagents): each Senior owns one assigned
-  research question end-to-end — does its own literature and
-  implementation-precedent research on that question (papers, GitHub
-  repos/READMEs, engineering blog posts, reputable tech-news coverage —
-  sources aren't restricted to formal academic literature, especially for
-  "how this is actually built/tuned in practice" questions academic venues
-  often don't cover), then spawns its own Junior subagents to build and
-  queue the actual experiments validating it. Reviews its Juniors' results,
-  forms conclusions/recommendations, and reports back to Principal. Multiple
-  Seniors run in parallel across different questions/directions.
-- **Junior** (implementer subagents, spawned by a Senior): executes,
-  experiments, and iterates on their owning Senior's assigned question —
-  implements the experiment, runs training/eval loops, tries variations.
-  Junior experiment runs queue for execution on shared compute; a Senior's
-  own research/design work continues in parallel while its Juniors' runs
-  are queued rather than blocking on the queue (this parallelism improves
-  further once cloud compute removes the current single-GPU serialization).
+- **Senior** (research-lead/implementer subagents): each Senior owns one
+  assigned research question or implementation task end-to-end — does its
+  own literature and implementation-precedent research on that question
+  (papers, GitHub repos/READMEs, engineering blog posts, reputable
+  tech-news coverage — sources aren't restricted to formal academic
+  literature, especially for "how this is actually built/tuned in
+  practice" questions academic venues often don't cover), AND does the
+  hands-on build/experiment/iteration work itself. Forms conclusions/
+  recommendations and reports back to Principal. Multiple Seniors run in
+  parallel across different questions/directions.
+- **Junior layer removed (2026-07-11, direct user decision).** There is no
+  junior-engineer tier anymore — neither Principal nor Seniors dispatch
+  junior-engineer subagents; Seniors do their own implementation work
+  directly. What is kept from the old split: independent verification —
+  Principal still checks claimed evidence directly (open the images, read
+  the logs), and substantial diffs still get a separate review pass by a
+  *different* senior-engineer instance than the one that implemented.
 
 **Citation handling:** a citation from a real, credible source (peer-reviewed
 journal/proceedings, meaningfully cross-referenced or cited elsewhere) should
@@ -155,7 +155,8 @@ ground X in the literature or this project's own prior verified evidence
 before designing the exact implementation. Then: Brainstorm → spec
 (`docs/superpowers/specs/`) → plan (`docs/superpowers/plans/`) → execute
 via `superpowers:subagent-driven-development` (controller=Principal,
-implementer=Junior, reviewer=Senior) → `.superpowers/sdd/progress.md`
+implementer=Senior, reviewer=a different Senior instance) →
+`.superpowers/sdd/progress.md`
 ledger. Full 1500-iteration run + video review before any verdict — this
 repo's own evidence (most sharply, Experiment 15) shows shaped reward
 scalars can improve while real behavior doesn't, so this tier's depth is
@@ -213,7 +214,7 @@ flock /tmp/rl_isaac_sim.lock -c "PYTHONUNBUFFERED=1 /home/saps/IsaacLab/isaaclab
 
 This blocks natively (kernel-level mutex, zero polling) until the lock is
 free, then runs, then releases automatically on exit — this is how
-concurrent Senior/Junior threads under this repo's fan-out model (see
+concurrent Senior threads under this repo's fan-out model (see
 "Claude's role" above) should coordinate GPU access, instead of each one
 independently `ps aux`-polling in a sleep loop (2026-07-09 finding: a
 

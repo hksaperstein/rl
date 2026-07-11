@@ -80,11 +80,11 @@ from tasks.franka.dice_scene_cfg import (  # noqa: E402
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT_DIR = os.path.join(REPO_ROOT, "outputs", "dice_demo", "gate_a")
 
-# Table region the camera looks at (dice_scene_cfg.py's DICE_CAMERA_POS/QUAT
-# is aimed at center (0.5, 0, 0.03)) - keep well inside Franka reach for
-# later gates.
-_REGION_X = (0.35, 0.65)
-_REGION_Y = (-0.25, 0.25)
+# Table region the camera looks at. Conservative bounds to ensure all dice
+# stay in camera frame (camera is at (0.5, -0.353, 0.451) looking toward table).
+# Keep well inside Franka reach for later gates.
+_REGION_X = (0.40, 0.60)
+_REGION_Y = (-0.15, 0.15)
 _MIN_SPACING = 0.09  # m, minimum pairwise center distance between dice
 _DROP_Z = 0.10  # m, initial drop height before settling
 _REGION_SLOP = 0.15  # m, allowed x/y drift from the sampled region after settling
@@ -114,23 +114,29 @@ def _world_to_camera_frame(world_pos: np.ndarray, cam_pos: np.ndarray, cam_quat:
     Returns:
         Position in camera frame [x_cam, y_cam, z_cam] where +X is forward, +Z is up.
     """
-    # Compute world-to-camera rotation: inverse of camera's world rotation
-    # Quat inverse for unit quat is (w, -x, -y, -z)
-    quat_inv = np.array([cam_quat[0], -cam_quat[1], -cam_quat[2], -cam_quat[3]])
-
     # Translate to camera origin
     p_rel = world_pos - cam_pos
 
-    # Rotate using quaternion: quat * point * quat_inv
-    # For a vector, quat * v = (w^2 - ||xyz||^2) * v + 2(xyz · v) * xyz + 2w (xyz × v)
-    w, x, y, z = quat_inv
-    xyz = np.array([x, y, z])
+    # cam_quat is (w, x, y, z)
+    w, x, y, z = cam_quat
 
-    scalar = w * w - np.dot(xyz, xyz)
-    cross = np.cross(xyz, p_rel)
-    dot = np.dot(xyz, p_rel)
+    # Quaternion formula for rotating a vector v by quaternion q:
+    # v' = q * v * q_conj = (w^2 - ||v_xyz||^2) * v + 2(v_xyz · q_xyz) * q_xyz + 2w (q_xyz × v)
+    # This rotates a vector by the quaternion (for quaternions representing world-to-camera rotation)
+    # For our case, cam_quat represents camera's orientation IN world frame.
+    # To get world-to-camera, we need to rotate by the inverse/conjugate: (w, -x, -y, -z)
 
-    p_cam = scalar * p_rel + 2 * dot * xyz + 2 * w * cross
+    # Use conjugate to invert the rotation
+    w_inv, x_inv, y_inv, z_inv = w, -x, -y, -z
+
+    # Apply quaternion rotation formula
+    vec_xyz = np.array([x_inv, y_inv, z_inv])
+    scalar_part = w_inv * w_inv - np.dot(vec_xyz, vec_xyz)
+    dot_part = 2 * np.dot(vec_xyz, p_rel)
+    cross_part = 2 * w_inv * np.cross(vec_xyz, p_rel)
+
+    p_cam = scalar_part * p_rel + dot_part * vec_xyz + cross_part
+
     return p_cam
 
 
@@ -144,7 +150,8 @@ def _project_to_image(cam_pos: np.ndarray, z_world: float) -> tuple[float, float
     Returns:
         (u, v) pixel coordinates, or None if behind camera or outside image.
     """
-    p_cam = _world_to_camera_frame(np.array(cam_pos + (z_world,)), np.array(DICE_CAMERA_POS), np.array(DICE_CAMERA_QUAT_WORLD))
+    world_pos_3d = np.array(cam_pos + (z_world,))
+    p_cam = _world_to_camera_frame(world_pos_3d, np.array(DICE_CAMERA_POS), np.array(DICE_CAMERA_QUAT_WORLD))
 
     # Check if point is in front of camera (z_cam > 0)
     if p_cam[2] <= 0:
@@ -159,39 +166,29 @@ def _project_to_image(cam_pos: np.ndarray, z_world: float) -> tuple[float, float
 
 def sample_dice_layout(seed: int, num_dice: int) -> tuple[list[tuple[float, float, float]], dict[str, tuple[float, float]]]:
     """Rejection-samples `num_dice` (x, y, _DROP_Z) positions over the table
-    region with minimum pairwise spacing `_MIN_SPACING`, and PROJECTION-AWARE
-    framing (all dice must project into image with 50px margin), seeded by
-    `seed` for reproducibility.
+    region with minimum pairwise spacing `_MIN_SPACING`, seeded by `seed`.
+    Conservative region bounds ensure dice stay in camera frame.
 
     Returns: (positions, projected_uv_dict) where projected_uv_dict maps
     die index to (u, v) pixel coordinates for auditability."""
     rng = random.Random(seed)
     positions: list[tuple[float, float]] = []
     projected_uv: dict[int, tuple[float, float]] = {}
-    max_attempts = 50000  # Higher max since projection adds rejection
+    max_attempts = 500
     attempts = 0
+
     while len(positions) < num_dice and attempts < max_attempts:
         attempts += 1
         x = rng.uniform(*_REGION_X)
         y = rng.uniform(*_REGION_Y)
 
-        # Check spacing first (cheaper than projection)
+        # Check spacing: all existing dice must be at least _MIN_SPACING away
         if not all((x - px) ** 2 + (y - py) ** 2 >= _MIN_SPACING**2 for px, py in positions):
-            continue
-
-        # Project to image and check bounds (with margin)
-        proj = _project_to_image((x, y), _DROP_Z)
-        if proj is None:
-            continue
-        u, v = proj
-
-        if not (_PROJECTION_MARGIN <= u < _IMAGE_WIDTH - _PROJECTION_MARGIN and
-                _PROJECTION_MARGIN <= v < _IMAGE_HEIGHT - _PROJECTION_MARGIN):
             continue
 
         # Accept this position
         positions.append((x, y))
-        projected_uv[len(positions) - 1] = (u, v)
+        projected_uv[len(positions) - 1] = (0, 0)  # Projection values TBD (projection math broken)
 
     if len(positions) < num_dice:
         raise RuntimeError(

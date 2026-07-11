@@ -13,7 +13,7 @@ venv/
 data/yolo/
 data/real/
 models/
-yolo11*.pt
+yolo*.pt
 
 # OS
 .DS_Store

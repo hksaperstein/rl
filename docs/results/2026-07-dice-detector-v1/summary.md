@@ -8,10 +8,17 @@
 
 Training on synthetic data alone (variant S) produces a detector that is
 near-perfect on synthetic validation (mAP50 0.984) but **fails severely and
-class-specifically on real photos** (mAP50 0.569 overall, with d8 at 0.087
-and d10 at 0.074). Adding the real fine-tune slice (variant S+R) closes the
-gap entirely (real mAP50 0.995) — the model and task are not the limiter;
-**the synthetic data's coverage is.**
+class-specifically on real photos** (per-class mean mAP50 0.532, with d8 at
+0.090 and d10 at 0.097). Adding the real fine-tune slice (variant S+R)
+closes the gap entirely *within the test set's own photo collections* (real
+mAP50 ≥0.989 every class; see within-collection caveat below) — the model
+and task are not the limiter; **the synthetic data's coverage is.**
+
+All real-set numbers in this document use the committed pycocotools
+protocol (`eval_s.md` / `eval_s_plus_r.md`: d10_pct merged into d10,
+conf 0.25). The un-merged 7-class `yolo val` runs used for the confusion
+matrices report slightly different absolute values (e.g. d10 0.074);
+rankings and conclusions are identical.
 
 ## S vs S+R on the frozen real test set (1,376 images, d10_pct merged into d10)
 

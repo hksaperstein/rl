@@ -86,11 +86,22 @@ def _die_usd_path(die_type: str) -> str:
 
 
 def _die_cfg(die_type: str, init_pos: tuple[float, float, float]) -> RigidObjectCfg:
+    # The dice USDs (vision/data/raw/dice_sets_v1/set_00000_<type>.usd) are
+    # authored in millimeters-as-meters (mm geometry, metersPerUnit=1.0), not
+    # standard meters. vision/scripts/render_detection_dataset.py:125 applies
+    # MM_TO_M = 0.001 uniform scaling when importing these same dice for the
+    # detector training renders (confirmed match: the manifest .json records
+    # each die's real size_mm; our measured 17.32mm for d4 matches the ~17.3
+    # extent in stage units). Use that same uniform 0.001 scale factor here,
+    # preserving the relative per-die size distribution the detector was
+    # trained on (the per-die size variation is intentional datagen
+    # randomization, not to be compensated per-die).
     return RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/Die_" + die_type,
         init_state=RigidObjectCfg.InitialStateCfg(pos=init_pos, rot=(1.0, 0.0, 0.0, 0.0)),
         spawn=UsdFileCfg(
             usd_path=_die_usd_path(die_type),
+            scale=(0.001, 0.001, 0.001),
             rigid_props=_DICE_RIGID_PROPS,
             mass_props=_DICE_MASS,
             collision_props=_DICE_COLLISION_PROPS,

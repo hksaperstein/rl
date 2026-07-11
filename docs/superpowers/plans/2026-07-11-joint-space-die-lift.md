@@ -470,7 +470,12 @@ its default untouched. Run it non-headless under flock on the final
 checkpoint (`logs/train_franka_jointdie/<ts>/model_1499.pt`), capture
 video/frames per that script's own conventions, and inspect the video
 around grasp moments frame-by-frame (motion continuity — stills lie;
-Experiment 16 precedent). Also record the instrumented check: object
+Experiment 16 precedent). VIDEO FRAMING (standing user instruction,
+2026-07-11): the eval video's frame must include the FULL arm, not just
+the object region — use/add a dedicated video camera positioned and
+FOV'd for whole-arm+workspace coverage (separate from any perception
+camera), and moving/zooming that camera during filming (per-step
+`set_world_poses` interpolation) is allowed and encouraged. Also record the instrumented check: object
 height trajectory across eval episodes (the script's printed states or a
 direct `root_pos_w` readout), not eyeball-only.
 

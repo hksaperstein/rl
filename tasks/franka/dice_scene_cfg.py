@@ -155,6 +155,15 @@ class DiceSceneCfg(InteractiveSceneCfg):
         spawn=sim_utils.DomeLightCfg(color=(0.75, 0.75, 0.75), intensity=3000.0),
     )
 
+    # Distant light for camera sensor rendering. IsaacLab's camera tutorials
+    # (e.g. run_usd_camera.py) use DistantLightCfg alongside or instead of
+    # DomeLightCfg for proper sensor illumination. This ensures the camera
+    # captures a properly lit scene for the detector to process.
+    distant_light = AssetBaseCfg(
+        prim_path="/World/distant_light",
+        spawn=sim_utils.DistantLightCfg(color=(0.75, 0.75, 0.75), intensity=3000.0),
+    )
+
     die_d4: RigidObjectCfg = _die_cfg("d4", (0.35, -0.20, 0.10))
     die_d8: RigidObjectCfg = _die_cfg("d8", (0.42, -0.10, 0.10))
     die_d10: RigidObjectCfg = _die_cfg("d10", (0.50, 0.0, 0.10))

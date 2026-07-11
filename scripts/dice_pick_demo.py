@@ -195,6 +195,15 @@ def run_gate_a() -> None:
         sim.step()
         scene.update(sim_dt)
 
+    # Let RTX path tracer converge by rendering extra frames with physics frozen
+    # (pattern from render_color_check.py). Without this, the camera captures
+    # an unconverged/black first sample.
+    print("[GATE A] rendering RTX convergence frames...")
+    for _ in range(40):
+        scene.write_data_to_sim()
+        sim.step()
+        scene.update(sim_dt)
+
     print(f"[GATE A] settled after {settle_steps} steps ({_SETTLE_SECONDS}s sim time). Final die states:")
     print(f"{'die':<6} {'x':>10} {'y':>10} {'z':>10}")
     results = {}

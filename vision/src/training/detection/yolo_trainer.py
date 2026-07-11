@@ -4,8 +4,10 @@
 Variants (spec 2026-07-10-dice-detector-v1):
   s        - synthetic detection_v1 only
   s_plus_r - synthetic + real finetune slice mixed into training
-Both validate on the synthetic val split during training (monitoring only);
-the frozen real test set is never seen here.
+  s_v2     - synthetic detection_v1 + datagen-v2 closeup slice (spec
+             2026-07-11-datagen-v2-closeup-design.md), no real data
+All variants validate on the synthetic val split during training
+(monitoring only); the frozen real test set is never seen here.
 
 Moved from scripts/train.py (2026-07-10 platform refactor, see
 docs/superpowers/specs/2026-07-10-training-platform-architecture-design.md)
@@ -40,9 +42,29 @@ def build_s_plus_r_yaml():
     return out
 
 
+def build_s_v2_yaml():
+    """s_v2 variant (spec 2026-07-11-datagen-v2-closeup-design.md): the
+    detection_v1 train split plus the datagen-v2 closeup slice, both
+    synthetic, no real data. val stays detection_v1-only (unchanged from
+    variant s) -- this experiment's target metric is the frozen real test
+    set, not synthetic val, so val doesn't need to cover the closeup slice.
+    """
+    out = REPO / "data/yolo/dice_s_v2.yaml"
+    out.write_text(
+        "path: .\n"
+        "train:\n"
+        f"  - {(REPO / 'data/yolo/images/train').resolve()}\n"
+        f"  - {(REPO / 'data/yolo_closeup/images/train').resolve()}\n"
+        f"val: {(REPO / 'data/yolo/images/val').resolve()}\n"
+        "names:\n"
+        + "".join(f"  {i}: {n}\n" for i, n in enumerate(CLASS_NAMES))
+    )
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--variant", choices=["s", "s_plus_r"], required=True)
+    ap.add_argument("--variant", choices=["s", "s_plus_r", "s_v2"], required=True)
     ap.add_argument("--epochs", type=int, default=60)
     ap.add_argument("--batch", type=int, default=32)
     ap.add_argument("--imgsz", type=int, default=640)
@@ -56,8 +78,12 @@ def main():
     args = ap.parse_args()
     run_name = args.name or args.variant
 
-    data = (REPO / "data/yolo/dice.yaml" if args.variant == "s"
-            else build_s_plus_r_yaml())
+    if args.variant == "s":
+        data = REPO / "data/yolo/dice.yaml"
+    elif args.variant == "s_plus_r":
+        data = build_s_plus_r_yaml()
+    else:
+        data = build_s_v2_yaml()
     model = YOLO("yolo11s.pt")
     model.train(
         data=str(data),

@@ -130,12 +130,79 @@ _PROJECTION_MARGIN = 50  # pixels, margin to keep dice away from frame edges
 _REST_Z_ESTIMATE = 0.015  # m, rough die resting height used only for the sampler's audit printout
 
 # Gate G IK/grasp tuning.
-_PREGRASP_CLEARANCE = 0.10  # m above the die's grasp midline
-_LIFT_FINGERTIP_Z = 0.30  # m
-_WAYPOINT_TOL = 0.015  # m, EE-position convergence tolerance (~1.5cm)
-_MAX_POS_STEP = 0.004  # m, per-physics-step position correction cap (bounded relative-mode IK, see run_pick_sequence)
+#
+# Senior fix pass (2026-07-11, see .superpowers/sdd/dice-demo-task3-report.md's
+# "Senior fix pass" section): the brief's original "hold the post-reset
+# DEFAULT panda_hand orientation" rule is REVOKED (Principal decision) and
+# replaced by a 4-stage sequence that targets the CANONICAL straight-down
+# orientation quat (0,1,0,0) wxyz (from IsaacLab's own
+# scripts/tutorials/05_controllers/run_diff_ik.py) instead of the tilted
+# default. Stage 1 moves xy+orientation together to a fixed hand-frame
+# approach height; stage 2 is a pure vertical descent with orientation held;
+# stage 3 closes the gripper; stage 4 lifts vertically. See run_pick_sequence.
+_STAGE1_HAND_Z = 0.30  # m, hand-frame z for the approach waypoint (xy + orientation both move here)
+_STAGE4_LIFT_HAND_Z = 0.35  # m, hand-frame z for the final lift waypoint
+_WAYPOINT_TOL = 0.015  # m, EE-position convergence tolerance (~1.5cm) - used for stages 1/4, where sub-cm precision doesn't matter
+#
+# Grasp-tolerance fix (2026-07-11, after d20 PASSED but d4/d8/d12 FAILED
+# under the speed-fixed staged sequence): controller-diagnosed from the
+# logs - stage2_descend was converging fine, just to a residual right at
+# `_WAYPOINT_TOL` (14.0-14.2mm measured for d4/d8). For d20 (~30mm across,
+# ~15mm radius) that residual still leaves the die between the 80mm-open
+# fingers -> PASS. For d4/d8 (15-18mm across, ~8mm radius) a 14mm lateral
+# residual means the fingers close beside the die, not around it -> z-gain
+# ~0. The tolerance was exceeding the small dice's own radius. Fixed with a
+# SEPARATE, tighter tolerance for stage2 (grasp height) specifically, where
+# lateral precision actually matters for a small object - stage1/4 keep the
+# looser `_WAYPOINT_TOL` since sub-cm precision there is unnecessary.
+_GRASP_POS_TOL = 0.005  # m, stage2 (grasp-height) position convergence tolerance (~5mm) - tighter than _WAYPOINT_TOL because the smallest die's own radius (~8mm) is comparable to the old 15mm tolerance
+_ROT_TOL = 0.06  # rad (~3.4deg), EE-orientation convergence tolerance - must be tight before descent (stage 1 requires both pos AND rot converged). Loosened from an initial 0.05 (2026-07-11): the first canonical-orientation attempt measured rot_err oscillating right at 0.051rad (essentially converged, live quat within ~2.9deg of exact) while position was still far off and moving - a small margin avoids that boundary oscillation without meaningfully loosening the "point down" requirement.
+_MAX_POS_STEP = 0.018  # m, per-physics-step position correction cap (bounded relative-mode IK, see run_pick_sequence)
 _MAX_ROT_STEP = 0.03  # rad, per-physics-step orientation correction cap
-_MAX_STEPS = 400  # per-waypoint step timeout (~6.7s sim time at dt=1/60) - generous given small per-step motion
+_MAX_STEPS_APPROACH = 800  # stage 1 budget (translation+rotation from the default ready pose - the furthest waypoint)
+_MAX_STEPS_DESCEND = 400  # stage 2 budget (position-only in practice, orientation already converged & held)
+_MAX_STEPS_LIFT = 300  # stage 4 budget (short vertical move)
+_MAX_STEPS_REFINE = 200  # fallback XY-only refine sub-stage budget (see stage2_descend's try/except in run_pick_sequence) - only used if the tighter _GRASP_POS_TOL times out on the first attempt
+#
+# Speed fix (2026-07-11, after stage 0's joint-space prep - see below - fixed
+# the orientation/joint4-lockup problem cleanly: rot_err converged to
+# ~0.0000rad by step 50, joint4 stayed healthy around -2.2 to -2.3, no limit
+# pegging, position error decreased MONOTONICALLY and stably): stage1
+# nonetheless still timed out - measured actual per-step position progress
+# of only ~0.18-0.3mm/step against a `_MAX_POS_STEP` cap of 4mm (a >10x
+# under-utilization of the allowed budget), a pure GAIN problem, not a
+# stability one. Root cause: `lambda_val=0.1` (10x IsaacLab's own 0.01
+# default) was originally raised to survive a Jacobian near-singularity at
+# the OLD direct-from-default starting config (see the lambda_val comment
+# below) - stage 0 now avoids that regime entirely, so the heavy damping is
+# just needlessly crushing the DLS solve's effective per-step displacement
+# (heavy Tikhonov regularization shrinks the solved joint delta even in a
+# well-conditioned region, not only near true singularities). Fixed by (a)
+# raising `_MAX_POS_STEP` well above its old 4mm (still conservative for a
+# ~120Hz physics loop) and (b) dropping `lambda_val` back down (see the
+# DifferentialIKControllerCfg construction below) now that stage 0 has
+# removed the reason for the heavy damping; stage budgets also raised as a
+# backstop, not as the primary fix.
+
+# Fallback #2 (Principal's fallback ladder; engaged 2026-07-11 after the
+# canonical-orientation staged design alone still failed - see the "Senior
+# fix pass" section of the task report): stage 0, a pure JOINT-SPACE (no
+# Jacobian/IK) linear interpolation from the post-reset default joint config
+# to this fixed "ready-to-descend" configuration, run BEFORE any Cartesian
+# IK. A widely-used Franka Panda "ready" joint configuration (elbow bent,
+# hand already oriented close to straight-down, well clear of every joint
+# limit) used as a starting/waypoint pose in Franka manipulation demos.
+# Rationale (measured, this task): a canonical-orientation Cartesian IK
+# command issued directly from the scene's actual post-reset default
+# (panda_joint4=-2.810, only ~0.26rad off its own -3.072 lower limit) slammed
+# joint4 to its OPPOSITE hard limit (-0.07) within a SINGLE physics step
+# (even under the small per-step Cartesian clip - the Jacobian pseudoinverse
+# near a singularity can map a small Cartesian correction to a huge
+# joint-space one), then stayed pegged there, crawling at ~0.5mm/step for
+# the rest of the 500-step budget. This target config's joint4=-2.356 is
+# comfortably centered in its [-3.072,-0.07] range - not near either bound.
+_READY_TO_DESCEND_JOINT_POS = [0.0, -0.785398, 0.0, -2.356194, 0.0, 1.570796, 0.785398]  # rad, panda_joint1-7
+_MAX_STEPS_JOINT_PREP = 200  # stage 0 budget - open-loop, not convergence-gated (diagnostic-only check after)
 _GRIPPER_CLOSE_HOLD_STEPS = 90  # fixed-duration hold while the gripper closes (~1.5s)
 _LIFT_SUCCESS_GAIN = 0.15  # m, commanded die must gain at least this much z to count as lifted
 _OTHER_DIE_MAX_Z = 0.05  # m, every OTHER die must stay below this z (not disturbed)
@@ -198,6 +265,15 @@ def _rot_matrix_to_quat(rot: np.ndarray) -> np.ndarray:
         z = 0.25 * s
     q = np.array([w, x, y, z])
     return q / np.linalg.norm(q)
+
+
+def _quat_angle_diff_rad(q1: np.ndarray, q2: np.ndarray) -> float:
+    """Shortest-path angular difference (radians) between two (w, x, y, z)
+    quaternions - sign-ambiguity-safe via abs(dot) (q and -q represent the
+    same rotation). Used by run_pick_sequence's staged convergence check to
+    measure live orientation error against the canonical target."""
+    dot = float(np.clip(abs(np.dot(q1, q2)), -1.0, 1.0))
+    return float(2.0 * np.arccos(dot))
 
 
 # Rotation from ROS-local axes (x right, y down, z forward) to "world"-
@@ -475,15 +551,67 @@ def _normalize_choice(choice: str) -> str:
 
 
 def _die_half_height_m(die_type: str) -> float:
-    """Half the die's manifest `size_mm` (converted to meters) - used to
-    place the grasp/pregrasp fingertip target at the die's approximate
-    midline above the table surface (z=0), per this task's brief. d10_pct
-    (a die not physically present in this scene) maps to d10's manifest."""
+    """Half the die's manifest `size_mm` (converted to meters). Diagnostic/
+    informational only as of this task's grasp-height fix (see
+    `_DIE_REST_HEIGHT_M`'s comment) - NOT used to compute the actual grasp
+    height anymore, since it was found to badly mismatch the die's real
+    resting-centroid height for non-roundish shapes. Still printed for
+    comparison. d10_pct (a die not physically present in this scene) maps
+    to d10's manifest."""
     manifest_type = "d10" if die_type in D10_ALIASES else die_type
     manifest_path = os.path.join(DICE_MANIFEST_DIR, f"set_00000_{manifest_type}.json")
     with open(manifest_path) as f:
         manifest = json.load(f)
     return (float(manifest["size_mm"]) / 1000.0) / 2.0
+
+
+# Per-die-type MEASURED resting height (world-frame root_pos_w z after
+# settle, table surface at z=0) - NOT half of manifest `size_mm`. Measured
+# this task (2026-07-11) directly from spawn_scene_and_settle's own printed
+# settle table, confirmed IDENTICAL across three independent Gate G runs
+# (d4/d8/d20, all seed=42): this scene ALWAYS spawns every die with the
+# SAME identity rotation (dice_scene_cfg.py's init_state.rot=(1,0,0,0), see
+# apply_convex_hull_collision's caller) and physics/gravity/timestep are
+# deterministic, so the settled resting pose (and thus height) per die TYPE
+# is a fixed physical fact of that mesh, not a per-run/per-seed quantity -
+# same category of already-validated hardcoded geometry constant as this
+# file's own `_EE_MEASUREMENT_OFFSET` (panda_hand -> fingertip pinch-point
+# offset), which was likewise derived by measuring live sim state once and
+# then hardcoding the result for every future run, not re-measured
+# per-run. This is NOT a live-GT grasp-target shortcut: it doesn't depend on
+# any particular run's dice layout/positions (those still come only from
+# the detector, per the brief) - only on each die TYPE's fixed geometry.
+#
+# Root cause of the earlier d4/d8 FAILs (this task): the brief's original
+# formula (grasp z = HALF of manifest `size_mm`) implicitly assumes every
+# die's centroid sits at half its nominal "size" above the table - true
+# enough for the roundish d12/d20 (measured actual-vs-formula ratio
+# ~1.0-1.2, `_die_half_height_m` prints 10.2mm/9.4mm vs measured
+# 10.9mm/11.0mm) but badly wrong for d4/d8/d10 (measured ratio ~0.2-0.3:
+# `_die_half_height_m` prints 9.0mm/8.3mm/8.6mm vs measured only
+# 2.2mm/1.7mm/2.6mm) - consistent with basic solid geometry: a regular
+# tetrahedron/octahedron resting flat on a face has its centroid much
+# closer to that face than half its edge-length-based "size" metric. This
+# was confirmed to be the actual cause of d4/d8's continued FAIL even after
+# the stage2 tolerance fix independently nailed lateral position to sub-mm
+# and z to <5mm of the COMMANDED (but wrong) target: the gripper was
+# closing ~6-7mm above the die's real center, not around it.
+_DIE_REST_HEIGHT_M = {
+    "d4": 0.0022,
+    "d8": 0.0017,
+    "d10": 0.0026,
+    "d12": 0.0109,
+    "d20": 0.0110,
+}
+
+
+def _die_grasp_height_m(die_type: str) -> float:
+    """World-frame z (meters) for the gripper fingertip pinch-point target
+    for a straight-down grasp of this die type - the die's MEASURED resting
+    height (`_DIE_REST_HEIGHT_M`), not half its manifest `size_mm`. d10_pct
+    maps to d10's measured height (same physical die in this scene)."""
+    manifest_type = "d10" if die_type in D10_ALIASES else die_type
+    return _DIE_REST_HEIGHT_M[manifest_type]
 
 
 def run_detector_subprocess(out_dir: str) -> dict:
@@ -538,19 +666,33 @@ def select_target_detection(detections: list[dict], choice: str) -> dict:
     return target
 
 
+class _StageTimeoutError(RuntimeError):
+    """Raised by run_pick_sequence's `_go_to_pose` when a stage doesn't
+    converge (position AND, where required, orientation) within its step
+    budget - a stage-level "fail loudly" signal per the Principal's staged
+    IK design, distinct from other RuntimeErrors this script raises
+    (e.g. select_target_detection's no-match case)."""
+
+
 def run_pick_sequence(
     sim: sim_utils.SimulationContext,
     scene: InteractiveScene,
     target_xy: tuple[float, float],
-    half_height_m: float,
+    grasp_height_m: float,
     choice: str,
 ) -> dict:
-    """Drives the Franka arm through pregrasp -> grasp -> close -> lift via a
-    raw DifferentialIKController (pattern:
-    IsaacLab/scripts/tutorials/05_controllers/run_diff_ik.py), holding the
-    default panda_hand orientation (measured right after reset, not
-    hardcoded) constant throughout. Returns a dict of per-waypoint
-    convergence status."""
+    """Drives the Franka arm through a staged pick sequence (joint-space
+    ready-to-descend prep -> Cartesian approach -> descend -> close -> lift)
+    via a raw DifferentialIKController (pattern:
+    IsaacLab/scripts/tutorials/05_controllers/run_diff_ik.py). Targets the
+    CANONICAL straight-down orientation (not the tilted post-reset default -
+    see the "Senior fix pass" section of this task's report for why that
+    rule was revoked). Raises `_StageTimeoutError` (loudly, with live
+    hand pos/orientation + the commanded target in the message) if any
+    stage doesn't converge within its step budget - callers should catch
+    this rather than treat a stuck stage as silent success. Returns a dict
+    of per-stage convergence status (all True if this returns at all, since
+    a non-convergent stage raises instead)."""
     robot = scene["robot"]
     sim_dt = sim.get_physics_dt()
 
@@ -563,18 +705,26 @@ def run_pick_sequence(
     gripper_cfg.resolve(scene)
     gripper_joint_ids = gripper_cfg.joint_ids
 
-    # lambda_val bumped 10x above IsaacLab's own default (0.01 -> 0.1): the
-    # default was measured (this task) to blow up joint4 to its own hard
-    # limit within a SINGLE physics step from the default "ready" pose (see
-    # this task's report for the full diagnostic trace) - consistent with
-    # this default joint config being near a Jacobian singularity, where an
-    # under-damped DLS step produces a disproportionately large joint-space
-    # correction. Heavier damping trades speed for stability, appropriate
-    # here since this is a one-shot scripted pick, not a real-time policy.
+    # lambda_val history (this task, see report's "Senior fix pass"
+    # section): originally bumped 10x above IsaacLab's own default (0.01 ->
+    # 0.1) because issuing Cartesian IK directly from the scene's post-reset
+    # default joint config (panda_joint4=-2.810, close to its own -3.072
+    # limit) blew up joint4 to its OPPOSITE hard limit within a single
+    # physics step - a Jacobian near-singularity at that specific starting
+    # config. Stage 0 (see `_READY_TO_DESCEND_JOINT_POS`) now moves the arm
+    # to a well-conditioned joint config via pure joint-space interpolation
+    # BEFORE any Cartesian IK ever runs, removing that near-singularity from
+    # the regime Cartesian IK actually operates in. With that fixed, the
+    # heavy 0.1 damping was measured to needlessly crush the DLS solve's
+    # per-step effective displacement to ~0.2-0.3mm against a 4mm cap (>10x
+    # under-utilized) - dropped back down close to the IsaacLab default.
     #
-    # command_type="pose", use_relative_mode=True (holds orientation, varies
-    # xyz only, per the brief - via small BOUNDED per-step corrections, see
-    # run_pick_sequence's _step_toward). Two earlier absolute-mode attempts
+    # command_type="pose", use_relative_mode=True: both position AND
+    # orientation move via small BOUNDED per-step corrections (see
+    # run_pick_sequence's _step_toward) - stage 1 lets both converge
+    # together toward the canonical down orientation, stages 2/3/4 hold
+    # orientation at that already-converged value via the same mechanism.
+    # Two earlier absolute-mode attempts
     # (measured, this task, see report): (1) use_relative_mode=False with
     # the full held pose in one interpolated-but-still-absolute target got
     # the DLS solver's joint-space path stuck against panda_joint2's limit
@@ -594,7 +744,7 @@ def run_pick_sequence(
     # tasks/franka/lift_env_cfg.py's ActionsCfg.arm_action) keeps both
     # comparably small and well-conditioned every single step.
     diff_ik_cfg = DifferentialIKControllerCfg(
-        command_type="pose", use_relative_mode=True, ik_method="dls", ik_params={"lambda_val": 0.1}
+        command_type="pose", use_relative_mode=True, ik_method="dls", ik_params={"lambda_val": 0.02}
     )
     diff_ik_controller = DifferentialIKController(diff_ik_cfg, num_envs=scene.num_envs, device=robot.device)
 
@@ -607,6 +757,17 @@ def run_pick_sequence(
     # --- Measure (do not hardcode) the default panda_hand orientation and
     # the hand-vs-fingertip z offset, right after reset. IK target frame is
     # panda_hand, whose origin sits well above the actual fingertips.
+    #
+    # NOTE (Senior fix pass, 2026-07-11): `hand_quat_w` below is now
+    # DIAGNOSTIC ONLY - printed for comparison, no longer used as the pick
+    # sequence's held target orientation. The prior task measured that
+    # rigidly holding this exact tilted default (approach axis
+    # ~[0.165,-0.023,-0.986]) through a full descent to table height funnels
+    # the IK solver into a panda_joint2-limited branch whose reachable low-z
+    # XY positions cluster around x=0.76-0.79 regardless of the actual
+    # commanded target (see report). The actual target orientation used
+    # below is the CANONICAL straight-down quat (see `canonical_down_quat_w`
+    # further down).
     left_id = robot.find_bodies("panda_leftfinger")[0][0]
     right_id = robot.find_bodies("panda_rightfinger")[0][0]
     hand_quat_w = robot.data.body_quat_w[0, hand_body_id].clone()
@@ -615,7 +776,7 @@ def run_pick_sequence(
     right_pos0 = robot.data.body_pos_w[0, right_id].cpu().numpy()
     fingertip_z0 = (left_pos0[2] + right_pos0[2]) / 2.0
     hand_to_fingertip_z = float(hand_pos_w0[2] - fingertip_z0)
-    print(f"[GATE G] measured default panda_hand pos_w={hand_pos_w0} quat_w={hand_quat_w.cpu().numpy()}")
+    print(f"[GATE G] measured default (DIAGNOSTIC ONLY, not held) panda_hand pos_w={hand_pos_w0} quat_w={hand_quat_w.cpu().numpy()}")
     print(
         f"[GATE G] measured hand->finger-BODY-ORIGIN z offset: {hand_to_fingertip_z * 1000:.1f}mm "
         f"(hand z={hand_pos_w0[2] * 1000:.1f}mm, finger-body z avg={fingertip_z0 * 1000:.1f}mm)"
@@ -647,16 +808,43 @@ def run_pick_sequence(
     )
     hand_to_fingertip_z = _VALIDATED_HAND_TO_PINCH_POINT_Z
 
-    def _hand_target(fingertip_z: float) -> torch.Tensor:
-        return torch.tensor(
-            [target_xy[0], target_xy[1], fingertip_z + hand_to_fingertip_z],
-            device=robot.device,
-            dtype=torch.float32,
-        )
+    # --- Canonical straight-down grasp orientation (Principal decision,
+    # 2026-07-11 - see .superpowers/sdd/dice-demo-task3-report.md's "Senior
+    # fix pass" section). The brief's original "hold the post-reset DEFAULT
+    # panda_hand orientation" rule is REVOKED: that default is tilted/yawed
+    # (approach axis ~[0.165,-0.023,-0.986]) and rigidly holding it through
+    # descent to table height was measured (prior task) to funnel the IK
+    # solver into a panda_joint2-limited branch whose reachable low-z XY
+    # positions cluster around x=0.76-0.79 regardless of the actual
+    # commanded target - not a step-size/tuning problem. Replaced with the
+    # CANONICAL straight-down quat (0,1,0,0) in (w,x,y,z) - taken directly
+    # from IsaacLab's own scripts/tutorials/05_controllers/run_diff_ik.py
+    # (its 3rd `ee_goals` entry, `[0.5, 0, 0.5, 0.0, 1.0, 0.0, 0.0]`; the
+    # first 3 values are xyz, the last 4 are wxyz), which converges from
+    # this exact same Franka default start pose in that tutorial. Confirmed
+    # by hand (this file's own `_quat_to_rot_matrix`) that this quat rotates
+    # local +Z (the finger-pointing axis) to world [0, 0, -1] - straight
+    # down, as required; R = diag(1, -1, -1) for q=(0,1,0,0).
+    canonical_down_quat_w = torch.tensor([0.0, 1.0, 0.0, 0.0], device=robot.device, dtype=torch.float32)
+    print(
+        f"[GATE G] target orientation quat_w(wxyz)={canonical_down_quat_w.cpu().numpy()} "
+        "(CANONICAL straight-down, per IsaacLab's run_diff_ik.py tutorial - "
+        "NOT the measured default printed above, which is diagnostic only)"
+    )
 
-    hand_pos_w_t_for_logging = [np.zeros(3)]  # mutable box: world-frame target for _go_to's/_hold's own convergence-error logging (target_pos_b above is in ROOT frame)
+    def _hand_target_xyz(hand_z: float) -> torch.Tensor:
+        """Direct hand-frame (x, y, z) target - used for stages 1/4, whose
+        z values (`_STAGE1_HAND_Z`/`_STAGE4_LIFT_HAND_Z`) are already
+        hand-space, not fingertip-space."""
+        return torch.tensor([target_xy[0], target_xy[1], hand_z], device=robot.device, dtype=torch.float32)
 
-    def _step_toward(target_pos_b: torch.Tensor, target_quat_b: torch.Tensor, gripper_target: torch.Tensor) -> float:
+    # mutable boxes: world-frame target for _step_toward's own MEASURED
+    # post-step convergence logging (target_pos_b/target_quat_b passed
+    # in are in ROOT frame).
+    hand_pos_w_t_for_logging = [np.zeros(3)]
+    hand_quat_w_t_for_logging = [np.array([1.0, 0.0, 0.0, 0.0])]
+
+    def _step_toward(target_pos_b: torch.Tensor, target_quat_b: torch.Tensor, gripper_target: torch.Tensor) -> tuple[float, float]:
         """One physics step of BOUNDED relative-step Cartesian control:
         computes the full pose error to the (fixed, absolute) target, clips
         BOTH the position and orientation error components to small
@@ -666,20 +854,12 @@ def run_pick_sequence(
         (tasks/franka/lift_env_cfg.py's ActionsCfg.arm_action,
         use_relative_mode=True, scale=0.5) - the proven mechanism for this
         exact robot+scene - rather than a single large absolute-pose jump.
+        UNCHANGED mechanism from the prior task (proven to hold orientation
+        well) - only what target orientation is passed in has changed.
 
-        This fixes a problem MEASURED in this task with the earlier
-        absolute-target approach (interpolated or not): DLS's combined 6D
-        pose_error vector mixes position (meters) and orientation
-        (axis-angle radians) with NO relative weighting: while position
-        error is still large (both are O(1) in raw units, but position
-        starts ~0.9m vs orientation's <1rad), the solver's DLS solve
-        effectively deprioritizes orientation, letting the ACTUAL gripper
-        orientation drift far from "down" long before position converges
-        (measured directly: approach axis drifted to ~[-0.55,-0.10,-0.83],
-        nearly horizontal, instead of holding ~[0.165,-0.023,-0.986] - see
-        report). Clipping BOTH components to small per-step magnitudes
-        keeps them comparably-scaled and well-conditioned every step,
-        avoiding that early-priority imbalance entirely."""
+        Returns (pos_err_m, rot_err_rad): MEASURED post-step error against
+        the live hand pose (not the pre-step error used to size this step's
+        clipped command)."""
         jacobian = robot.root_physx_view.get_jacobians()[:, ee_jacobi_idx, :, robot_entity_cfg.joint_ids]
         ee_pose_w = robot.data.body_pose_w[:, hand_body_id]
         root_pose_w = robot.data.root_pose_w
@@ -704,45 +884,93 @@ def run_pick_sequence(
         sim.step()
         scene.update(sim_dt)
         cur_pos_w = robot.data.body_pos_w[0, hand_body_id].cpu().numpy()
+        cur_quat_w = robot.data.body_quat_w[0, hand_body_id].cpu().numpy()
         target_pos_w = hand_pos_w_t_for_logging[0]
-        return float(np.linalg.norm(cur_pos_w - target_pos_w))
+        target_quat_w = hand_quat_w_t_for_logging[0]
+        pos_err_m = float(np.linalg.norm(cur_pos_w - target_pos_w))
+        rot_err_rad = _quat_angle_diff_rad(cur_quat_w, target_quat_w)
+        return pos_err_m, rot_err_rad
 
-    def _go_to(hand_pos_w_t: torch.Tensor, gripper_target: torch.Tensor, label: str) -> bool:
+    def _go_to_pose(
+        hand_pos_w_t: torch.Tensor, hand_quat_w_t: torch.Tensor, gripper_target: torch.Tensor,
+        label: str, max_steps: int, require_rot: bool = True, pos_tol: float = _WAYPOINT_TOL,
+    ) -> bool:
+        """Drives one staged waypoint to convergence, requiring BOTH
+        position (< `pos_tol`, defaults to `_WAYPOINT_TOL`) and (if
+        `require_rot`) orientation (< `_ROT_TOL`) to be within tolerance
+        before advancing - per the Principal's staged design, orientation
+        must be exact BEFORE descent starts, not just "eventually". Raises
+        `_StageTimeoutError` (fails loudly, does not silently continue) if
+        not converged within `max_steps`, printing/including the live hand
+        pos/orientation and the commanded target for diagnosis. `pos_tol`
+        is caller-supplied (not a single global) because how tight it needs
+        to be is object-size-dependent - see `_GRASP_POS_TOL`'s comment."""
         root_pose_w = robot.data.root_pose_w
         target_pos_b, target_quat_b = subtract_frame_transforms(
-            root_pose_w[:, 0:3], root_pose_w[:, 3:7], hand_pos_w_t.unsqueeze(0), hand_quat_w.unsqueeze(0)
+            root_pose_w[:, 0:3], root_pose_w[:, 3:7], hand_pos_w_t.unsqueeze(0), hand_quat_w_t.unsqueeze(0)
         )
         hand_pos_w_t_for_logging[0] = hand_pos_w_t.cpu().numpy()
+        hand_quat_w_t_for_logging[0] = hand_quat_w_t.cpu().numpy()
 
-        err = float("inf")
+        pos_err = rot_err = float("inf")
         converged = False
         step = 0
-        for step in range(_MAX_STEPS):
-            err = _step_toward(target_pos_b, target_quat_b, gripper_target)
+        for step in range(max_steps):
+            pos_err, rot_err = _step_toward(target_pos_b, target_quat_b, gripper_target)
             if step < 5 or step % 50 == 0:
                 cur_pos_w = robot.data.body_pos_w[0, hand_body_id].cpu().numpy()
                 live_quat = robot.data.body_quat_w[0, hand_body_id].cpu().numpy()
                 joint_pos_now = robot.data.joint_pos[0, robot_entity_cfg.joint_ids].cpu().numpy()
                 print(
                     f"[GATE G]   step {step}: cur_hand_pos_w={cur_pos_w} target_hand_pos_w={hand_pos_w_t.cpu().numpy()} "
-                    f"err={err * 1000:.1f}mm live_quat={np.round(live_quat, 3)} joint_pos={np.round(joint_pos_now, 3)}"
+                    f"pos_err={pos_err * 1000:.1f}mm rot_err={rot_err:.4f}rad live_quat={np.round(live_quat, 3)} "
+                    f"joint_pos={np.round(joint_pos_now, 3)}"
                 )
-            if err < _WAYPOINT_TOL:
+            pos_ok = pos_err < pos_tol
+            rot_ok = (not require_rot) or (rot_err < _ROT_TOL)
+            if pos_ok and rot_ok:
                 converged = True
                 break
-        status = "converged" if converged else "TIMEOUT (did not converge - failing loudly, continuing best-effort)"
-        print(
-            f"[GATE G] waypoint '{label}': {status} after {step + 1} steps, "
-            f"final err={err * 1000:.1f}mm (tol={_WAYPOINT_TOL * 1000:.0f}mm)"
-        )
-        return converged
 
-    def _hold(hand_pos_w_t: torch.Tensor, gripper_target: torch.Tensor, label: str, steps: int) -> None:
+        # Diagnostic (added 2026-07-11 per the grasp-tolerance fix): the
+        # component-wise xyz residual, not just its norm - lets the report
+        # say whether a residual is systematically directional (e.g. a
+        # calibration bias in the deprojected target) rather than isotropic
+        # noise. Printed on BOTH convergence and timeout.
+        cur_pos_w_final = robot.data.body_pos_w[0, hand_body_id].cpu().numpy()
+        residual_xyz = hand_pos_w_t.cpu().numpy() - cur_pos_w_final
+        print(
+            f"[GATE G]   [{label}] final xyz residual (target - actual): "
+            f"dx={residual_xyz[0]*1000:.1f}mm dy={residual_xyz[1]*1000:.1f}mm dz={residual_xyz[2]*1000:.1f}mm"
+        )
+
+        if not converged:
+            live_quat = robot.data.body_quat_w[0, hand_body_id].cpu().numpy()
+            joint_pos_now = robot.data.joint_pos[0, robot_entity_cfg.joint_ids].cpu().numpy()
+            msg = (
+                f"waypoint '{label}' did NOT converge within {max_steps} steps "
+                f"(final pos_err={pos_err * 1000:.1f}mm tol={pos_tol * 1000:.1f}mm, "
+                f"rot_err={rot_err:.4f}rad tol={_ROT_TOL:.4f}rad require_rot={require_rot}). "
+                f"live hand_pos_w={cur_pos_w_final} live_hand_quat_w={live_quat} "
+                f"commanded target_pos_w={hand_pos_w_t.cpu().numpy()} target_quat_w={hand_quat_w_t.cpu().numpy()} "
+                f"joint_pos={joint_pos_now}"
+            )
+            print(f"[GATE G] *** STAGE TIMEOUT: {msg} ***")
+            raise _StageTimeoutError(msg)
+
+        print(
+            f"[GATE G] waypoint '{label}': converged after {step + 1} steps "
+            f"(pos_err={pos_err * 1000:.1f}mm tol={pos_tol * 1000:.1f}mm rot_err={rot_err:.4f}rad)"
+        )
+        return True
+
+    def _hold(hand_pos_w_t: torch.Tensor, hand_quat_w_t: torch.Tensor, gripper_target: torch.Tensor, label: str, steps: int) -> None:
         root_pose_w = robot.data.root_pose_w
         target_pos_b, target_quat_b = subtract_frame_transforms(
-            root_pose_w[:, 0:3], root_pose_w[:, 3:7], hand_pos_w_t.unsqueeze(0), hand_quat_w.unsqueeze(0)
+            root_pose_w[:, 0:3], root_pose_w[:, 3:7], hand_pos_w_t.unsqueeze(0), hand_quat_w_t.unsqueeze(0)
         )
         hand_pos_w_t_for_logging[0] = hand_pos_w_t.cpu().numpy()
+        hand_quat_w_t_for_logging[0] = hand_quat_w_t.cpu().numpy()
         for _ in range(steps):
             _step_toward(target_pos_b, target_quat_b, gripper_target)
         print(f"[GATE G] held '{label}' for {steps} steps")
@@ -750,40 +978,53 @@ def run_pick_sequence(
     open_target = torch.full((1, len(gripper_joint_ids)), 0.04, device=robot.device)
     close_target = torch.full((1, len(gripper_joint_ids)), 0.0, device=robot.device)
 
-    pregrasp_z = half_height_m + _PREGRASP_CLEARANCE
-    grasp_z = half_height_m
-    lift_z = _LIFT_FINGERTIP_Z
+    def _joint_space_prep(target_joint_pos: list[float], gripper_target: torch.Tensor, steps: int, label: str) -> None:
+        """Pure JOINT-SPACE (no Jacobian/IK) linear interpolation from the
+        robot's CURRENT joint state to `target_joint_pos`, run BEFORE any
+        Cartesian IK - see `_READY_TO_DESCEND_JOINT_POS`'s comment for why.
+        Open-loop over a fixed step budget (not convergence-gated - this is
+        a coarse pre-positioning move, not a precision waypoint); prints the
+        final joint/hand state so a bad landing is visible, but does not
+        raise (stage 1's Cartesian IK, now starting from a much better
+        conditioned config, is expected to clean up any small residual)."""
+        start = robot.data.joint_pos[0, robot_entity_cfg.joint_ids].clone()
+        target = torch.tensor(target_joint_pos, device=robot.device, dtype=torch.float32)
+        print(
+            f"[GATE G] {label}: joint-space interpolation from {start.cpu().numpy().round(3)} "
+            f"to {target.cpu().numpy().round(3)} over {steps} steps"
+        )
+        for i in range(steps):
+            alpha = (i + 1) / steps
+            interp = start + alpha * (target - start)
+            robot.set_joint_position_target(interp.unsqueeze(0), joint_ids=robot_entity_cfg.joint_ids)
+            robot.set_joint_position_target(gripper_target, joint_ids=gripper_joint_ids)
+            scene.write_data_to_sim()
+            sim.step()
+            scene.update(sim_dt)
+        final_joint_pos = robot.data.joint_pos[0, robot_entity_cfg.joint_ids].cpu().numpy()
+        final_hand_pos = robot.data.body_pos_w[0, hand_body_id].cpu().numpy()
+        final_hand_quat = robot.data.body_quat_w[0, hand_body_id].cpu().numpy()
+        joint_err = float(np.linalg.norm(final_joint_pos - target.cpu().numpy()))
+        print(
+            f"[GATE G] {label}: DONE. final_joint_pos={final_joint_pos.round(3)} joint_err_norm={joint_err:.4f}rad "
+            f"hand_pos_w={final_hand_pos} hand_quat_w={final_hand_quat}"
+        )
+
+    stage1_hand_z = _STAGE1_HAND_Z
+    stage2_hand_z = grasp_height_m + hand_to_fingertip_z  # grasp height, hand frame (fingertip at the die's MEASURED resting height, see _DIE_REST_HEIGHT_M)
+    stage4_hand_z = _STAGE4_LIFT_HAND_Z
 
     print(
-        f"[GATE G] pick sequence for '{choice}': target xy=({target_xy[0]:.4f},{target_xy[1]:.4f}) "
-        f"half_height={half_height_m * 1000:.1f}mm pregrasp_fingertip_z={pregrasp_z * 1000:.1f}mm "
-        f"grasp_fingertip_z={grasp_z * 1000:.1f}mm lift_fingertip_z={lift_z * 1000:.1f}mm"
-    )
-
-    # "hover" via-point (target xy, high z - well above pregrasp): NOT one of
-    # the brief's required waypoints, added here after measuring (see this
-    # task's report) that going STRAIGHT from the default "ready" pose
-    # (hand near (0.13, -0.01, 0.95)) directly to pregrasp in one diagonal
-    # move gets the DLS IK solver's joint-space path stuck against a joint2
-    # limit ~120mm short, even with heavier damping and slow interpolation -
-    # a local-minimum/branch problem, not a step-size problem (early
-    # progress was fine; it plateaued specifically near the end). Splitting
-    # into "descend in Z roughly above the target, THEN move to final xy/z"
-    # gives the solver a differently-shaped path and was measured (this
-    # task) to reach full convergence - still only varies XYZ, orientation
-    # is still the same held-constant hand_quat_w throughout.
-    hover_target = torch.tensor(
-        [target_xy[0], target_xy[1], 0.45], device=robot.device, dtype=torch.float32
+        f"[GATE G] staged pick sequence for '{choice}': target xy=({target_xy[0]:.4f},{target_xy[1]:.4f}) "
+        f"grasp_height(measured)={grasp_height_m * 1000:.1f}mm stage1_hand_z={stage1_hand_z * 1000:.1f}mm "
+        f"stage2_hand_z(grasp)={stage2_hand_z * 1000:.1f}mm stage4_hand_z(lift)={stage4_hand_z * 1000:.1f}mm"
     )
 
     def _print_live_hand_orientation(label: str) -> None:
-        """Diagnostic (this task, see report): command_type='position' mode
-        drops the explicit orientation constraint from the IK objective, so
-        after the fact we must verify the ACTUAL live orientation stayed
-        close to the held-constant default (gripper-down), not just trust
-        that it did - the "hand->fingertip pinch point" offset is only
-        valid along world -Z if the hand is still (close to) pointing
-        straight down."""
+        """Diagnostic: verify the ACTUAL live orientation stayed close to
+        the canonical straight-down target, not just trust that it did -
+        the "hand->fingertip pinch point" offset is only valid along world
+        -Z if the hand is still (close to) pointing straight down."""
         live_quat = robot.data.body_quat_w[0, hand_body_id].cpu().numpy()
         w, x, y, z = live_quat
         R = _quat_to_rot_matrix(np.array([w, x, y, z]))
@@ -793,20 +1034,81 @@ def run_pick_sequence(
         hand_p = robot.data.body_pos_w[0, hand_body_id].cpu().numpy()
         print(
             f"[GATE G]   [{label}] live hand quat_w={live_quat} approach_axis_world={approach_axis_world} "
-            f"(default was [0.165,-0.023,-0.986], i.e. near -Z) hand_pos={hand_p} "
+            f"(canonical target is [0,0,-1], straight down) hand_pos={hand_p} "
             f"left_finger_pos={left_p} right_finger_pos={right_p}"
         )
 
     waypoint_status = {}
-    waypoint_status["hover"] = _go_to(hover_target, open_target, "hover")
-    waypoint_status["pregrasp"] = _go_to(_hand_target(pregrasp_z), open_target, "pregrasp")
-    _print_live_hand_orientation("pregrasp")
-    waypoint_status["grasp"] = _go_to(_hand_target(grasp_z), open_target, "grasp")
-    _print_live_hand_orientation("grasp (before close)")
-    _hold(_hand_target(grasp_z), close_target, "close_gripper", _GRIPPER_CLOSE_HOLD_STEPS)
-    _print_live_hand_orientation("after close")
-    waypoint_status["lift"] = _go_to(_hand_target(lift_z), close_target, "lift")
-    _print_live_hand_orientation("lift")
+
+    # Stage 0: joint-space pre-positioning (fallback #2 - see
+    # _READY_TO_DESCEND_JOINT_POS's comment). Runs BEFORE any Cartesian IK,
+    # entirely open-loop/direct joint targets - sidesteps the default pose's
+    # Jacobian near-singularity that slammed joint4 to its hard limit when
+    # stage 1's Cartesian IK was previously started directly from the
+    # post-reset default.
+    _joint_space_prep(_READY_TO_DESCEND_JOINT_POS, open_target, _MAX_STEPS_JOINT_PREP, "stage0_joint_prep")
+    _print_live_hand_orientation("stage0_joint_prep")
+
+    # Stage 1: approach - translate to (target_xy, stage1_hand_z) AND rotate
+    # to the canonical down orientation TOGETHER (orientation is allowed to
+    # move throughout this stage - it only needs to be exact BEFORE
+    # descent). require_rot=True: both position and orientation must
+    # converge before stage 2 begins.
+    stage1_target_pos = _hand_target_xyz(stage1_hand_z)
+    waypoint_status["stage1_approach"] = _go_to_pose(
+        stage1_target_pos, canonical_down_quat_w, open_target, "stage1_approach",
+        max_steps=_MAX_STEPS_APPROACH, require_rot=True,
+    )
+    _print_live_hand_orientation("stage1_approach")
+
+    # Stage 2: pure vertical descent to grasp height, orientation HELD at
+    # the now-converged canonical down quat (require_rot=True as a
+    # correctness check - should already be satisfied from stage 1 and held
+    # via the same per-step bounded rotation correction the whole way down).
+    # Uses `_GRASP_POS_TOL` (tighter than stage1/4's `_WAYPOINT_TOL`) - see
+    # that constant's comment: a small die's own radius is comparable to the
+    # looser tolerance, so a "converged" waypoint there could still miss the
+    # die entirely (measured: d4/d8 both converged at ~14mm under the old
+    # single global tolerance and z-gain was ~0 - fingers closed beside the
+    # die, not around it).
+    stage2_target_pos = _hand_target_xyz(stage2_hand_z)
+    try:
+        waypoint_status["stage2_descend"] = _go_to_pose(
+            stage2_target_pos, canonical_down_quat_w, open_target, "stage2_descend",
+            max_steps=_MAX_STEPS_DESCEND, require_rot=True, pos_tol=_GRASP_POS_TOL,
+        )
+    except _StageTimeoutError as e:
+        # Fallback (Principal's dispatch: "if a tighter tol alone can't
+        # converge (oscillation floor), add a brief XY-only refine
+        # sub-stage at grasp height"). Re-targets using the CURRENT live
+        # hand z (freezing z, which should already be close from the main
+        # descent above) so the SAME bounded relative-step mechanism has
+        # ~nothing left to correct in z and effectively concentrates its
+        # per-step budget on xy - no new control mechanism, just a
+        # differently-shaped target.
+        print(
+            f"[GATE G] stage2_descend did not converge at pos_tol={_GRASP_POS_TOL * 1000:.1f}mm - "
+            f"attempting XY-only refine sub-stage (fallback): {e}"
+        )
+        live_z = float(robot.data.body_pos_w[0, hand_body_id, 2].cpu().numpy())
+        stage2_target_pos = _hand_target_xyz(live_z)
+        waypoint_status["stage2_descend_xy_refine"] = _go_to_pose(
+            stage2_target_pos, canonical_down_quat_w, open_target, "stage2_descend_xy_refine",
+            max_steps=_MAX_STEPS_REFINE, require_rot=True, pos_tol=_GRASP_POS_TOL,
+        )
+    _print_live_hand_orientation("stage2_descend (grasp height, before close)")
+
+    # Stage 3: close gripper, dwell.
+    _hold(stage2_target_pos, canonical_down_quat_w, close_target, "stage3_close_gripper", _GRIPPER_CLOSE_HOLD_STEPS)
+    _print_live_hand_orientation("stage3_after_close")
+
+    # Stage 4: vertical lift.
+    stage4_target_pos = _hand_target_xyz(stage4_hand_z)
+    waypoint_status["stage4_lift"] = _go_to_pose(
+        stage4_target_pos, canonical_down_quat_w, close_target, "stage4_lift",
+        max_steps=_MAX_STEPS_LIFT, require_rot=True,
+    )
+    _print_live_hand_orientation("stage4_lift")
 
     return waypoint_status
 
@@ -846,10 +1148,29 @@ def run_gate_g() -> None:
         f"(gt={gt_pos.tolist()}, det={det_pos.tolist()})"
     )
 
-    half_height_m = _die_half_height_m(choice)
+    half_height_m = _die_half_height_m(choice)  # diagnostic only now, see _DIE_REST_HEIGHT_M's comment
+    grasp_height_m = _die_grasp_height_m(choice)  # the value actually used for grasp math
+    print(
+        f"[GATE G] grasp height for '{choice}': half_height(manifest size_mm/2, DIAGNOSTIC ONLY)="
+        f"{half_height_m * 1000:.1f}mm grasp_height(MEASURED resting height, actually used)="
+        f"{grasp_height_m * 1000:.1f}mm"
+    )
     target_xy = (det_x, det_y)
 
-    waypoint_status = run_pick_sequence(sim, scene, target_xy, half_height_m, choice)
+    # A stage timeout is a "fail loudly" signal (see _StageTimeoutError /
+    # _go_to_pose), not a script crash: catch it here so the run still
+    # produces a post-lift frame + verdict json (which will naturally show
+    # FAIL via the GT z-gain check, with the real diagnostic - live hand
+    # pos/orientation + commanded target - preserved in
+    # `pick_sequence_error` for the report) and the sim still tears down
+    # cleanly via __main__'s try/finally.
+    pick_sequence_error = None
+    try:
+        waypoint_status = run_pick_sequence(sim, scene, target_xy, grasp_height_m, choice)
+    except _StageTimeoutError as e:
+        pick_sequence_error = str(e)
+        waypoint_status = {"error": pick_sequence_error}
+        print(f"[GATE G] *** pick sequence FAILED for choice={choice}: stage timeout - {pick_sequence_error} ***")
 
     # Post-lift camera capture (RTX convergence frames, same pattern as
     # spawn_scene_and_settle's own capture).
@@ -902,7 +1223,9 @@ def run_gate_g() -> None:
         "detector_vs_gt_xy_error_m": xy_err,
         "detector_vs_gt_full_error_m": full_err,
         "half_height_m": half_height_m,
+        "grasp_height_m": grasp_height_m,
         "waypoint_status": waypoint_status,
+        "pick_sequence_error": pick_sequence_error,
         "verdict_table": verdict_table,
         "gate_g_pass": bool(all_ok),
     }

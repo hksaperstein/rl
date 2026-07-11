@@ -218,6 +218,11 @@ _MAX_STEPS_JOINT_PREP = 200  # stage 0 budget - open-loop, not convergence-gated
 _GRIPPER_CLOSE_HOLD_STEPS = 90  # fixed-duration hold while the gripper closes (~1.5s)
 _LIFT_SUCCESS_GAIN = 0.15  # m, commanded die must gain at least this much z to count as lifted
 _OTHER_DIE_MAX_Z = 0.05  # m, every OTHER die must stay below this z (not disturbed)
+_OTHER_DIE_MIN_Z = -0.02  # m, plausible on-table lower bound - below this means knocked off the
+# table onto the ground plane (z=-1.05), not merely settled/jostled in place.
+_OTHER_DIE_MAX_XY_DRIFT = 0.05  # m, every OTHER die's xy displacement from its settled position
+# must stay under this - a z-only/upper-bound-only check alone would silently pass a die swept
+# sideways without ever crossing _OTHER_DIE_MAX_Z (final whole-branch review finding 1).
 
 # Gate V (demo video) tuning. Reuses Gate G's flow wholesale (spawn/settle ->
 # detector subprocess -> target select -> run_pick_sequence -> GT verdict)
@@ -648,8 +653,21 @@ def run_detector_subprocess(out_dir: str) -> dict:
     mismatch on `import re`, reproduced and confirmed fixed offline before
     this - see this task's report). Strip PYTHONPATH/PYTHONHOME so
     vision/.venv/bin/python runs standalone, exactly as it would from a
-    fresh shell."""
-    cmd = [VISION_VENV_PYTHON, DETECT_SCRIPT, "--input-dir", out_dir, "--output-dir", out_dir]
+    fresh shell.
+
+    Scene-contract plumbing (final whole-branch review finding 2): forwards
+    THIS demo's own _REGION_X/_REGION_Y and DIE_TYPES to the detector's
+    --x-min/--x-max/--y-min/--y-max/--expected-classes flags, rather than
+    relying on detect_for_sim.py's own hardcoded argparse defaults/
+    EXPECTED_SCENE_CLASSES to happen to stay in sync with this file's copies
+    of the same scene contract."""
+    cmd = [
+        VISION_VENV_PYTHON, DETECT_SCRIPT,
+        "--input-dir", out_dir, "--output-dir", out_dir,
+        "--x-min", str(_REGION_X[0]), "--x-max", str(_REGION_X[1]),
+        "--y-min", str(_REGION_Y[0]), "--y-max", str(_REGION_Y[1]),
+        "--expected-classes", ",".join(DIE_TYPES),
+    ]
     print(f"[GATE G] running perception subprocess: {' '.join(cmd)}")
     clean_env = os.environ.copy()
     clean_env.pop("PYTHONPATH", None)
@@ -1146,13 +1164,65 @@ def run_pick_sequence(
     return waypoint_status
 
 
+def _compute_verdict_table(scene: InteractiveScene, results: dict, choice: str) -> tuple[list[dict], bool]:
+    """Shared post-lift GT verdict-table computation - previously duplicated
+    byte-for-byte inline in both run_gate_g and run_gate_v (final
+    whole-branch review finding 8); now a single implementation called from
+    both.
+
+    `results` is spawn_scene_and_settle's per-die dict of settled x/y/z
+    (GT, world minus env-origin frame) - GT ALLOWED HERE ONLY, this task's
+    one exception.
+
+    Target die: success requires an upward z gain of at least
+    _LIFT_SUCCESS_GAIN.
+
+    Every OTHER (non-target) die: "undisturbed" requires BOTH (a) xy
+    displacement from its settled position under _OTHER_DIE_MAX_XY_DRIFT,
+    AND (b) z still within the plausible on-table band
+    [_OTHER_DIE_MIN_Z, _OTHER_DIE_MAX_Z). The prior z-only/upper-bound-only
+    check (`z_now < _OTHER_DIE_MAX_Z` alone) would silently record ok=True
+    for a die swept sideways by the gripper, or knocked off the table
+    entirely onto the ground plane at z=-1.05 (which is still < the old
+    0.05 upper bound) - final whole-branch review finding 1."""
+    verdict_table = []
+    all_ok = True
+    for die_type in DIE_TYPES:
+        die = scene[f"die_{die_type}"]
+        pos = die.data.root_pos_w[0].cpu().numpy() - scene.env_origins[0].cpu().numpy()
+        x_now, y_now, z_now = float(pos[0]), float(pos[1]), float(pos[2])
+        x_before = results[die_type]["x"]
+        y_before = results[die_type]["y"]
+        z_before = results[die_type]["z"]
+        gain = z_now - z_before
+        xy_drift = float(np.hypot(x_now - x_before, y_now - y_before))
+        is_target = die_type == choice
+        if is_target:
+            ok = gain >= _LIFT_SUCCESS_GAIN
+        else:
+            ok = (xy_drift < _OTHER_DIE_MAX_XY_DRIFT) and (_OTHER_DIE_MIN_Z <= z_now < _OTHER_DIE_MAX_Z)
+        if not ok:
+            all_ok = False
+        verdict_table.append(
+            {
+                "die": die_type,
+                "z_before_m": z_before,
+                "z_now_m": z_now,
+                "gain_m": gain,
+                "xy_drift_m": xy_drift,
+                "is_target": is_target,
+                "ok": ok,
+            }
+        )
+    return verdict_table, all_ok
+
+
 def run_gate_g() -> None:
     choice = _normalize_choice(args_cli.choice)
     if choice not in DIE_TYPES:
         raise RuntimeError(f"Normalized choice '{choice}' is not one of the physical dice in this scene: {DIE_TYPES}")
 
     sim, scene, positions, results = spawn_scene_and_settle(GATE_G_DIR, args_cli.seed)
-    settled_z = {die_type: results[die_type]["z"] for die_type in DIE_TYPES}
 
     detection_output = run_detector_subprocess(GATE_G_DIR)
     detections = detection_output["detections"]
@@ -1219,28 +1289,18 @@ def run_gate_g() -> None:
     print(f"[GATE G] saved post-lift frame: {post_lift_path}")
 
     # Success verification - GT ALLOWED HERE ONLY (this task's one exception).
-    verdict_table = []
-    all_ok = True
-    for die_type in DIE_TYPES:
-        die = scene[f"die_{die_type}"]
-        pos = die.data.root_pos_w[0].cpu().numpy() - scene.env_origins[0].cpu().numpy()
-        z_now = float(pos[2])
-        z_before = settled_z[die_type]
-        gain = z_now - z_before
-        is_target = die_type == choice
-        ok = (gain >= _LIFT_SUCCESS_GAIN) if is_target else (z_now < _OTHER_DIE_MAX_Z)
-        if not ok:
-            all_ok = False
-        verdict_table.append(
-            {"die": die_type, "z_before_m": z_before, "z_now_m": z_now, "gain_m": gain, "is_target": is_target, "ok": ok}
-        )
+    verdict_table, all_ok = _compute_verdict_table(scene, results, choice)
 
     print(f"[GATE G] post-lift verdict table (commanded die: {choice}):")
-    print(f"{'die':<6}{'z_before(mm)':>14}{'z_now(mm)':>12}{'gain(mm)':>10}  {'target':^8}  verdict")
+    print(
+        f"{'die':<6}{'z_before(mm)':>14}{'z_now(mm)':>12}{'gain(mm)':>10}{'xy_drift(mm)':>14}  "
+        f"{'target':^8}  verdict"
+    )
     for row in verdict_table:
         print(
             f"{row['die']:<6}{row['z_before_m'] * 1000:>14.1f}{row['z_now_m'] * 1000:>12.1f}"
-            f"{row['gain_m'] * 1000:>10.1f}  {'*TARGET*' if row['is_target'] else '':^8}  "
+            f"{row['gain_m'] * 1000:>10.1f}{row['xy_drift_m'] * 1000:>14.1f}  "
+            f"{'*TARGET*' if row['is_target'] else '':^8}  "
             f"{'PASS' if row['ok'] else 'FAIL'}"
         )
 
@@ -1332,7 +1392,7 @@ def run_gate_v() -> None:
          done AFTER the run (frames are captured as raw numpy arrays during
          the run, kept out of the IK control-loop's own per-step cost).
     The GT verdict table/pass criteria are byte-for-byte the same check as
-    Gate G's own (same _LIFT_SUCCESS_GAIN/_OTHER_DIE_MAX_Z thresholds)."""
+    Gate G's own (both call the shared `_compute_verdict_table` helper)."""
     choice = _normalize_choice(args_cli.choice)
     if choice not in DIE_TYPES:
         raise RuntimeError(f"Normalized choice '{choice}' is not one of the physical dice in this scene: {DIE_TYPES}")
@@ -1340,7 +1400,6 @@ def run_gate_v() -> None:
     os.makedirs(GATE_V_DIR, exist_ok=True)
 
     sim, scene, positions, results = spawn_scene_and_settle(GATE_V_DIR, args_cli.seed)
-    settled_z = {die_type: results[die_type]["z"] for die_type in DIE_TYPES}
 
     detection_output = run_detector_subprocess(GATE_V_DIR)
     detections = detection_output["detections"]
@@ -1438,30 +1497,20 @@ def run_gate_v() -> None:
     print(f"[GATE V] saved post-lift frame: {post_lift_path}")
 
     # Success verification - GT ALLOWED HERE ONLY, byte-for-byte the same
-    # check as Gate G's (same thresholds/logic) so Gate V's pass/fail must
-    # match Gate G's per the brief.
-    verdict_table = []
-    all_ok = True
-    for die_type in DIE_TYPES:
-        die = scene[f"die_{die_type}"]
-        pos = die.data.root_pos_w[0].cpu().numpy() - scene.env_origins[0].cpu().numpy()
-        z_now = float(pos[2])
-        z_before = settled_z[die_type]
-        gain = z_now - z_before
-        is_target = die_type == choice
-        ok = (gain >= _LIFT_SUCCESS_GAIN) if is_target else (z_now < _OTHER_DIE_MAX_Z)
-        if not ok:
-            all_ok = False
-        verdict_table.append(
-            {"die": die_type, "z_before_m": z_before, "z_now_m": z_now, "gain_m": gain, "is_target": is_target, "ok": ok}
-        )
+    # check as Gate G's (same shared helper/thresholds/logic) so Gate V's
+    # pass/fail must match Gate G's per the brief.
+    verdict_table, all_ok = _compute_verdict_table(scene, results, choice)
 
     print(f"[GATE V] post-lift verdict table (commanded die: {choice}):")
-    print(f"{'die':<6}{'z_before(mm)':>14}{'z_now(mm)':>12}{'gain(mm)':>10}  {'target':^8}  verdict")
+    print(
+        f"{'die':<6}{'z_before(mm)':>14}{'z_now(mm)':>12}{'gain(mm)':>10}{'xy_drift(mm)':>14}  "
+        f"{'target':^8}  verdict"
+    )
     for row in verdict_table:
         print(
             f"{row['die']:<6}{row['z_before_m'] * 1000:>14.1f}{row['z_now_m'] * 1000:>12.1f}"
-            f"{row['gain_m'] * 1000:>10.1f}  {'*TARGET*' if row['is_target'] else '':^8}  "
+            f"{row['gain_m'] * 1000:>10.1f}{row['xy_drift_m'] * 1000:>14.1f}  "
+            f"{'*TARGET*' if row['is_target'] else '':^8}  "
             f"{'PASS' if row['ok'] else 'FAIL'}"
         )
     print(f"[GATE V] {choice}: {'PASS' if all_ok else 'FAIL'} (waypoints={waypoint_status})")

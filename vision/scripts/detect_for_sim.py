@@ -1132,11 +1132,17 @@ def main() -> None:
     parser.add_argument("--colocation-tol-m", type=float, default=0.02,
                          help="Scene-contract recovery: world-space distance (m) below which two expected "
                               "classes' resolved detections are treated as the same physical die (default: 0.02)")
+    parser.add_argument("--expected-classes", type=str, default=",".join(EXPECTED_SCENE_CLASSES),
+                         help="Comma-separated scene-contract expected classes - the caller's own scene "
+                              f"contract, forwarded rather than relying on this default (default: "
+                              f"{','.join(EXPECTED_SCENE_CLASSES)})")
     args = parser.parse_args()
     region_bounds = ((args.x_min, args.x_max), (args.y_min, args.y_max))
+    expected_classes = tuple(c.strip() for c in args.expected_classes.split(",") if c.strip())
     run_gate_p(args.input_dir, args.output_dir, conf=args.conf, weights=args.weights,
                region_bounds=region_bounds, table_z=args.table_z,
                z_min=args.z_min, z_max=args.z_max,
+               expected_classes=expected_classes,
                enable_scene_contract_recovery=not args.no_scene_contract_recovery,
                colocation_tol_m=args.colocation_tol_m)
 

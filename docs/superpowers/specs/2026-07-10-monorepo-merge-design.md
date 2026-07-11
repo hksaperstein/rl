@@ -26,9 +26,10 @@ training/evaluation, and ONNX+manifest export.
    `/home/saps/IsaacLab/isaaclab.sh -p` under the flock lock, unchanged.
    `vision/` code must never import Isaac Lab; `rl`-side code must never
    import `vision/.venv` packages. The GPU is still singular: vision
-   training/eval jobs count as GPU jobs and must not run concurrently with
-   Isaac Sim work (use the same `/tmp/rl_isaac_sim.lock` flock for vision
-   GPU jobs).
+   training/eval jobs count as GPU jobs and should not run concurrently
+   with Isaac Sim work. (Amended 2026-07-10, user decision: vision jobs
+   are NOT required to take the `/tmp/rl_isaac_sim.lock` flock — sequence
+   by judgment. The lock convention remains for Isaac-Sim-touching work.)
 2. **Branch topology.** The subtree lands on `main` (infrastructure, not
    Franka work), then `main` is merged forward into `franka-panda-pivot` so
    the active branch sees `vision/` too. Paths are disjoint except the root

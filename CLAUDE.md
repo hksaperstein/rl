@@ -238,6 +238,9 @@ training/eval, ONNX+manifest export. See
   `/home/saps/IsaacLab/isaaclab.sh -p` under the flock lock, exactly as
   documented above.
 
-**One GPU, shared:** vision training/eval jobs are GPU jobs — wrap them in
-the same `flock /tmp/rl_isaac_sim.lock -c "..."` so they serialize with
-Isaac Sim work.
+**One GPU, shared — no lock requirement for vision jobs** (user decision
+2026-07-10, reversing the initial merge-day rule): vision training/eval
+jobs do NOT need the flock lock. The `/tmp/rl_isaac_sim.lock` convention
+still applies to Isaac-Sim-touching work (see Environment conventions
+above); just be aware a vision GPU job and Isaac Sim can now contend if
+launched simultaneously — sequence them by judgment, not by lock.

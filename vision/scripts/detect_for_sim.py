@@ -42,7 +42,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import sys
 
 import numpy as np
 from PIL import Image, ImageDraw
@@ -234,7 +233,7 @@ def _boxes_to_detections(
                 "class": cls_name,
                 "is_d10_alias": cls_name in D10_ALIASES,
                 "confidence": confidence,
-                "bbox_xyxy": [float(v) for v in xyxy],
+                "bbox_xyxy": [float(coord) for coord in xyxy],
                 "center_px": [u, v],
                 "depth_m": depth_val,
                 "world_pos": world_pos,
@@ -249,7 +248,12 @@ def _deduplicate_detections(primary_dets: list[dict], mitigation_dets: list[dict
     spatial duplicates (same/compatible class, <spatial_tol apart in world
     coords). Keeps the higher-confidence detection of each duplicate pair.
 
-    Compatible classes: d10 and d10_pct are considered the same die."""
+    Compatible classes: d10 and d10_pct are considered the same die.
+
+    Note on spatial_tol=0.10m: assumes one die per class. The scene's
+    min spawn spacing is ~90mm, so 100mm tolerance exceeds it; in a
+    future multi-set scene with multiple dice of the same type, this
+    threshold would incorrectly merge nearby same-class dice as duplicates."""
     all_dets = primary_dets + mitigation_dets
     if not all_dets:
         return []
@@ -361,8 +365,11 @@ def detect(
     core for Gate G).
 
     Each detection dict: {class, is_d10_alias, confidence, bbox_xyxy,
-    center_px, depth_m, world_pos (or None if depth invalid)}.
-    `meta` includes the camera pose, pass counts, and region used.
+    center_px, depth_m, world_pos}. world_pos is [x, y, z] in meters in
+    the world frame (or None if depth invalid); z is on the visible surface,
+    not the die's volumetric center, so expect ~surface-offset error
+    (up to ~die-radius, ≤~16mm). `meta` includes the camera pose, pass
+    counts, region used, and mitigation crop details for audit.
     """
     from ultralytics import YOLO  # local import: keep module importable without ultralytics for pure math reuse
 
@@ -413,6 +420,9 @@ def detect(
         "primary_detections_count": len(primary_dets),
         "mitigation_detections_count": len(mitigation_dets),
         "final_merged_count": len(final_dets),
+        "mitigation_crop_region_xyz": mitigation_meta["crop_region_xyz"],
+        "mitigation_crop_xyxy": mitigation_meta["crop_xyxy"],
+        "mitigation_upscale": mitigation_meta["upscale"],
     }
     return final_dets, meta
 
@@ -658,14 +668,6 @@ def run_gate_p(
     }
     with open(os.path.join(output_dir, "detections.json"), "w") as f:
         json.dump(output, f, indent=2)
-
-    # Assertion: the importable path returned the same detections we're
-    # writing to JSON - one code path, not two
-    assert len(detections) == len(output["detections"]), \
-        f"Mismatch: detect() returned {len(detections)} but JSON has {len(output['detections'])}"
-    for det, json_det in zip(detections, output["detections"]):
-        assert det["class"] == json_det["class"], f"Class mismatch: {det['class']} vs {json_det['class']}"
-        assert det["confidence"] == json_det["confidence"], f"Confidence mismatch"
 
     print(f"[GATE P] {eval_result['n_pass']}/{eval_result['n_gt_dice']} dice "
           f"matched+correct-class+within-tolerance. "

@@ -2633,3 +2633,17 @@ Isaac-Lab-based robotics RL, expanding beyond AR4 manipulation into other
 tasks/robots, object detection/perception, and mobility. No committed
 roadmap items beyond AR4 yet — this is a stated direction, not a scoped
 backlog.
+
+## Vision platform (`vision/`, merged 2026-07-10)
+
+The former Dice-Detection repo is now the `vision/` subtree (monorepo
+merge, full history — see
+`docs/superpowers/specs/2026-07-10-monorepo-merge-design.md`): Blender
+synthetic-data generation, dataset plumbing, perception-model training/
+eval, ONNX+manifest export. First completed study (dice-detector-v1,
+`vision/docs/results/2026-07-dice-detector-v1/summary.md`): synthetic-only
+YOLO11s transfers to real photos for d12/d20 but collapses on d8/d10 via a
+systematic up-the-shape-ladder confusion — hypothesized apparent-size-as-
+class-cue confound; five datagen-v2 recommendations recorded there. The
+exported `vision/models/export/<variant>/manifest.json` is the deployment
+interface a future robot-camera perception stack consumes.

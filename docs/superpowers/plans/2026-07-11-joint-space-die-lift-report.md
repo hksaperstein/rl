@@ -126,5 +126,7 @@ investigated further per the spec's STOP-after-fallback rule): die size
 (~2cm vs DexCube's much larger pinch target), near-spherical convex-hull
 geometry (rolls when poked; low pinch stability), baked mass 0.01kg,
 friction/material of the baked asset, spawn scale 0.001 pipeline.
-(Joint-cube eval video pending as final confirmation; scalars already
-decisive.)
+Joint-cube eval confirmed (2026-07-12, later same morning): **8/8 envs
+sustained lift** (instrumented, `heights_joint-cube_model_1499.json`),
+video shows the cube held at the commanded air goals
+(controller-inspected frames). Both rungs' evidence complete.

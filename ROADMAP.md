@@ -2688,3 +2688,26 @@ validation; Phase P detector on Isaac renders + deprojection; Phase I
 (still open, gated on RL lift progress): detection-derived state in a
 trained *policy* (this demo is a scripted controller, not RL), then
 shape-generalized *learned* grasping across die types (d4 last).
+
+**RL joint-space die-lift (2026-07-12, `franka-panda-pivot`): FALSIFIED
+for the d20 — failure isolated to the die ASSET, recipe itself works.**
+Experiment (spec `docs/superpowers/specs/2026-07-11-joint-space-die-lift-design.md`,
+report `docs/superpowers/plans/2026-07-11-joint-space-die-lift-report.md`):
+swap Isaac Lab's validated Franka lift recipe to direct joint-position
+actions (no IK, the exact `joint_pos` variant values) and the
+physics-baked d20 die. Full 1500-iteration run: value loss bounded but
+`position_error` never beat the do-nothing baseline (0.331 vs 0.216) and
+`lifting_object` sat on its spawn-artifact floor all run; eval video +
+instrumented heights confirm reach-then-settle, 0/8 sustained lifts. The
+spec's pre-authorized fallback (identical config, object swapped back to
+DexCube, `--variant joint-cube`) trained lift+carry decisively in the
+same 1500 iterations: `position_error` 0.105 (half of baseline),
+`lifting_object` 13.4/15, mean reward 138 vs 2. Conclusion: joint-space
+no-IK is a viable action formulation on this platform; the d20 asset is
+what fails. Untested candidate causes (deliberately stopped per the
+spec's no-unauthorized-iteration rule): ~2cm die size vs DexCube's much
+larger pinch target, near-spherical rolling geometry, baked 0.01kg mass,
+friction/material, 0.001 spawn-scale pipeline. Next experiment (needs
+its own spec + research grounding): bisect the asset gap — e.g. train
+joint-cube-config against a DexCube-SIZED die, or the die at DexCube
+scale, to separate size from shape from mass.

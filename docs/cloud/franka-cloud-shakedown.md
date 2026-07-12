@@ -1,15 +1,61 @@
 # Franka cloud training shakedown — recipe (BLOCKED, not yet run)
 
-Status as of 2026-07-12: this recipe has **not been executed end-to-end**.
-The first live attempt (`franka-panda-pivot` branch, cloud-shakedown task)
-was blocked at instance creation by a billing-account-level restriction,
-before any GPU quota, image-boot, or Isaac-install step could be tested.
-See `.superpowers/sdd/task-cloud-shakedown-report.md` for the full report.
-This doc records the intended recipe (verified against live `gcloud`
-output + NVIDIA's official docs, where noted) so the retry doesn't have to
-re-derive it.
+Status as of 2026-07-12 (retry, same day): this recipe has **still not
+been executed end-to-end**. The first attempt was blocked at instance
+creation by a billing-account free-tier flag (see below); after the user
+upgraded billing, a retry hit a **different, new blocker**: the project's
+global `GPUS_ALL_REGIONS` quota is `0`, project-wide, independent of
+region/zone/provisioning-model. This resolves the "does SPOT bypass
+`GPUS_ALL_REGIONS=0`" question the first attempt left open: **no, it does
+not** — see the "GPU quota blocker" section below, added by the retry.
+See `.superpowers/sdd/task-cloud-shakedown-report.md` for the full report
+of both attempts. This doc records the intended recipe (verified against
+live `gcloud` output + NVIDIA's official docs, where noted) so the next
+retry, once quota is granted, doesn't have to re-derive it.
 
-## Blocker: billing account free-tier flag
+## Blocker (retry, current): global `GPUS_ALL_REGIONS` quota is 0
+
+```
+gcloud compute project-info describe --format="json(quotas)" | grep -A2 GPUS_ALL_REGIONS
+{'limit': 0.0, 'metric': 'GPUS_ALL_REGIONS', 'usage': 0.0}
+```
+
+This is a **project-wide cap independent of the per-region
+`NVIDIA_L4_GPUS` quota** (which is already `1.0` in `us-central1` — that
+regional quota alone is not sufficient; the global cap is evaluated too
+and is stricter at `0`). Confirmed empirically across ~20
+`instances create` attempts (SPOT, `g2-standard-4`, 1x `nvidia-l4`) spread
+across `us-central1-a/b/c`, `us-east1-b/c/d`, `us-east4-a/c`,
+`us-west1-a/b/c`, `us-west4-a/c`: every zone that had actual SPOT capacity
+available returned the quota error below; zones with no capacity returned
+`ZONE_RESOURCE_POOL_EXHAUSTED` (stockout) instead, before the quota check
+was ever reached — that stockout-vs-quota split is *why* the error looked
+inconsistent across zones at first, not evidence the quota is
+inconsistently enforced.
+
+```
+ERROR: (gcloud.compute.instances.create) Could not fetch resource:
+ - Quota 'GPUS_ALL_REGIONS' exceeded.  Limit: 0.0 globally.
+	metric name = compute.googleapis.com/gpus_all_regions
+	limit name = GPUS-ALL-REGIONS-per-project
+	limit = 0.0
+	dimensions = global: global
+Try your request in another zone, or view documentation on how to increase quotas: https://cloud.google.com/compute/quotas.
+```
+
+**Unblock path**: request a `GPUS_ALL_REGIONS` quota increase (1 is
+enough) via the Cloud Console —
+https://console.cloud.google.com/iam-admin/quotas?project=rl-manipulation-hks
+— filter to `GPUS_ALL_REGIONS`, Compute Engine API. No `gcloud` CLI/API
+path submits this from a non-interactive session; it's a Console-UI
+action, same shape as the billing-tier upgrade below. Once granted,
+re-run the instance-create command below verbatim (try
+`us-central1-a/b/c` first per the original plan; if all three are
+stockout-exhausted, the zones already surveyed above
+(`us-east1-b/c`, `us-west1-a/b/c`, `us-west4-c`) are confirmed to have had
+capacity as of this retry and are reasonable fallbacks).
+
+## Blocker (first attempt, resolved): billing account free-tier flag
 
 ```
 gcloud compute instances create ... \
@@ -156,8 +202,10 @@ gcloud compute instances delete rl-franka-shakedown --zone=us-central1-a --quiet
 
 ## Next step
 
-Once the user completes the Cloud Console billing upgrade
-(https://cloud.google.com/free/docs/gcp-free-tier#how-to-upgrade), re-run
-the instance-creation command above verbatim as the first retry step —
-that single command will also finally answer the spot-vs-`GPUS_ALL_
-REGIONS` empirical question this task set out to test.
+The billing-tier blocker is resolved (confirmed by this retry). The
+spot-vs-`GPUS_ALL_REGIONS` empirical question is also now answered: SPOT
+does not bypass it. The remaining blocker is the project's global
+`GPUS_ALL_REGIONS=0` quota — see that section above for the exact Console
+URL to request an increase. Once granted, re-run the instance-creation
+command above verbatim as the next retry step; no further blockers are
+currently known.

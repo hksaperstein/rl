@@ -209,3 +209,19 @@ does not bypass it. The remaining blocker is the project's global
 URL to request an increase. Once granted, re-run the instance-creation
 command above verbatim as the next retry step; no further blockers are
 currently known.
+
+## Quota state (2026-07-12 night, controller update)
+
+Empirical (retry attempt, ~20 creates across 11 zones): **SPOT does NOT
+bypass `GPUS_ALL_REGIONS`** — every zone with real capacity rejected on
+the global quota; stockout zones failed earlier on
+ZONE_RESOURCE_POOL_EXHAUSTED, which made errors look inconsistent but
+is just check ordering.
+
+The original 0→4 requests (all three, filed via Cloud Quotas API
+~21:33Z) were **denied** — the classic zero-history/new-paid-account
+pattern. Re-filed `GPUS-ALL-REGIONS-per-project` at the minimum
+(preferred=1, matching the already-granted regional L4 quota of 1) at
+~04:1xZ; reconciling. If denied again: Console quota page + a support
+case are the escalation path, and a few days of billing history
+(non-GPU usage counts) materially improves approval odds.

@@ -42,12 +42,14 @@ parser.add_argument("--video_length", type=int, default=200, help="Length of eac
 parser.add_argument("--video_interval", type=int, default=2000, help="Steps between recorded videos.")
 parser.add_argument(
     "--variant",
-    choices=["ik-cube", "joint-die"],
+    choices=["ik-cube", "joint-die", "joint-cube"],
     default="ik-cube",
     help=(
         "ik-cube: the existing stock-recipe cube-lift with relative-IK actions (default, unchanged). "
         "joint-die: d20-die lift with direct joint-position actions (no IK) - see "
-        "docs/superpowers/specs/2026-07-11-joint-space-die-lift-design.md."
+        "docs/superpowers/specs/2026-07-11-joint-space-die-lift-design.md. "
+        "joint-cube: the spec's fallback rung - joint-position actions with the recipe's own DexCube "
+        "(asset-vs-recipe isolation)."
     ),
 )
 
@@ -89,6 +91,10 @@ def main() -> None:
         from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftJointEnvCfg
 
         env_cfg = FrankaDieLiftJointEnvCfg()
+    elif args_cli.variant == "joint-cube":
+        from tasks.franka.dice_lift_joint_env_cfg import FrankaCubeLiftJointEnvCfg
+
+        env_cfg = FrankaCubeLiftJointEnvCfg()
     else:
         env_cfg = FrankaLiftEnvCfg()
     env_cfg.scene.num_envs = args_cli.num_envs
@@ -101,8 +107,9 @@ def main() -> None:
 
     env_cfg.seed = agent_cfg.seed
 
+    _log_suffix = {"ik-cube": "", "joint-die": "_jointdie", "joint-cube": "_jointcube"}[args_cli.variant]
     log_dir = os.path.join(
-        LOG_ROOT if args_cli.variant == "ik-cube" else LOG_ROOT + "_jointdie",
+        LOG_ROOT + _log_suffix,
         datetime.now().strftime("%Y-%m-%d_%H-%M-%S"),
     )
     os.makedirs(log_dir, exist_ok=True)

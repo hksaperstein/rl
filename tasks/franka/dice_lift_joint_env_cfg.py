@@ -83,3 +83,32 @@ class FrankaDieLiftJointEnvCfg_PLAY(FrankaDieLiftJointEnvCfg):
         self.scene.num_envs = 50
         self.scene.env_spacing = 2.5
         self.observations.policy.enable_corruption = False
+
+
+@configclass
+class FrankaCubeLiftJointEnvCfg(FrankaLiftEnvCfg):
+    """Fallback rung (spec's verdict protocol, fired 2026-07-12 after the
+    d20 run FAILED the position_error criterion): joint-space arm action
+    with the recipe's own DexCube kept as the object, to isolate
+    asset-vs-recipe. Applies ONLY the die variant's Variable 1 (identical
+    JointPositionActionCfg values); the object is inherited byte-identical
+    from FrankaLiftEnvCfg rather than swapped back, so the only diff vs
+    the validated ik-cube baseline is the action space, and the only diff
+    vs FrankaDieLiftJointEnvCfg is the object."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.actions.arm_action = mdp.JointPositionActionCfg(
+            asset_name="robot", joint_names=["panda_joint.*"], scale=0.5, use_default_offset=True
+        )
+
+
+@configclass
+class FrankaCubeLiftJointEnvCfg_PLAY(FrankaCubeLiftJointEnvCfg):
+    """Smaller, non-corrupted-observation variant for eval/play."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.scene.num_envs = 50
+        self.scene.env_spacing = 2.5
+        self.observations.policy.enable_corruption = False

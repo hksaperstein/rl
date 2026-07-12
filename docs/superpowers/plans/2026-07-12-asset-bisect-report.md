@@ -34,7 +34,9 @@ error BETTER than the DexCube reference run's own 0.105. Under the
 spec's 2/3 rule this rung formally fails, but the split is the finding:
 
 - **Size is load-bearing**: 30.3mm → deterministic failure (identical
-  curves, 6/6 runs across rungs 0-1); 48mm → grasp discovery is possible
+  curves, 0/4 full 1500-iter runs: the rung-0 original seed-42 run plus
+  rung 1's three seeds; smoke/diagnostic runs excluded per this
+  experiment's own full-run evidence standard); 48mm → grasp discovery is possible
   but unreliable (1/3). The task crossed from "unlearnable" to "edge of
   discoverability."
 - **The baked asset is NOT physically broken**: a learned policy handles
@@ -44,7 +46,9 @@ spec's 2/3 rule this rung formally fails, but the split is the finding:
   on the cube side and conflates shape with provenance → rung 3.
 
 Runs: `logs/train_franka_jointdiebig/` 2026-07-12_14-34-24 (s42) /
-15-07-49 (s123) / 15-41-15 (s7). Seed-123 eval + video: see below.
+15-07-49 (s123) / 15-41-15 (s7). Seed-123 eval: 8/8 envs sustained
+lift (instrumented heights), whole-arm video controller-inspected and
+delivered to user — first learned die lift on the platform.
 
 ## Rung 3 — shape (bake-pipeline cube @ 48mm, 0.216kg): in progress
 
@@ -78,8 +82,10 @@ Runs: `logs/train_franka_jointcubebaked/` 2026-07-12_16-58-29 (s42) /
 
 At identical 48mm size, 0.216kg mass, and same bake pipeline:
 **cube 3/3 reliable vs d20 1/3** — SHAPE is the reliability gate for
-grasp discovery. SIZE modulates severity: the same d20 at 30.3mm is
-0/6 across rungs 0-1 (deterministic failure, near-identical curves).
+grasp discovery (on n=3 seeds per rung — directionally clear, not an
+infinite-sample certainty). SIZE modulates severity: the same d20 at 30.3mm is
+0/4 across all full runs (rung-0 original + rung-1's three seeds;
+deterministic failure, near-identical curves).
 MASS is ruled out (0/3 at 21.6x). PIPELINE PROVENANCE is exonerated —
 rung 3's cube is our own pipeline's output and trains as reliably as
 NVIDIA's DexCube reference (3/3 vs 1/1), so rung 4 is unnecessary

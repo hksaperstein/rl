@@ -2719,7 +2719,7 @@ provenance — citation review + spec/plan underway.
 discovery.** Full protocol + numbers in
 `docs/superpowers/plans/2026-07-12-asset-bisect-report.md`. At identical
 48mm/0.216kg/same-pipeline: our baked cube trains 3/3 seeds, the d20
-1/3; at 30.3mm the d20 is 0/6 (deterministic). Mass ruled out (0/3 at
+1/3; at 30.3mm the d20 is 0/4 across full runs (deterministic). Mass ruled out (0/3 at
 21.6x); our bake pipeline exonerated (its cube = DexCube-grade
 reliability). First-ever learned die lift achieved en route (rung-2
 seed 123, video delivered). Gotcha for all future baked assets:

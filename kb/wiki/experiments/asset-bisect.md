@@ -26,14 +26,15 @@ baseline.
 
 ## Conclusions
 
-- **Shape is the reliability gate**: at identical size/mass/pipeline,
-  flat-faced cube 3/3 vs rounded d20 1/3. Mechanism: flat parallel
+- **Shape is the reliability gate** (on n=3 seeds per rung): at
+  identical size/mass/pipeline, flat-faced cube 3/3 vs rounded d20 1/3. Mechanism: flat parallel
   faces give random exploration a wide antipodal-grasp basin (clumsy
   contact is occasionally rewarding); a near-sphere rolls away from
   clumsy contact — grasp-affordance scarcity expressed as an RL
   exploration failure.
-- **Size modulates severity**: the d20 at 30.3mm is 0/6 across all runs
-  (deterministic, near-identical curves); at 48mm it's a 1/3 coin flip.
+- **Size modulates severity**: the d20 at 30.3mm is 0/4 across all
+  full 1500-iter runs (rung-0 original + rung 1's three seeds;
+  deterministic, near-identical curves); at 48mm it's 1/3.
 - **Mass ruled out** (rung 1) — falsifying the PhysX
   light-object-impulse hypothesis for this failure.
 - **Bake pipeline exonerated**: its cube trains at DexCube-grade

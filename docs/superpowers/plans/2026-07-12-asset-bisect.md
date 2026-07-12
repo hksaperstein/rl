@@ -268,11 +268,17 @@ runs.** The controller decides: rung PASS → Task 3; rung FAIL → rung 2
 - [ ] **Step 1: Eval on the strongest seed's final checkpoint**
 
 ```bash
-flock -o /tmp/rl_isaac_sim.lock -c "PYTHONUNBUFFERED=1 DISPLAY=:1 /home/saps/IsaacLab/isaaclab.sh -p scripts/franka_checkpoint_review.py --variant joint-die-heavy --checkpoint logs/train_franka_jointdieheavy/<ts>/model_1499.pt --num_envs 8 2>&1 | tee /tmp/heavy_eval.log"
+flock -o /tmp/rl_isaac_sim.lock -c "PYTHONUNBUFFERED=1 DISPLAY=:1 /home/saps/IsaacLab/isaaclab.sh -p scripts/franka_checkpoint_review.py --variant joint-die-heavy --checkpoint logs/train_franka_jointdieheavy/<ts>/model_1499.pt --num_envs 8 --video_length 500 2>&1 | tee /tmp/heavy_eval.log"
 ```
-Expected artifacts: whole-arm-framed mp4 + `heights_*.json/npy` with
-sustained-lift counts. The CONTROLLER inspects the video and makes the
-verdict call (implementer reports numbers + paths only).
+VIDEO RULE (standing user instruction, strengthened 2026-07-12): the
+frame must include the FULL arm AND the table, and the recording must
+run LONGER than the event — `--video_length 500` (2 full episodes) so
+every lift event has lead-in and aftermath on film; never a clip that
+ends at the key moment.
+Expected artifacts: whole-arm+table-framed mp4 (500 steps) +
+`heights_*.json/npy` with sustained-lift counts. The CONTROLLER inspects
+the video and makes the verdict call (implementer reports numbers +
+paths only).
 
 - [ ] **Step 2: Write the report** (`docs/superpowers/plans/2026-07-12-asset-bisect-report.md`):
 hypothesis verdict, per-seed numbers, eval instrumentation, video

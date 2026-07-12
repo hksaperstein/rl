@@ -51,7 +51,13 @@ parser = argparse.ArgumentParser(description="Record video of a trained Franka P
 parser.add_argument("--checkpoint", type=str, required=True, help="Path to the rsl_rl checkpoint (.pt) to load.")
 parser.add_argument("--num_envs", type=int, default=8, help="Number of parallel envs to render in the video.")
 parser.add_argument(
-    "--video_length", type=int, default=250, help="Video length in steps (default: one full episode, 5s @ 50Hz)."
+    "--video_length",
+    type=int,
+    default=500,
+    help=(
+        "Video length in steps (default: two full episodes, 10s @ 50Hz - standing user rule 2026-07-12: "
+        "eval videos must run LONGER than the event they document, with lead-in and aftermath on film)."
+    ),
 )
 parser.add_argument(
     "--output_dir",

@@ -2705,9 +2705,12 @@ same 1500 iterations: `position_error` 0.105 (half of baseline),
 `lifting_object` 13.4/15, mean reward 138 vs 2. Conclusion: joint-space
 no-IK is a viable action formulation on this platform; the d20 asset is
 what fails. Untested candidate causes (deliberately stopped per the
-spec's no-unauthorized-iteration rule): ~2cm die size vs DexCube's much
-larger pinch target, near-spherical rolling geometry, baked 0.01kg mass,
-friction/material, 0.001 spawn-scale pipeline. Next experiment (needs
-its own spec + research grounding): bisect the asset gap — e.g. train
-joint-cube-config against a DexCube-SIZED die, or the die at DexCube
-scale, to separate size from shape from mass.
+spec's no-unauthorized-iteration rule): die size (measured 2026-07-12:
+d20 30.3mm vs DexCube 48.0mm effective — only 1.6x, smaller than first
+assumed), near-spherical rolling geometry, baked 0.01kg mass (vs ~0.11kg
+default-density estimate for DexCube — ~11x gap, the largest measured
+discrepancy), friction/material, 0.001 spawn-scale pipeline. Next
+experiment (asset-bisect, spec in progress 2026-07-12): research pass
+recommends mass-first (PhysX depenetration-impulse mechanism on light
+objects under multi-finger contact), then size, then shape, then
+provenance — citation review + spec/plan underway.

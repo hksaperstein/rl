@@ -44,8 +44,10 @@ Value loss bounded in all runs (no Experiment-11-style divergence).
 - **The joint-space no-IK action formulation works on this platform** —
   it trains lift+carry on the DexCube decisively within 1500 iterations.
 - **The d20 asset is what fails.** Candidate causes, deliberately left
-  untested per the spec's stop-after-fallback rule: ~2cm die size vs the
-  DexCube's much larger pinch target; near-spherical rolling geometry;
+  untested per the spec's stop-after-fallback rule: die size — MEASURED
+  2026-07-12 (scripts/_diag_dexcube_scale_check.py): d20 30.3mm vs
+  DexCube 48.0mm effective, only a 1.6x gap, much smaller than the "~2cm
+  vs much larger" first assumed; near-spherical rolling geometry;
   baked 0.01kg mass; friction/material of the baked asset; the 0.001
   spawn-scale pipeline.
 - Echo of the AR4 lesson ([[franka-panda-pivot]]): what presents as an

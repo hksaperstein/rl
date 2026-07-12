@@ -123,7 +123,9 @@ to the ASSET, not the recipe.** Same config, only the object swapped
 The joint-space action recipe itself trains lift+carry decisively on the
 recipe's own DexCube. The d20-specific failure candidates (NOT
 investigated further per the spec's STOP-after-fallback rule): die size
-(~2cm vs DexCube's much larger pinch target), near-spherical convex-hull
+(measured 2026-07-12 via scripts/_diag_dexcube_scale_check.py: d20
+30.3mm vs DexCube 48.0mm effective — a 1.6x gap, smaller than first
+assumed), near-spherical convex-hull
 geometry (rolls when poked; low pinch stability), baked mass 0.01kg,
 friction/material of the baked asset, spawn scale 0.001 pipeline.
 Joint-cube eval confirmed (2026-07-12, later same morning): **8/8 envs

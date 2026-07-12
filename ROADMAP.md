@@ -2714,3 +2714,16 @@ experiment (asset-bisect, spec in progress 2026-07-12): research pass
 recommends mass-first (PhysX depenetration-impulse mechanism on light
 objects under multi-finger contact), then size, then shape, then
 provenance — citation review + spec/plan underway.
+
+**Asset-bisect ladder CONCLUDED (2026-07-12 evening): SHAPE gates grasp
+discovery.** Full protocol + numbers in
+`docs/superpowers/plans/2026-07-12-asset-bisect-report.md`. At identical
+48mm/0.216kg/same-pipeline: our baked cube trains 3/3 seeds, the d20
+1/3; at 30.3mm the d20 is 0/6 (deterministic). Mass ruled out (0/3 at
+21.6x); our bake pipeline exonerated (its cube = DexCube-grade
+reliability). First-ever learned die lift achieved en route (rung-2
+seed 123, video delivered). Gotcha for all future baked assets:
+Xform-root/Mesh-child structure required (bare-Mesh default prim
+silently loses PhysX collision). Next experiment (needs spec): object
+curriculum — train where discovery is reliable, anneal toward the 30mm
+d20.

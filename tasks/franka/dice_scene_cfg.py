@@ -131,6 +131,21 @@ def _die_cfg(die_type: str, init_pos: tuple[float, float, float]) -> RigidObject
 DICE_CAMERA_POS = (0.5, -0.35353319, 0.45132444)
 DICE_CAMERA_QUAT_WORLD = (0.64085638, -0.29883624, 0.29883624, 0.64085638)
 
+# Second, separate camera (2026-07-11 colored-dice repeat task's Franka
+# material check) dedicated to a whole-arm 3/4 view - DiceCamera's own
+# framing is pinned to the detector's training distribution (tight on the
+# dice-spread region) and must NOT be reframed for this purpose (existing
+# gates depend on it staying exactly as calibrated). Position/quat solved
+# and verified the same way as DICE_CAMERA_POS/QUAT above (rotate local +X
+# by the quat, confirm it matches the analytic camera->target unit vector;
+# also checked local +Z has a strongly positive world-z component, i.e. not
+# upside down) - not hand-derived on paper only, per this repo's own history
+# of camera-convention bugs. Aimed from behind/beside the robot at roughly
+# mid-arm height so the full kinematic chain (base to gripper) is in frame
+# alongside the table for context.
+ARM_CAMERA_POS = (-0.7, -1.1, 1.1)
+ARM_CAMERA_QUAT_WORLD = (0.89534719, -0.08933933, 0.20878525, 0.38311958)
+
 
 @configclass
 class DiceSceneCfg(InteractiveSceneCfg):
@@ -183,4 +198,21 @@ class DiceSceneCfg(InteractiveSceneCfg):
             focal_length=24.0, focus_distance=400.0, horizontal_aperture=20.955, clipping_range=(0.05, 2.0)
         ),
         offset=CameraCfg.OffsetCfg(pos=DICE_CAMERA_POS, rot=DICE_CAMERA_QUAT_WORLD, convention="world"),
+    )
+
+    # Diagnostic-only whole-arm 3/4 view (2026-07-11 colored-dice repeat
+    # task's Franka material check) - see ARM_CAMERA_POS/QUAT_WORLD's comment
+    # above for why this is a SEPARATE camera from DiceCamera. Not used by
+    # any gate's pass/fail logic; captured purely for visual inspection of
+    # the robot's material appearance.
+    arm_camera: CameraCfg = CameraCfg(
+        prim_path="{ENV_REGEX_NS}/ArmCamera",
+        update_period=0.0,
+        height=480,
+        width=640,
+        data_types=["rgb"],
+        spawn=sim_utils.PinholeCameraCfg(
+            focal_length=18.0, focus_distance=400.0, horizontal_aperture=20.955, clipping_range=(0.05, 3.0)
+        ),
+        offset=CameraCfg.OffsetCfg(pos=ARM_CAMERA_POS, rot=ARM_CAMERA_QUAT_WORLD, convention="world"),
     )

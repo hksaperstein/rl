@@ -40,6 +40,19 @@ around four gates:
     flock /tmp/rl_isaac_sim.lock -c "PYTHONUNBUFFERED=1 \\
         /home/saps/IsaacLab/isaaclab.sh -p scripts/dice_pick_demo.py --gate v --choice d20 --seed 42"
 
+Colored-dice repeat (2026-07-11, see
+.superpowers/sdd/dice-demo-colored-report.md): --colored-dice runtime-applies
+each die's own manifest-derived body material (default OFF, white/near-white
+baseline unaffected) and redirects output to outputs/dice_demo/colored/
+instead of outputs/dice_demo/. --light-scale (default 1.0) independently
+scales both scene lights, for testing the render-exposure-blowout hypothesis
+(see apply_colored_material's and --light-scale's own docstrings/help for why
+the body material alone was measured to NOT be the missing piece).
+
+    flock /tmp/rl_isaac_sim.lock -c "PYTHONUNBUFFERED=1 \\
+        /home/saps/IsaacLab/isaaclab.sh -p scripts/dice_pick_demo.py --gate a --seed 42 \\
+        --colored-dice --light-scale 0.3"
+
 Never pass --headless - a display exists (DISPLAY=:1) and the user wants to
 watch (see CLAUDE.md's Environment conventions).
 """
@@ -66,6 +79,37 @@ parser.add_argument(
     help="Commanded die type (used by gates G/V, not Gate A). d100/d10_pct are aliases for d10.",
 )
 parser.add_argument("--seed", type=int, default=42, help="Seed for the randomized dice layout.")
+parser.add_argument(
+    "--colored-dice",
+    action="store_true",
+    default=False,
+    help=(
+        "Apply each die's own manifest-derived (hue/saturation/value -> RGB) UsdPreviewSurface body "
+        "material at spawn time, runtime-patched onto the die's mesh prim (see apply_colored_material). "
+        "Default OFF - the white/near-white baseline (unmodified dice USD materials, as measured pre-fix) "
+        "stays reproducible without this flag. Outputs are redirected to outputs/dice_demo/colored/ "
+        "instead of outputs/dice_demo/ when this is set, so colored-dice runs never overwrite the "
+        "white-baseline gate outputs."
+    ),
+)
+parser.add_argument(
+    "--light-scale",
+    type=float,
+    default=1.0,
+    help=(
+        "Multiplies BOTH scene lights' (DomeLight, DistantLight - tasks/franka/dice_scene_cfg.py) "
+        "intensity by this factor at spawn time. Default 1.0 (scene's authored default, unchanged). "
+        "Diagnostic/experimental knob (2026-07-11 colored-dice repeat task): the dice USDs' own body "
+        "material is measured (scripts/_diag_dice_material_check.py) to already be correctly authored "
+        "and bound (diffuseColor exactly matches colorsys.hsv_to_rgb of each die's manifest "
+        "hue/saturation/value) - the baseline's near-white rendered appearance is hypothesized to be a "
+        "render-time exposure/blowout artifact, not a missing/lost material, since dice_scene_cfg.py's "
+        "DistantLight (intensity 3000, added on top of the DomeLight already present at the same "
+        "intensity in the validated tasks/franka/lift_env_cfg.py baseline) roughly doubles that "
+        "baseline's total light energy. This flag lets one capture test that hypothesis without "
+        "permanently changing the scene's default lighting."
+    ),
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 args_cli.enable_cameras = True
@@ -78,11 +122,13 @@ simulation_app = app_launcher.app
 
 """Rest everything follows - isaaclab/pxr imports must come after AppLauncher."""
 
+import colorsys  # noqa: E402
+
 import imageio  # noqa: E402
 import numpy as np  # noqa: E402
 import torch  # noqa: E402
 from PIL import Image, ImageDraw, ImageFont  # noqa: E402
-from pxr import PhysxSchema, Usd, UsdGeom, UsdPhysics  # noqa: E402
+from pxr import PhysxSchema, Sdf, Usd, UsdGeom, UsdPhysics, UsdShade  # noqa: E402
 
 import isaaclab.sim as sim_utils  # noqa: E402
 from isaaclab.controllers import DifferentialIKController, DifferentialIKControllerCfg  # noqa: E402
@@ -108,6 +154,10 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GATE_A_DIR = os.path.join(REPO_ROOT, "outputs", "dice_demo", "gate_a")
 GATE_G_DIR = os.path.join(REPO_ROOT, "outputs", "dice_demo", "gate_g")
 GATE_V_DIR = os.path.join(REPO_ROOT, "outputs", "dice_demo", "gate_v")
+# --colored-dice redirects every gate's output dir under here instead, so a
+# colored-dice run NEVER overwrites the white-baseline gate_a/gate_g/gate_v
+# outputs above (the report needs both, side by side, for comparison).
+COLORED_ROOT_DIR = os.path.join(REPO_ROOT, "outputs", "dice_demo", "colored")
 VISION_VENV_PYTHON = os.path.join(REPO_ROOT, "vision", ".venv", "bin", "python")
 DETECT_SCRIPT = os.path.join(REPO_ROOT, "vision", "scripts", "detect_for_sim.py")
 DICE_MANIFEST_DIR = os.path.join(REPO_ROOT, "vision", "data", "raw", "dice_sets_v1")
@@ -420,12 +470,89 @@ def apply_convex_hull_collision(stage, die_prim_path: str) -> int:
     return mesh_count
 
 
-def spawn_scene_and_settle(out_dir: str, seed: int) -> tuple[sim_utils.SimulationContext, InteractiveScene, list, dict]:
+def _die_material_params(die_type: str) -> dict:
+    """Reads `material_params` (hue/saturation/value/roughness/...) from this
+    die type's own set_00000_<type>.json manifest. d10_pct maps to d10's
+    manifest (same physical die in this scene, see D10_ALIASES)."""
+    manifest_type = "d10" if die_type in D10_ALIASES else die_type
+    manifest_path = os.path.join(DICE_MANIFEST_DIR, f"set_00000_{manifest_type}.json")
+    with open(manifest_path) as f:
+        manifest = json.load(f)
+    return manifest["material_params"]
+
+
+def apply_colored_material(stage, die_prim_path: str, die_type: str) -> tuple[int, tuple[float, float, float]]:
+    """--colored-dice helper: creates a UsdPreviewSurface material from this
+    die's own manifest `material_params` (hue/saturation/value ->
+    colorsys.hsv_to_rgb for diffuseColor, roughness passed through directly)
+    and binds it to every UsdGeom.Mesh prim under `die_prim_path` (same
+    runtime-patching pattern as apply_convex_hull_collision above).
+
+    NOTE (2026-07-11 investigation, scripts/_diag_dice_material_check.py):
+    every set_00000 die USD was measured to ALREADY carry a correctly
+    authored + bound UsdPreviewSurface body material whose diffuseColor is
+    an EXACT match (to 6 decimal places) for colorsys.hsv_to_rgb of that
+    die's own manifest hue/saturation/value - material authorship was never
+    lost in the Blender->USD export. This function's practical effect is
+    therefore mostly a no-op on color (it recomputes and rebinds the same
+    RGB the source USD already has) - kept as a deliberate belt-and-suspenders
+    guarantee (works even if a future asset regenerate ever drops the body
+    material) and because binding at the mesh-prim level here does NOT
+    disturb the per-face numeral-decal materials, which are bound at a more
+    specific UsdGeomSubset level that wins USD's material-binding-strength
+    resolution for their own face indices. The actual near-white baseline
+    symptom this task investigates is a RENDER-time exposure/blowout effect
+    (see --light-scale's help text), not a missing-material one - this
+    function alone does not fix that; see the --light-scale flag.
+
+    Returns (mesh_count_bound, rgb) for the caller's own logging."""
+    params = _die_material_params(die_type)
+    hue, sat, val = float(params["hue"]), float(params["saturation"]), float(params["value"])
+    roughness = float(params["roughness"])
+    r, g, b = colorsys.hsv_to_rgb(hue, sat, val)
+
+    mat_path = f"{die_prim_path}/ColoredBodyMaterial"
+    material = UsdShade.Material.Define(stage, mat_path)
+    shader = UsdShade.Shader.Define(stage, f"{mat_path}/PreviewSurface")
+    shader.CreateIdAttr("UsdPreviewSurface")
+    shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set((r, g, b))
+    shader.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(roughness)
+    shader.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(0.0)
+    shader.CreateInput("specular", Sdf.ValueTypeNames.Float).Set(0.5)
+    shader.CreateInput("ior", Sdf.ValueTypeNames.Float).Set(1.5)
+    shader.CreateInput("opacity", Sdf.ValueTypeNames.Float).Set(1.0)
+    material.CreateSurfaceOutput().ConnectToSource(shader.ConnectableAPI(), "surface")
+
+    root_prim = stage.GetPrimAtPath(die_prim_path)
+    if not root_prim.IsValid():
+        raise RuntimeError(f"Die prim path not found on stage: {die_prim_path}")
+    mesh_count = 0
+    for prim in Usd.PrimRange(root_prim):
+        if prim.IsA(UsdGeom.Mesh):
+            UsdShade.MaterialBindingAPI.Apply(prim).Bind(material)
+            mesh_count += 1
+    return mesh_count, (r, g, b)
+
+
+def spawn_scene_and_settle(
+    out_dir: str, seed: int, colored_dice: bool = False, light_scale: float = 1.0
+) -> tuple[sim_utils.SimulationContext, InteractiveScene, list, dict]:
     """Runs the shared Gate A flow: sample layout, spawn scene, apply
     runtime collision schemas, sim.reset()+scene.reset(), settle physics,
     verify every die's z/xy bounds, save gt_dice.json + an RGB-D camera
     frame to `out_dir`. Leaves the sim/scene LIVE (does not close
     simulation_app) so callers (Gate G) can keep driving the robot.
+
+    `colored_dice` (default False, preserves the white/near-white baseline):
+    after collision-schema patching, additionally runs apply_colored_material
+    on every die - see that function's docstring for what it does and does
+    NOT fix.
+
+    `light_scale` (default 1.0, preserves the scene's authored default):
+    multiplies both DomeLight and DistantLight intensity in scene_cfg BEFORE
+    scene construction - a diagnostic/experimental knob for testing the
+    render-exposure-blowout hypothesis (see --light-scale's argparse help),
+    not a permanent scene default change.
 
     Raises AssertionError if any die settles outside its expected bounds.
     Returns (sim, scene, positions, results)."""
@@ -441,6 +568,18 @@ def spawn_scene_and_settle(out_dir: str, seed: int) -> tuple[sim_utils.Simulatio
     for die_type, pos in zip(DIE_TYPES, positions):
         die_field = f"die_{die_type}"
         getattr(scene_cfg, die_field).init_state.pos = pos
+
+    if light_scale != 1.0:
+        orig_dome = scene_cfg.light.spawn.intensity
+        orig_distant = scene_cfg.distant_light.spawn.intensity
+        scene_cfg.light.spawn.intensity = orig_dome * light_scale
+        scene_cfg.distant_light.spawn.intensity = orig_distant * light_scale
+        print(
+            f"[SPAWN] --light-scale={light_scale}: DomeLight intensity {orig_dome} -> "
+            f"{scene_cfg.light.spawn.intensity}, DistantLight intensity {orig_distant} -> "
+            f"{scene_cfg.distant_light.spawn.intensity} (scene default NOT permanently changed, "
+            "this is a per-run override only)"
+        )
 
     sim_cfg = sim_utils.SimulationCfg(device=args_cli.device)
     sim = sim_utils.SimulationContext(sim_cfg)
@@ -459,6 +598,13 @@ def spawn_scene_and_settle(out_dir: str, seed: int) -> tuple[sim_utils.Simulatio
         )
         if mesh_count == 0:
             raise RuntimeError(f"No UsdGeom.Mesh prims found under {die_prim_path} - collision plan failed.")
+        if colored_dice:
+            mat_mesh_count, rgb = apply_colored_material(stage, die_prim_path, die_type)
+            print(
+                f"[SPAWN] --colored-dice: applied manifest-derived UsdPreviewSurface "
+                f"(diffuseColor={tuple(round(c, 4) for c in rgb)}) to {die_type} "
+                f"({mat_mesh_count} mesh prim(s) bound)"
+            )
 
     sim.reset()
     # Step 0 fix (this task's brief): sim.reset() alone does NOT populate the
@@ -564,11 +710,23 @@ def spawn_scene_and_settle(out_dir: str, seed: int) -> tuple[sim_utils.Simulatio
             "investigate before trusting camera_params.json downstream."
         )
 
+    # Diagnostic-only whole-arm view (2026-07-11 colored-dice repeat task's
+    # Franka material check - see dice_scene_cfg.py's ARM_CAMERA_POS comment
+    # for why this is a SEPARATE camera from DiceCamera, never used for any
+    # gate's pass/fail logic). Always captured (cheap - one more sensor
+    # readout), independent of --colored-dice/--light-scale.
+    arm_camera = scene["arm_camera"]
+    arm_rgb = arm_camera.data.output["rgb"][0, ..., :3].cpu().numpy().astype(np.uint8)
+    arm_rgb_path = os.path.join(out_dir, "arm_camera_rgb.png")
+    Image.fromarray(arm_rgb).save(arm_rgb_path)
+    print(f"[SPAWN] saved whole-arm diagnostic camera frame: {arm_rgb_path}")
+
     return sim, scene, positions, results
 
 
 def run_gate_a() -> None:
-    spawn_scene_and_settle(GATE_A_DIR, args_cli.seed)
+    out_dir = os.path.join(COLORED_ROOT_DIR, "gate_a") if args_cli.colored_dice else GATE_A_DIR
+    spawn_scene_and_settle(out_dir, args_cli.seed, colored_dice=args_cli.colored_dice, light_scale=args_cli.light_scale)
     print("[GATE A] DONE")
 
 
@@ -1222,9 +1380,12 @@ def run_gate_g() -> None:
     if choice not in DIE_TYPES:
         raise RuntimeError(f"Normalized choice '{choice}' is not one of the physical dice in this scene: {DIE_TYPES}")
 
-    sim, scene, positions, results = spawn_scene_and_settle(GATE_G_DIR, args_cli.seed)
+    out_dir = os.path.join(COLORED_ROOT_DIR, "gate_g") if args_cli.colored_dice else GATE_G_DIR
+    sim, scene, positions, results = spawn_scene_and_settle(
+        out_dir, args_cli.seed, colored_dice=args_cli.colored_dice, light_scale=args_cli.light_scale
+    )
 
-    detection_output = run_detector_subprocess(GATE_G_DIR)
+    detection_output = run_detector_subprocess(out_dir)
     detections = detection_output["detections"]
     print(f"[GATE G] perception subprocess returned {len(detections)} detections:")
     for det in detections:
@@ -1284,7 +1445,7 @@ def run_gate_g() -> None:
         scene.update(sim_dt)
     camera = scene["camera"]
     rgb_post = camera.data.output["rgb"][0, ..., :3].cpu().numpy().astype(np.uint8)
-    post_lift_path = os.path.join(GATE_G_DIR, f"post_lift_{choice}.png")
+    post_lift_path = os.path.join(out_dir, f"post_lift_{choice}.png")
     Image.fromarray(rgb_post).save(post_lift_path)
     print(f"[GATE G] saved post-lift frame: {post_lift_path}")
 
@@ -1322,7 +1483,7 @@ def run_gate_g() -> None:
         "verdict_table": verdict_table,
         "gate_g_pass": bool(all_ok),
     }
-    verdict_path = os.path.join(GATE_G_DIR, f"verdict_{choice}.json")
+    verdict_path = os.path.join(out_dir, f"verdict_{choice}.json")
     with open(verdict_path, "w") as f:
         json.dump(result, f, indent=2)
     print(f"[GATE G] saved verdict: {verdict_path}")
@@ -1397,11 +1558,14 @@ def run_gate_v() -> None:
     if choice not in DIE_TYPES:
         raise RuntimeError(f"Normalized choice '{choice}' is not one of the physical dice in this scene: {DIE_TYPES}")
 
-    os.makedirs(GATE_V_DIR, exist_ok=True)
+    out_dir = os.path.join(COLORED_ROOT_DIR, "gate_v") if args_cli.colored_dice else GATE_V_DIR
+    os.makedirs(out_dir, exist_ok=True)
 
-    sim, scene, positions, results = spawn_scene_and_settle(GATE_V_DIR, args_cli.seed)
+    sim, scene, positions, results = spawn_scene_and_settle(
+        out_dir, args_cli.seed, colored_dice=args_cli.colored_dice, light_scale=args_cli.light_scale
+    )
 
-    detection_output = run_detector_subprocess(GATE_V_DIR)
+    detection_output = run_detector_subprocess(out_dir)
     detections = detection_output["detections"]
     print(f"[GATE V] perception subprocess returned {len(detections)} detections:")
     for det in detections:
@@ -1492,7 +1656,7 @@ def run_gate_v() -> None:
         sim.step()
         scene.update(sim_dt)
     rgb_post = camera.data.output["rgb"][0, ..., :3].cpu().numpy().astype(np.uint8)
-    post_lift_path = os.path.join(GATE_V_DIR, f"post_lift_{choice}.png")
+    post_lift_path = os.path.join(out_dir, f"post_lift_{choice}.png")
     Image.fromarray(rgb_post).save(post_lift_path)
     print(f"[GATE V] saved post-lift frame: {post_lift_path}")
 
@@ -1530,7 +1694,7 @@ def run_gate_v() -> None:
     # --- Encode video (imageio, writer pattern from
     # scripts/graspgoal_closeup_video.py) ---
     fps = max(1, round(1.0 / (sim_dt * _VIDEO_FRAME_STRIDE)))
-    video_path = os.path.join(GATE_V_DIR, f"dice_pick_{choice}.mp4")
+    video_path = os.path.join(out_dir, f"dice_pick_{choice}.mp4")
     writer = imageio.get_writer(video_path, fps=fps, codec="libx264")
     for frame in video_frames:
         writer.append_data(frame)
@@ -1563,7 +1727,7 @@ def run_gate_v() -> None:
         "pre_pick_frame_count": pre_pick_frame_count,
         "overlay_frame_count": pre_pick_frame_count,
     }
-    verdict_path = os.path.join(GATE_V_DIR, f"verdict_{choice}.json")
+    verdict_path = os.path.join(out_dir, f"verdict_{choice}.json")
     with open(verdict_path, "w") as f:
         json.dump(result, f, indent=2)
     print(f"[GATE V] saved verdict: {verdict_path}")

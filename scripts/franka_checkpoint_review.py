@@ -67,7 +67,7 @@ parser.add_argument(
 )
 parser.add_argument(
     "--variant",
-    choices=["ik-cube", "joint-die", "joint-cube", "joint-die-heavy"],
+    choices=["ik-cube", "joint-die", "joint-cube", "joint-die-heavy", "joint-die-big"],
     default="ik-cube",
     help=(
         "ik-cube: the existing stock-recipe cube-lift with relative-IK actions (default, unchanged). "
@@ -77,7 +77,9 @@ parser.add_argument(
         "joint-die, but with the recipe's own DexCube kept as the object (isolates the die asset "
         "as the variable). "
         "joint-die-heavy: asset-bisect rung 1 - the d20 at DexCube's measured 0.216kg mass "
-        "(docs/superpowers/specs/2026-07-12-asset-bisect-design.md)."
+        "(docs/superpowers/specs/2026-07-12-asset-bisect-design.md). "
+        "joint-die-big: asset-bisect rung 2 - the d20 scaled to DexCube's measured 48.0mm size, "
+        "mass pinned at 0.216kg (docs/superpowers/specs/2026-07-12-asset-bisect-design.md)."
     ),
 )
 AppLauncher.add_app_launcher_args(parser)
@@ -114,6 +116,8 @@ elif args_cli.variant == "joint-cube":
     from tasks.franka.dice_lift_joint_env_cfg import FrankaCubeLiftJointEnvCfg_PLAY  # noqa: E402
 elif args_cli.variant == "joint-die-heavy":
     from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftJointHeavyEnvCfg_PLAY  # noqa: E402
+elif args_cli.variant == "joint-die-big":
+    from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftJointBigEnvCfg_PLAY  # noqa: E402
 
 VIDEO_DIR = args_cli.output_dir or os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs", "videos", "franka_checkpoint_review"
@@ -148,6 +152,8 @@ def main() -> None:
         env_cfg = FrankaCubeLiftJointEnvCfg_PLAY()
     elif args_cli.variant == "joint-die-heavy":
         env_cfg = FrankaDieLiftJointHeavyEnvCfg_PLAY()
+    elif args_cli.variant == "joint-die-big":
+        env_cfg = FrankaDieLiftJointBigEnvCfg_PLAY()
     else:
         env_cfg = FrankaLiftEnvCfg_PLAY()
     env_cfg.scene.num_envs = args_cli.num_envs

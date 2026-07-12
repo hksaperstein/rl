@@ -136,3 +136,27 @@ class FrankaDieLiftJointHeavyEnvCfg_PLAY(FrankaDieLiftJointHeavyEnvCfg):
         self.scene.num_envs = 50
         self.scene.env_spacing = 2.5
         self.observations.policy.enable_corruption = False
+
+
+@configclass
+class FrankaDieLiftJointBigEnvCfg(FrankaDieLiftJointHeavyEnvCfg):
+    """Asset-bisect rung 2: d20 scaled 30.3mm -> 48.0mm (DexCube's
+    measured effective size) with mass PINNED at 0.216kg by the inherited
+    mass_props override - size is this rung's ONLY new variable (letting
+    mass scale with volume would silently reintroduce rung 1's variable,
+    per the spec)."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.scene.object.spawn.scale = (0.001585, 0.001585, 0.001585)
+
+
+@configclass
+class FrankaDieLiftJointBigEnvCfg_PLAY(FrankaDieLiftJointBigEnvCfg):
+    """Smaller, non-corrupted-observation variant for eval/play."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.scene.num_envs = 50
+        self.scene.env_spacing = 2.5
+        self.observations.policy.enable_corruption = False

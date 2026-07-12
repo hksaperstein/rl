@@ -42,7 +42,7 @@ parser.add_argument("--video_length", type=int, default=200, help="Length of eac
 parser.add_argument("--video_interval", type=int, default=2000, help="Steps between recorded videos.")
 parser.add_argument(
     "--variant",
-    choices=["ik-cube", "joint-die", "joint-cube", "joint-die-heavy"],
+    choices=["ik-cube", "joint-die", "joint-cube", "joint-die-heavy", "joint-die-big"],
     default="ik-cube",
     help=(
         "ik-cube: the existing stock-recipe cube-lift with relative-IK actions (default, unchanged). "
@@ -51,7 +51,9 @@ parser.add_argument(
         "joint-cube: the spec's fallback rung - joint-position actions with the recipe's own DexCube "
         "(asset-vs-recipe isolation). "
         "joint-die-heavy: asset-bisect rung 1 - the d20 at DexCube's measured 0.216kg mass "
-        "(docs/superpowers/specs/2026-07-12-asset-bisect-design.md)."
+        "(docs/superpowers/specs/2026-07-12-asset-bisect-design.md). "
+        "joint-die-big: asset-bisect rung 2 - the d20 scaled to DexCube's measured 48.0mm size, "
+        "mass pinned at 0.216kg (docs/superpowers/specs/2026-07-12-asset-bisect-design.md)."
     ),
 )
 parser.add_argument(
@@ -107,6 +109,10 @@ def main() -> None:
         from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftJointHeavyEnvCfg
 
         env_cfg = FrankaDieLiftJointHeavyEnvCfg()
+    elif args_cli.variant == "joint-die-big":
+        from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftJointBigEnvCfg
+
+        env_cfg = FrankaDieLiftJointBigEnvCfg()
     else:
         env_cfg = FrankaLiftEnvCfg()
     env_cfg.scene.num_envs = args_cli.num_envs
@@ -127,6 +133,7 @@ def main() -> None:
         "joint-die": "_jointdie",
         "joint-cube": "_jointcube",
         "joint-die-heavy": "_jointdieheavy",
+        "joint-die-big": "_jointdiebig",
     }[args_cli.variant]
     log_dir = os.path.join(
         LOG_ROOT + _log_suffix,

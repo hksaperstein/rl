@@ -209,8 +209,20 @@ polling.** Wrap every Isaac-Sim-touching invocation with the shared lock
 file, e.g.:
 
 ```bash
-flock /tmp/rl_isaac_sim.lock -c "PYTHONUNBUFFERED=1 /home/saps/IsaacLab/isaaclab.sh -p scripts/<script>.py ..."
+flock -o /tmp/rl_isaac_sim.lock -c "PYTHONUNBUFFERED=1 /home/saps/IsaacLab/isaaclab.sh -p scripts/<script>.py ..."
 ```
+
+The `-o` flag is mandatory (2026-07-12 finding): without it, every child
+process of the locked command inherits the lock's file descriptor, and
+Isaac Sim spawns a detached long-lived **Omniverse Hub daemon** that keeps
+that fd open forever — the lock then stays held even after the training
+process exits cleanly, silently blocking every queued job. `-o` closes the
+fd before exec so only the flock process itself holds the lock. If a
+queued flock is stuck and `lsof /tmp/rl_isaac_sim.lock` shows the holder
+is an `Omniverse Hub` process (0% CPU, no GPU compute apps, no live
+python/kit training process), `kill -TERM` that Hub pid — it's a
+relaunch-on-demand asset service, safe to kill when no Isaac app is
+starting up.
 
 This blocks natively (kernel-level mutex, zero polling) until the lock is
 free, then runs, then releases automatically on exit — this is how

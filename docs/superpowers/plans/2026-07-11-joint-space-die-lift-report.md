@@ -54,3 +54,36 @@ and `object_goal_tracking_fine_grained`.
    ABOVE this floor, not above zero.
 4. `Episode_Termination/object_dropping` spiked to ~2–6% mid-run,
    back to 0 by it299 (policy stopped knocking the die off the table).
+
+## Task 4 Step 2: full-run scalar readout (2026-07-12)
+
+Run: `logs/train_franka_jointdie/2026-07-12_06-56-02/` (fresh 1500-iter
+run, 4096 envs, 31 checkpoints incl. model_1499.pt, FULL_EXIT=0,
+~32 min). All 1500 points read from the event file.
+
+- `Loss/value_function`: bounded all run — min 1.0e-4, max 0.171, 0
+  points >1e3. Divergence criterion clean.
+- `Episode_Reward/reaching_object`: slow steady climb 6.1e-5 → 0.120
+  (it375) → 0.232 (it750) → 0.346 (it1125) → 0.391 (it1499). Notably
+  does NOT reproduce the 300-iter diagnostic's fast rise to 0.687 by
+  it150 (different seed/rollout trajectory; both runs end well below
+  the ik-cube recipe's typical converged reach).
+- `Episode_Reward/lifting_object`: **flat at the 0.12 spawn-artifact
+  floor for the entire 1500 iterations** (min 0.1175, max 0.148). Lift
+  never emerged.
+- `object_goal_tracking`: flat ~0.02; `fine_grained`: ≤4.6e-5. Nothing.
+- **Authoritative metric `Metrics/object_pose/position_error`: FAILED.**
+  it0=0.216 (do-nothing baseline), rises to ~0.35 and stays there;
+  last-100 mean 0.331; series min 0.2028 (early noise only). Never
+  decisively below baseline — the policy moves the die but not toward
+  goals.
+- `Train/mean_reward`: 0.70 → ~2.0 by it1499 with a deep transient to
+  -10.65 (consistent with the stock curriculum's action-rate/joint-vel
+  penalty step-up at ~it417, recovers after).
+- `object_dropping`: ~0 essentially all run.
+
+**Verdict so far: metric criterion FAILED → per the spec's verdict
+protocol, the pre-authorized DexCube fallback rung fires (identical
+joint-space config, object swapped back to the recipe's DexCube) to
+isolate asset-vs-recipe. Die-run eval video still recorded (video
+criterion documentation + instrumented height check).**

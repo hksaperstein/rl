@@ -64,6 +64,35 @@ remains open.
   command line (split the string) — two separate self-match incidents
   this session, one of which killed healthy runs.
 
+## Colored-dice repeat (2026-07-12)
+
+Question: do the dice render in their authored colors, and does the
+detector/pick pipeline survive them? (`--colored-dice` +
+`--light-scale` flags, commit fdc7164; full report
+`.superpowers/sdd/dice-demo-colored-report.md`.)
+
+- Material authorship was never the problem: every set_00000 die USD
+  already carries a correctly authored + bound UsdPreviewSurface whose
+  diffuseColor exactly matches its manifest HSV (all five dice share one
+  blue-violet, HSV (0.677, 0.406, 0.416)).
+- Only `--colored-dice` runs blow out the render — the white baseline
+  never did, and the blowout covers the whole frame including the table
+  the flag never touches. Working theory: RTX auto-exposure reacting to
+  the runtime material rebind, NOT the linear doubled-light-energy story
+  originally written into the WIP docstring (open mechanism question).
+- `--light-scale 0.3` empirically fixes exposure. Detection at ls=0.3 is
+  the best of all tested conditions on every die; d10 was found on the
+  primary pass for the first time (no missing-class recovery ladder).
+- Pixel-verified nuance (controller): at ls=0.3 the dice show the
+  authored blue-violet hue direction (+5..+7 blue-excess) but still
+  render far lighter than the authored albedo — "correct hue tint,
+  still strongly lightened," not "colors restored."
+- Franka arm's washed-out look: same scene-wide exposure artifact,
+  confirmed via the dedicated whole-arm diagnostic camera across light
+  scales.
+- Remaining: 5 colored picks at `--colored-dice --light-scale 0.3`
+  (Phase C, queued behind the RL joint-die-lift runs).
+
 ## Open follow-ups
 
 - **Pick fragility (quantified 2026-07-11 post-review):** detector xy

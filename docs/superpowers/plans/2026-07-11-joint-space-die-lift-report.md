@@ -87,3 +87,44 @@ protocol, the pre-authorized DexCube fallback rung fires (identical
 joint-space config, object swapped back to the recipe's DexCube) to
 isolate asset-vs-recipe. Die-run eval video still recorded (video
 criterion documentation + instrumented height check).**
+
+## Task 4 Step 3: die-run eval (10-episode-scale video + instrumentation)
+
+Eval: `franka_checkpoint_review.py --variant joint-die` on model_1499.pt
+(8 envs, 250 steps, whole-arm framing per standing instruction). Video:
+`logs/videos/franka_checkpoint_review/franka_checkpoint_review_joint-die_model_1499-step-0.mp4`.
+Instrumented heights: `heights_joint-die_model_1499.{json,npy}`.
+
+- **Instrumented check: 0/8 envs sustained lift.** Per env: resting z
+  0.0114m, max z exactly 0.0550m — the spawn height, i.e. the only
+  above-threshold reading is the episode-start settle drop;
+  max_consecutive_lifted_steps=1 for every env.
+- **Video (controller-inspected frames across the episode):** arm
+  reaches down toward the die early, then settles into a static low
+  folded pose near the table for the rest of the episode. No grasp
+  attempt, no lift, no carry toward the floating goal marker. Whole-arm
+  framing confirmed.
+- **Video criterion: FAILED** (consistent with the metric criterion).
+
+## Task 4 Step 4: verdict
+
+**Hypothesis (joint-space no-IK action formulation enables die lift):
+FALSIFIED for the d20 die — but the fallback rung isolates the failure
+to the ASSET, not the recipe.** Same config, only the object swapped
+(joint-cube fallback, `logs/train_franka_jointcube/2026-07-12_07-31-58/`):
+
+| | joint-die (d20) | joint-cube (DexCube) |
+|---|---|---|
+| lifting_object (wt 15) | 0.12 artifact floor, flat | 13.38 sustained |
+| object_goal_tracking (wt 16) | ~0.02 noise | 12.29, climbing |
+| position_error last-100 | 0.331 (worse than 0.216 baseline) | **0.105** |
+| Train/mean_reward | ~2.0 | 138.4 |
+
+The joint-space action recipe itself trains lift+carry decisively on the
+recipe's own DexCube. The d20-specific failure candidates (NOT
+investigated further per the spec's STOP-after-fallback rule): die size
+(~2cm vs DexCube's much larger pinch target), near-spherical convex-hull
+geometry (rolls when poked; low pinch stability), baked mass 0.01kg,
+friction/material of the baked asset, spawn scale 0.001 pipeline.
+(Joint-cube eval video pending as final confirmation; scalars already
+decisive.)

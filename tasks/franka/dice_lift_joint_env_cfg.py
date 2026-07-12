@@ -1,0 +1,85 @@
+# tasks/franka/dice_lift_joint_env_cfg.py
+"""Joint-space (no-IK) d20-die-lift variant of the Franka lift task.
+
+Subclasses tasks/franka/lift_env_cfg.py's FrankaLiftEnvCfg and overrides
+exactly two things (the experiment's two variables, per
+docs/superpowers/specs/2026-07-11-joint-space-die-lift-design.md):
+
+1. arm_action: DifferentialInverseKinematicsActionCfg (task-space IK) ->
+   JointPositionActionCfg with scale=0.5, use_default_offset=True - the
+   exact values of Isaac Lab's own validated joint_pos lift variant
+   (isaaclab_tasks/.../lift/config/franka/joint_pos_env_cfg.py:34-36,
+   read directly), which is the only lift variant Isaac Lab ships RL
+   agent configs for (see the research doc). No IK anywhere.
+2. object: DexCube -> physics-baked d20 die (assets/dice/d20_physics.usd,
+   Task 1 of the plan; default prim 'Object' so the stock recipe's
+   SceneEntityCfg("object", body_names="Object") terms match unchanged),
+   spawn-time scale 0.001 (mm-as-m source units, dice-demo convention),
+   same solver-iteration rigid props as the DexCube recipe.
+
+Everything else (rewards, observations, commands, events, terminations,
+curriculum, episode length, PPO cfg) inherits byte-identical from
+FrankaLiftEnvCfg. Import only after an AppLauncher exists.
+"""
+
+import os
+
+from isaaclab.assets import RigidObjectCfg
+from isaaclab.sim.schemas.schemas_cfg import RigidBodyPropertiesCfg
+from isaaclab.sim.spawners.from_files.from_files_cfg import UsdFileCfg
+from isaaclab.utils import configclass
+
+from . import mdp
+from .lift_env_cfg import FrankaLiftEnvCfg
+
+_D20_USD = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "assets",
+    "dice",
+    "d20_physics.usd",
+)
+
+
+@configclass
+class FrankaDieLiftJointEnvCfg(FrankaLiftEnvCfg):
+    """d20 lift with direct joint-position arm actions (no IK)."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+
+        # Variable 1: joint-space arm action (exact Isaac Lab joint_pos values).
+        self.actions.arm_action = mdp.JointPositionActionCfg(
+            asset_name="robot", joint_names=["panda_joint.*"], scale=0.5, use_default_offset=True
+        )
+        # gripper_action inherited unchanged (BinaryJointPositionActionCfg).
+
+        # Variable 2: the d20 die replaces the DexCube.
+        if not os.path.isfile(_D20_USD):
+            raise FileNotFoundError(f"baked die asset missing - run scripts/bake_die_asset.py: {_D20_USD}")
+        self.scene.object = RigidObjectCfg(
+            prim_path="{ENV_REGEX_NS}/Object",
+            init_state=RigidObjectCfg.InitialStateCfg(pos=[0.5, 0, 0.055], rot=[1, 0, 0, 0]),
+            spawn=UsdFileCfg(
+                usd_path=_D20_USD,
+                scale=(0.001, 0.001, 0.001),
+                rigid_props=RigidBodyPropertiesCfg(
+                    solver_position_iteration_count=16,
+                    solver_velocity_iteration_count=1,
+                    max_angular_velocity=1000.0,
+                    max_linear_velocity=1000.0,
+                    max_depenetration_velocity=5.0,
+                    disable_gravity=False,
+                ),
+            ),
+        )
+
+
+@configclass
+class FrankaDieLiftJointEnvCfg_PLAY(FrankaDieLiftJointEnvCfg):
+    """Smaller, non-corrupted-observation variant for eval/play."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.scene.num_envs = 50
+        self.scene.env_spacing = 2.5
+        self.observations.policy.enable_corruption = False

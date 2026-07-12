@@ -40,6 +40,16 @@ parser.add_argument(
 parser.add_argument("--video", action="store_true", default=False, help="Record videos periodically during training.")
 parser.add_argument("--video_length", type=int, default=200, help="Length of each recorded video (steps).")
 parser.add_argument("--video_interval", type=int, default=2000, help="Steps between recorded videos.")
+parser.add_argument(
+    "--variant",
+    choices=["ik-cube", "joint-die"],
+    default="ik-cube",
+    help=(
+        "ik-cube: the existing stock-recipe cube-lift with relative-IK actions (default, unchanged). "
+        "joint-die: d20-die lift with direct joint-position actions (no IK) - see "
+        "docs/superpowers/specs/2026-07-11-joint-space-die-lift-design.md."
+    ),
+)
 
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
@@ -75,7 +85,12 @@ LOG_ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 
 
 def main() -> None:
-    env_cfg = FrankaLiftEnvCfg()
+    if args_cli.variant == "joint-die":
+        from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftJointEnvCfg
+
+        env_cfg = FrankaDieLiftJointEnvCfg()
+    else:
+        env_cfg = FrankaLiftEnvCfg()
     env_cfg.scene.num_envs = args_cli.num_envs
     env_cfg.sim.device = args_cli.device
 
@@ -86,7 +101,10 @@ def main() -> None:
 
     env_cfg.seed = agent_cfg.seed
 
-    log_dir = os.path.join(LOG_ROOT, datetime.now().strftime("%Y-%m-%d_%H-%M-%S"))
+    log_dir = os.path.join(
+        LOG_ROOT if args_cli.variant == "ik-cube" else LOG_ROOT + "_jointdie",
+        datetime.now().strftime("%Y-%m-%d_%H-%M-%S"),
+    )
     os.makedirs(log_dir, exist_ok=True)
 
     env = ManagerBasedRLEnv(cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)

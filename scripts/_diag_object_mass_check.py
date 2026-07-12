@@ -19,7 +19,11 @@ import argparse
 from isaaclab.app import AppLauncher
 
 parser = argparse.ArgumentParser(description="Print live PhysX mass of the lift object.")
-parser.add_argument("--variant", choices=["joint-die", "joint-cube", "joint-die-heavy", "joint-die-big"], required=True)
+parser.add_argument(
+    "--variant",
+    choices=["joint-die", "joint-cube", "joint-die-heavy", "joint-die-big", "joint-cube-baked"],
+    required=True,
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
@@ -43,6 +47,8 @@ def main() -> None:
         from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftJointHeavyEnvCfg as Cfg
     elif args_cli.variant == "joint-die-big":
         from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftJointBigEnvCfg as Cfg
+    elif args_cli.variant == "joint-cube-baked":
+        from tasks.franka.dice_lift_joint_env_cfg import FrankaCubeBakedLiftJointEnvCfg as Cfg
     else:
         from tasks.franka.dice_lift_joint_env_cfg import FrankaCubeLiftJointEnvCfg as Cfg
 

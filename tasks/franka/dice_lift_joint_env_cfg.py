@@ -39,6 +39,13 @@ _D20_USD = os.path.join(
     "d20_physics.usd",
 )
 
+_CUBE48_USD = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "assets",
+    "dice",
+    "cube48_physics.usd",
+)
+
 
 @configclass
 class FrankaDieLiftJointEnvCfg(FrankaLiftEnvCfg):
@@ -153,6 +160,44 @@ class FrankaDieLiftJointBigEnvCfg(FrankaDieLiftJointHeavyEnvCfg):
 
 @configclass
 class FrankaDieLiftJointBigEnvCfg_PLAY(FrankaDieLiftJointBigEnvCfg):
+    """Smaller, non-corrupted-observation variant for eval/play."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.scene.num_envs = 50
+        self.scene.env_spacing = 2.5
+        self.observations.policy.enable_corruption = False
+
+
+@configclass
+class FrankaCubeBakedLiftJointEnvCfg(FrankaDieLiftJointEnvCfg):
+    """Asset-bisect rung 3 (docs/superpowers/specs/2026-07-12-asset-bisect-
+    design.md): a flat-faced cube baked through this repo's OWN
+    bake_die_asset.py pipeline (scripts/bake_die_asset.py --shape cube
+    --size 48.0 --mass 0.216 -> assets/dice/cube48_physics.usd), at
+    48.0mm/0.216kg - the same size and mass rung 2 already pinned. This
+    isolates shape (rounded d20 vs flat-faced cube) from pipeline
+    provenance: if this cube trains reliably where the same-size/mass d20
+    (rung 2) did not, the die's own rolling geometry is implicated rather
+    than anything about the bake pipeline itself (a genuine DexCube, not
+    of our own provenance, is rung 4's separate control). Only usd_path
+    and mass_props are overridden; scale stays inherited at 0.001 (48
+    stage units -> 48mm, same mm-as-m convention as every other baked
+    asset in this file)."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if not os.path.isfile(_CUBE48_USD):
+            raise FileNotFoundError(
+                f"baked cube48 asset missing - run scripts/bake_die_asset.py --shape cube --size 48.0 "
+                f"--mass 0.216: {_CUBE48_USD}"
+            )
+        self.scene.object.spawn.usd_path = _CUBE48_USD
+        self.scene.object.spawn.mass_props = MassPropertiesCfg(mass=0.216)
+
+
+@configclass
+class FrankaCubeBakedLiftJointEnvCfg_PLAY(FrankaCubeBakedLiftJointEnvCfg):
     """Smaller, non-corrupted-observation variant for eval/play."""
 
     def __post_init__(self) -> None:

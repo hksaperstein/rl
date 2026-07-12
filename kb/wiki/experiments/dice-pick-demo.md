@@ -90,8 +90,17 @@ detector/pick pipeline survive them? (`--colored-dice` +
 - Franka arm's washed-out look: same scene-wide exposure artifact,
   confirmed via the dedicated whole-arm diagnostic camera across light
   scales.
-- Remaining: 5 colored picks at `--colored-dice --light-scale 0.3`
-  (Phase C, queued behind the RL joint-die-lift runs).
+- Phase C picks (seed 42, `--colored-dice --light-scale 0.3`): **4/5
+  PASS** (d20 237.1mm / d8 240.9mm / d12 238.6mm / d10 239.3mm z-gain,
+  zero non-target drift in every run), d4 the documented permitted-fail
+  (0.0mm gain, 16.3mm sideways squeeze-out, IK converged fine) — the
+  colored+fixed-lighting pipeline reproduces the white baseline's
+  results exactly, including d10 passing without perception assistance.
+  Videos: `outputs/dice_demo/colored/gate_v/dice_pick_<die>.mp4`.
+- Ops note from Phase C: every gate run hit the Kit teardown hang after
+  its DONE line (killed per procedure each time); one near-miss from a
+  fuzzy `pgrep|tail` PID match on a stale process — match the full
+  command line with `ps aux` instead.
 
 ## Open follow-ups
 

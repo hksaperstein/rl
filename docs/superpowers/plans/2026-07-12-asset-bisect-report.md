@@ -62,3 +62,46 @@ territory if it matters).
 Size curriculum (train at 48mm where discovery works, shrink toward
 30.3mm) — recommended by the research pass's Q1 findings and now
 supported by this ladder's own rung-2 split.
+
+## Rung 3 — shape (bake-pipeline cube @ 48mm, 0.216kg): PASSED 3/3
+
+| seed | pos_err last-100 | lifting_object final | VF bounded |
+|---|---:|---:|---|
+| 42 | 0.116 | 13.40 | ✓ |
+| 123 | 0.174 | 12.79 | ✓ |
+| 7 | 0.162 | 12.98 | ✓ |
+
+Runs: `logs/train_franka_jointcubebaked/` 2026-07-12_16-58-29 (s42) /
+17-26-48 (s123) / 17-56-18 (s7).
+
+## Ladder conclusion (2026-07-12)
+
+At identical 48mm size, 0.216kg mass, and same bake pipeline:
+**cube 3/3 reliable vs d20 1/3** — SHAPE is the reliability gate for
+grasp discovery. SIZE modulates severity: the same d20 at 30.3mm is
+0/6 across rungs 0-1 (deterministic failure, near-identical curves).
+MASS is ruled out (0/3 at 21.6x). PIPELINE PROVENANCE is exonerated —
+rung 3's cube is our own pipeline's output and trains as reliably as
+NVIDIA's DexCube reference (3/3 vs 1/1), so rung 4 is unnecessary
+(rung 3 doubles as the provenance control).
+
+Physical interpretation: flat parallel faces make clumsy early contacts
+occasionally rewarding (wide antipodal-grasp basin); a near-spherical
+polyhedron rolls away from clumsy contact and offers no parallel faces,
+making the first rewarding grasp rare — at 30mm, effectively never.
+This is grasp-affordance scarcity expressed as an RL exploration
+failure, consistent with the research pass's Q2 sources (Zhou & Held
+2022; Danielczuk et al.).
+
+Follow-up (next spec, research-grounded by the same research doc's Q1):
+object curriculum — train where discovery is reliable (48mm and/or
+cube-like), anneal toward the target object (30mm d20). One authorized
+confirmation option (spec's rung N-1 clause) deliberately NOT exercised:
+mass at 48mm alone — rung 2 seeds 42/7 already show 48mm+0.216kg
+failing 2/3 of the time without shape help, which is that isolation.
+
+Bake-pipeline gotcha recorded en route (task-rung3-report.md): a
+bare-Mesh default prim silently loses PhysX collision when referenced
+into an Xform destination while mass/inertia schema reads stay correct —
+caught by a zero-action height trace; all from-scratch assets must use
+Xform-root/Mesh-child structure.

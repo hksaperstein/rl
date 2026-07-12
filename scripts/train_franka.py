@@ -42,15 +42,23 @@ parser.add_argument("--video_length", type=int, default=200, help="Length of eac
 parser.add_argument("--video_interval", type=int, default=2000, help="Steps between recorded videos.")
 parser.add_argument(
     "--variant",
-    choices=["ik-cube", "joint-die", "joint-cube"],
+    choices=["ik-cube", "joint-die", "joint-cube", "joint-die-heavy"],
     default="ik-cube",
     help=(
         "ik-cube: the existing stock-recipe cube-lift with relative-IK actions (default, unchanged). "
         "joint-die: d20-die lift with direct joint-position actions (no IK) - see "
         "docs/superpowers/specs/2026-07-11-joint-space-die-lift-design.md. "
         "joint-cube: the spec's fallback rung - joint-position actions with the recipe's own DexCube "
-        "(asset-vs-recipe isolation)."
+        "(asset-vs-recipe isolation). "
+        "joint-die-heavy: asset-bisect rung 1 - the d20 at DexCube's measured 0.216kg mass "
+        "(docs/superpowers/specs/2026-07-12-asset-bisect-design.md)."
     ),
+)
+parser.add_argument(
+    "--seed",
+    type=int,
+    default=None,
+    help="Override the PPO runner cfg's seed (asset-bisect 3-seed protocol; default: keep agent cfg's own).",
 )
 
 AppLauncher.add_app_launcher_args(parser)
@@ -95,6 +103,10 @@ def main() -> None:
         from tasks.franka.dice_lift_joint_env_cfg import FrankaCubeLiftJointEnvCfg
 
         env_cfg = FrankaCubeLiftJointEnvCfg()
+    elif args_cli.variant == "joint-die-heavy":
+        from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftJointHeavyEnvCfg
+
+        env_cfg = FrankaDieLiftJointHeavyEnvCfg()
     else:
         env_cfg = FrankaLiftEnvCfg()
     env_cfg.scene.num_envs = args_cli.num_envs
@@ -105,9 +117,17 @@ def main() -> None:
     if args_cli.max_iterations is not None:
         agent_cfg.max_iterations = args_cli.max_iterations
 
+    if args_cli.seed is not None:
+        agent_cfg.seed = args_cli.seed
+
     env_cfg.seed = agent_cfg.seed
 
-    _log_suffix = {"ik-cube": "", "joint-die": "_jointdie", "joint-cube": "_jointcube"}[args_cli.variant]
+    _log_suffix = {
+        "ik-cube": "",
+        "joint-die": "_jointdie",
+        "joint-cube": "_jointcube",
+        "joint-die-heavy": "_jointdieheavy",
+    }[args_cli.variant]
     log_dir = os.path.join(
         LOG_ROOT + _log_suffix,
         datetime.now().strftime("%Y-%m-%d_%H-%M-%S"),

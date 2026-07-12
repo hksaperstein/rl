@@ -25,7 +25,7 @@ FrankaLiftEnvCfg. Import only after an AppLauncher exists.
 import os
 
 from isaaclab.assets import RigidObjectCfg
-from isaaclab.sim.schemas.schemas_cfg import RigidBodyPropertiesCfg
+from isaaclab.sim.schemas.schemas_cfg import MassPropertiesCfg, RigidBodyPropertiesCfg
 from isaaclab.sim.spawners.from_files.from_files_cfg import UsdFileCfg
 from isaaclab.utils import configclass
 
@@ -105,6 +105,30 @@ class FrankaCubeLiftJointEnvCfg(FrankaLiftEnvCfg):
 
 @configclass
 class FrankaCubeLiftJointEnvCfg_PLAY(FrankaCubeLiftJointEnvCfg):
+    """Smaller, non-corrupted-observation variant for eval/play."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.scene.num_envs = 50
+        self.scene.env_spacing = 2.5
+        self.observations.policy.enable_corruption = False
+
+
+@configclass
+class FrankaDieLiftJointHeavyEnvCfg(FrankaDieLiftJointEnvCfg):
+    """Asset-bisect rung 1 (docs/superpowers/specs/2026-07-12-asset-bisect-design.md):
+    the d20 with its mass raised 0.0100kg -> 0.216kg (DexCube's measured
+    live PhysX mass, scripts/_diag_object_mass_check.py 2026-07-12).
+    Shape, 30.3mm size, friction, and the whole joint-space config stay
+    pinned - mass is this rung's ONLY variable."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.scene.object.spawn.mass_props = MassPropertiesCfg(mass=0.216)
+
+
+@configclass
+class FrankaDieLiftJointHeavyEnvCfg_PLAY(FrankaDieLiftJointHeavyEnvCfg):
     """Smaller, non-corrupted-observation variant for eval/play."""
 
     def __post_init__(self) -> None:

@@ -72,7 +72,7 @@ _DICE_SET_DIR = os.path.join(
     "vision",
     "data",
     "raw",
-    "dice_sets_v1",
+    "dice_sets_v1_colored",  # TEMPORARY (task-dice-usd-materials follow-up) -- revert before commit
 )
 _DICE_SET_NAME = "set_00000"  # every DIE_TYPES manifest for this set has empty mesh_quality_warnings
 
@@ -187,14 +187,11 @@ class DiceSceneCfg(InteractiveSceneCfg):
         spawn=sim_utils.DomeLightCfg(color=(0.75, 0.75, 0.75), intensity=3000.0),
     )
 
-    # Distant light for camera sensor rendering. IsaacLab's camera tutorials
-    # (e.g. run_usd_camera.py) use DistantLightCfg alongside or instead of
-    # DomeLightCfg for proper sensor illumination. This ensures the camera
-    # captures a properly lit scene for the detector to process.
-    distant_light = AssetBaseCfg(
-        prim_path="/World/distant_light",
-        spawn=sim_utils.DistantLightCfg(color=(0.75, 0.75, 0.75), intensity=3000.0),
-    )
+    # NOTE (2026-07-13, direct user directive): the DistantLight that used
+    # to sit here alongside the dome ("stage light", added for camera-sensor
+    # illumination) is REMOVED — default DomeLight rig only. It doubled the
+    # scene illumination and was the standing suspect for the RTX
+    # auto-exposure blowout documented in the colored-dice reports.
 
     die_d4: RigidObjectCfg = _die_cfg("d4", (0.35, -0.20, 0.10))
     die_d8: RigidObjectCfg = _die_cfg("d8", (0.42, -0.10, 0.10))

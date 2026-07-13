@@ -145,3 +145,18 @@ detector/pick pipeline survive them? (`--colored-dice` +
 - Camera angle: single fixed view occludes the die once gripped;
   Gate V verification used convergent evidence — a second angle would
   make future video evidence unambiguous.
+
+## Fragility attribution closed (2026-07-13 archaeology)
+
+The d20-seed42 pick, PASS on 2026-07-11, now FAILS with an 8.4mm
+detector-vs-GT error — on clean HEAD, on HEAD+instrumentation, AND on
+the pre-d4 commit (f5b77c7, isolated worktree): identical 8.4mm error
+everywhere, byte-identical within a session. Conclusion: code-
+independent, cross-session RTX render nondeterminism moves detection a
+few mm against the ~8mm squeeze-out margin. The demo's success is
+knife-edge by design margin, not by any regression. Hardening options
+already listed in this page (multi-frame detection averaging, tighter
+recrop) are the fix path if/when the demo needs to be robust across
+sessions — the razor margin is also exactly what the
+noise-robustness principle (N≥20 varied-seed evals) is meant to
+surface.

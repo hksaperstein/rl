@@ -297,3 +297,7 @@ jobs do NOT need the flock lock. The `/tmp/rl_isaac_sim.lock` convention
 still applies to Isaac-Sim-touching work (see Environment conventions
 above); just be aware a vision GPU job and Isaac Sim can now contend if
 launched simultaneously — sequence them by judgment, not by lock.
+The judgment check MUST be `nvidia-smi --query-compute-apps=pid,used_memory
+--format=csv,noheader` (empty = clear), never a process-name/path grep —
+2026-07-12 incident: a pattern grep missed a vision job's relative-path
+cmdline, an Isaac batch launched onto a busy GPU and died on CUDA OOM.

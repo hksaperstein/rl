@@ -2741,3 +2741,24 @@ Xform-root/Mesh-child structure required (bare-Mesh default prim
 silently loses PhysX collision). Next experiment (needs spec): object
 curriculum — train where discovery is reliable, anneal toward the 30mm
 d20.
+
+**Cloud training pipeline PROVEN (2026-07-13, attempt 3).** First GPU
+instance ever created on the project (SPOT g2-standard-4 + 1x L4,
+us-central1-a) after the `GPUS-ALL-REGIONS-per-project=1` quota grant
+landed 2026-07-12 23:09Z (raise-to-4 denied — exactly one cloud GPU,
+spot or on-demand, until billing history matures). Full pipeline
+exercised end-to-end: create → Isaac Sim 5.1 + Isaac Lab v2.3.1 pip
+install (three real env gaps found+recipe'd: deadsnakes Python 3.11,
+`flatdict` build-isolation silent skip, Vulkan/GL libs on the DLVM
+compute-only driver) → ik-cube 4096-env headless training to 1200/1500
+iters (~2.8GB/23GB VRAM — huge headroom) → GCS sync (25 checkpoints +
+events + manifest at
+`gs://rl-manipulation-hks-runs/cloud-shakedown/ik-cube/seed42/2026-07-13_13-34-38/`)
+→ full teardown (zero instances/disks/snapshots verified). Two genuine
+SPOT preemptions mid-run; after the second, all 9 surveyed zones were
+simultaneously spot-stocked-out — recovery pattern (snapshot boot disk,
+sync from a cheap non-GPU instance) now in the recipe. Total cost <$1.
+Recipe: `docs/cloud/franka-cloud-shakedown.md` (status: PROVEN).
+Implication: cloud is a working second training lane (one GPU), and
+SPOT preemption churn is real — long runs need checkpoint-resume
+tolerance or on-demand provisioning.

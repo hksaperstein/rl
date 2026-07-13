@@ -1,17 +1,26 @@
-# Franka cloud training shakedown — recipe (BLOCKED, not yet run)
+# Franka cloud training shakedown — recipe (PROVEN end-to-end, 2026-07-13)
 
-Status as of 2026-07-12 (retry, same day): this recipe has **still not
-been executed end-to-end**. The first attempt was blocked at instance
-creation by a billing-account free-tier flag (see below); after the user
-upgraded billing, a retry hit a **different, new blocker**: the project's
-global `GPUS_ALL_REGIONS` quota is `0`, project-wide, independent of
-region/zone/provisioning-model. This resolves the "does SPOT bypass
-`GPUS_ALL_REGIONS=0`" question the first attempt left open: **no, it does
-not** — see the "GPU quota blocker" section below, added by the retry.
-See `.superpowers/sdd/task-cloud-shakedown-report.md` for the full report
-of both attempts. This doc records the intended recipe (verified against
-live `gcloud` output + NVIDIA's official docs, where noted) so the next
-retry, once quota is granted, doesn't have to re-derive it.
+Status as of 2026-07-13 (attempt 3, quota granted): this recipe has been
+**executed end-to-end and proven** on a live GCP L4 SPOT instance —
+instance created → Isaac Sim 5.1.0 + Isaac Lab v2.3.1 installed → repo
+shipped via `git archive` → training ran to 1200/1500 iterations (80%,
+past two SPOT preemptions) → all checkpoints/logs synced to GCS →
+instance and snapshot deleted with zero resources left running. Five
+concrete corrections to the recipe below were found empirically and are
+folded into the relevant sections (Python 3.11 not preinstalled, a
+`flatdict` build-isolation failure that silently skips the base
+`isaaclab` package, `isaaclab.sh --install`'s default "all" frameworks
+pulling an unpinned torch that self-corrects, missing graphics/Vulkan
+libraries on the DLVM image, and `git archive`'s repo copy having no
+`.git` dir so `sync_run_to_gcs.py`'s `git_sha` field reads "unknown").
+See `.superpowers/sdd/task-cloud-shakedown-report.md`'s "Attempt 3"
+section for the full narrative, including two SPOT preemptions and the
+non-GPU-instance-for-sync recovery technique used when GPU capacity
+became unavailable across every surveyed zone simultaneously.
+
+Prior blocked attempts (billing-tier flag, then `GPUS_ALL_REGIONS=0`
+quota) are preserved below for history — both are now resolved (billing
+upgraded 2026-07-12; quota granted 2026-07-12T23:09Z).
 
 ## Blocker (retry, current): global `GPUS_ALL_REGIONS` quota is 0
 
@@ -78,7 +87,7 @@ created on this account. This blocker fires before GPU quota
 spot-vs-`GPUS_ALL_REGIONS` question this task was meant to answer
 empirically is still open.
 
-## Instance creation (verified command shape; blocked before execution completed)
+## Instance creation (proven — verbatim command used successfully 2026-07-13)
 
 ```bash
 export PATH="$HOME/google-cloud-sdk/bin:$PATH"
@@ -130,16 +139,34 @@ explicitly lists `nvidia-l4` + `g2-standard-4 or better` + `Ubuntu 22.04
 LTS` as a supported/blessed configuration — this combination was not
 picked blind.
 
-## Isaac Sim 5.1 + Isaac Lab install — pip path (researched, NOT yet run live)
+## Isaac Sim 5.1 + Isaac Lab install — pip path (PROVEN 2026-07-13, corrections below)
 
-Sourced from NVIDIA's official docs (2026-07-12; verify against the live
-page again at execution time in case it moves):
+Sourced from NVIDIA's official docs (2026-07-12; re-verified live against
+the `v2.3.1` **tag's own** docs on 2026-07-13, not `main` — no drift
+found, the command shape below matches the tag verbatim):
 - https://docs.isaacsim.omniverse.nvidia.com/5.1.0/installation/install_python.html
 - https://docs.isaacsim.omniverse.nvidia.com/5.1.0/installation/requirements.html
-- https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/pip_installation.html
+- `docs/source/setup/installation/pip_installation.rst` in the `v2.3.1` tag itself
 
 ```bash
+# System graphics/Vulkan libraries — NOT preinstalled on the
+# common-cu129-ubuntu-2204 DLVM image. Its NVIDIA driver install is the
+# compute-only flavor (libnvidia-compute-580-server); Isaac Sim's RTX
+# renderer needs libnvidia-gl (OpenGL/Vulkan ICD) even fully --headless,
+# or you get `vkCreateInstance failed: ERROR_INCOMPATIBLE_DRIVER` and the
+# process appears to hang indefinitely during scene construction. Match
+# the -580-server suffix to whatever driver version nvidia-smi reports.
+sudo apt-get update -y
+sudo apt-get install -y libgl1 libglx-mesa0 libegl1 libnvidia-gl-580-server \
+    vulkan-tools libglu1-mesa libxt6 tmux cmake build-essential
+
 # Isaac Sim 5.1.0 requires Python 3.11 (not 3.10 — that was 4.5.x).
+# NOT preinstalled on this image (ships 3.10.12) — deadsnakes PPA needed.
+sudo apt-get install -y software-properties-common
+sudo add-apt-repository -y ppa:deadsnakes/ppa
+sudo apt-get update -y
+sudo apt-get install -y python3.11 python3.11-venv python3.11-dev
+
 python3.11 -m venv ~/isaac-venv
 source ~/isaac-venv/bin/activate
 
@@ -152,7 +179,36 @@ pip install -U torch==2.7.0 torchvision==0.22.0 --index-url https://download.pyt
 
 git clone https://github.com/isaac-sim/IsaacLab.git --branch v2.3.1 IsaacLab
 cd IsaacLab
-./isaaclab.sh --install
+
+# Workaround for a build-isolation bug in one transitive dependency
+# (flatdict==4.0.1, pulled in by the base isaaclab package) BEFORE
+# running --install: its isolated build env resolves a setuptools that
+# doesn't expose pkg_resources, failing with
+# `ModuleNotFoundError: No module named 'pkg_resources'`. --install's own
+# find-exec loop over source/* extensions does NOT abort on this failure
+# and the script still exits 0, so the base `isaaclab` package (isaaclab.envs,
+# isaaclab.controllers, etc.) silently never installs unless this is
+# pre-empted:
+pip install --no-build-isolation flatdict==4.0.1
+
+# Scope to rsl_rl only (the only framework this repo uses) instead of the
+# default "all" -- "all" also installs rl_games/skrl/robomimic, whose
+# combined dependency resolution pulls a newer, unpinned torch/torchvision
+# (a full separate CUDA-13 wheel stack) that silently uninstalls the
+# torch==2.7.0+cu128 pinned above. isaaclab.sh DOES self-correct this at
+# the very end of an "all" install (its own final step re-pins torch/
+# torchvision from the pip cache) -- so "all" is not actually broken, just
+# slower and briefly alarming to watch live. Scoping to rsl_rl avoids the
+# multi-GB churn entirely:
+./isaaclab.sh --install rsl_rl
+
+# Verify the base isaaclab package actually installed (its own failure,
+# per the flatdict issue above, does not surface as a nonzero exit code):
+python -c "import isaaclab" 2>&1 | grep -q "No module named 'isaaclab'" && \
+    echo "FAILED: base isaaclab package missing, see flatdict fix above" || \
+    echo "OK (a 'No module named omni' error here is normal/expected --
+          isaaclab.envs etc. only import inside an AppLauncher-bootstrapped
+          process, not at bare python -c time)"
 ```
 
 This deliberately avoids the NGC container path
@@ -178,18 +234,37 @@ RL dependency pin (from `/home/saps/IsaacLab/source/isaaclab_rl/setup.py`,
 installed automatically by `./isaaclab.sh --install`'s `rsl_rl` extra):
 `rsl-rl-lib==3.0.1`, `onnxscript>=0.5`.
 
-## Training command (unchanged from local, add `--headless`)
+## Training command (PROVEN 2026-07-13 — unchanged from local, add `--headless`)
 
 ```bash
 cd ~/rl   # repo checked out via `git archive HEAD | ssh ... tar -x`, not a git clone (private repo, no deploy key)
+tmux new-session -d -s train
+tmux send-keys -t train '
+source ~/isaac-venv/bin/activate
+export OMNI_KIT_ACCEPT_EULA=YES
 python scripts/train_franka.py --variant ik-cube --num_envs 4096 \
-    --max_iterations 1500 --headless 2>&1 | tee train_franka_cloud.log
+    --max_iterations 1500 --headless 2>&1 | tee ~/train_franka_cloud.log
+' Enter
 ```
+Always launch inside `tmux` (or `nohup`) — an SSH disconnect must not
+kill the run. `--num_envs 4096` did **not** OOM the L4's 24GB VRAM (GPU
+memory usage stayed ~2.8GB/23GB throughout a real run) — no need to
+halve to 2048.
 
-Halve `--num_envs` to 2048 and document if 4096 OOMs the L4's 24GB VRAM
-(not observed — never reached this step).
+**SPOT preemption is real and should be planned for, not just
+theoretically possible**: attempt 3 hit two preemptions in about an hour
+of GPU uptime. `save_interval=50` in `tasks/franka/agents/rsl_rl_ppo_cfg.py`
+means a checkpoint always exists within 50 iterations of any interruption
+— on restart, resume with `--checkpoint <path/to/model_N.pt>
+--max_iterations 1500` (absolute target, not "N more"; see
+`train_franka.py`'s own docstring). If the zone (or, as happened in
+attempt 3, *every* surveyed zone simultaneously) is SPOT-stocked-out and
+restart/recreate isn't landing within a few minutes, don't keep polling
+indefinitely — either accept the run at its last checkpoint (see the
+non-GPU-sync technique below) or fall back to a shorter run per the
+mission's own "300 iterations proves the pipeline" bar.
 
-## Sync + cleanup (unchanged, see docs/cloud/run-data-pipeline.md)
+## Sync + cleanup (PROVEN 2026-07-13, see docs/cloud/run-data-pipeline.md)
 
 ```bash
 python3 scripts/sync_run_to_gcs.py \
@@ -200,15 +275,45 @@ python3 scripts/sync_run_to_gcs.py \
 gcloud compute instances delete rl-franka-shakedown --zone=us-central1-a --quiet
 ```
 
-## Next step
+Note: `sync_run_to_gcs.py`'s `git_sha` manifest field will read
+`"unknown (...)"` for any run whose repo was shipped via `git archive`
+(no `.git` dir present to `git rev-parse HEAD` against) — this is
+graceful, not a bug, just not populated. If you need it recorded, note
+the local `git rev-parse HEAD` output separately at ship time.
 
-The billing-tier blocker is resolved (confirmed by this retry). The
-spot-vs-`GPUS_ALL_REGIONS` empirical question is also now answered: SPOT
-does not bypass it. The remaining blocker is the project's global
-`GPUS_ALL_REGIONS=0` quota — see that section above for the exact Console
-URL to request an increase. Once granted, re-run the instance-creation
-command above verbatim as the next retry step; no further blockers are
-currently known.
+**If the GPU instance is unreachable when it's time to sync** (SPOT
+preemption + capacity crunch, as in attempt 3): `sync_run_to_gcs.py`
+needs **no GPU and no Isaac Sim** — it's plain `python3` + the `gcloud`
+CLI (see its own docstring). Snapshot the (stopped/terminated) instance's
+boot disk, then create a small non-GPU instance from that snapshot
+(`--machine-type=e2-standard-2`, no `--accelerator`) — this sidesteps GPU
+capacity contention entirely since it's a completely different, plentiful
+SKU:
+```bash
+gcloud compute disks snapshot rl-franka-shakedown --zone=<zone> \
+    --snapshot-names=rl-franka-shakedown-snap1
+gcloud compute instances create rl-franka-sync --zone=<any-zone> \
+    --machine-type=e2-standard-2 \
+    --create-disk=boot=yes,auto-delete=yes,size=150GB,type=pd-balanced,\
+source-snapshot=projects/<project>/global/snapshots/rl-franka-shakedown-snap1 \
+    --scopes=storage-rw
+# ssh in, run sync_run_to_gcs.py exactly as above against the restored
+# ~/rl/logs/train_franka/<timestamp> dir, then delete both the sync
+# instance AND the original (terminated) GPU instance AND the snapshot.
+```
+
+## Quota / billing status: both prior blockers resolved
+
+Billing-tier free-tier flag: resolved 2026-07-12 (user completed the
+Console upgrade flow). `GPUS_ALL_REGIONS` project quota: resolved
+2026-07-12T23:09Z (`GPUS-ALL-REGIONS-per-project` `grantedValue=1
+APPROVED`). Regional `NVIDIA-L4-GPUS` quota of `1.0` is granted in
+`us-central1`, `us-east1`, `us-west1`, and `us-west4` (confirmed
+2026-07-13) — quota is not expected to block a future run in any of
+these regions; **zone-level SPOT capacity (stockout) is the only
+remaining friction**, and it can affect multiple zones/regions
+simultaneously (observed 2026-07-13: 8/8 surveyed zones stocked out at
+once for `g2-standard-4`+`nvidia-l4`).
 
 ## Quota state (2026-07-12 night, controller update)
 

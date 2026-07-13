@@ -40,13 +40,27 @@ import os
 import isaaclab.sim as sim_utils
 from isaaclab.assets import AssetBaseCfg, RigidObjectCfg
 from isaaclab.scene import InteractiveSceneCfg
-from isaaclab.sensors import CameraCfg
+from isaaclab.sensors import CameraCfg, ContactSensorCfg
 from isaaclab.sim.schemas.schemas_cfg import CollisionPropertiesCfg, MassPropertiesCfg, RigidBodyPropertiesCfg
 from isaaclab.sim.spawners.from_files.from_files_cfg import GroundPlaneCfg, UsdFileCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 
 from isaaclab_assets.robots.franka import FRANKA_PANDA_HIGH_PD_CFG  # isort: skip
+
+# d4 edge-grasp rung-0 Task 2 contact instrumentation (2026-07-13, see
+# docs/superpowers/specs/2026-07-13-d4-edge-grasp-rung0-design.md's Desk-check
+# corrections and .superpowers/sdd/task-d4-rung0-tasks01-report.md's "What
+# Task 2 needs going in" - a real contact-force/point reading is needed to
+# confirm which phi-regime (near-0 vs the discontinuous 54.7deg case) the
+# real grasp lands in, not just the lateral-ejection proxy metric). PhysX
+# activates PhysxContactReportAPI per-body at USD-spawn time for the WHOLE
+# robot, not selectively per-body - copy()-then-mutate is the SAME idiom
+# isaaclab_assets' own franka.py uses to derive FRANKA_PANDA_HIGH_PD_CFG from
+# FRANKA_PANDA_CFG (e.g. its own `.spawn.rigid_props.disable_gravity = True`
+# line), not a new pattern introduced here.
+_FRANKA_ROBOT_CFG_WITH_CONTACT = FRANKA_PANDA_HIGH_PD_CFG.copy()
+_FRANKA_ROBOT_CFG_WITH_CONTACT.spawn.activate_contact_sensors = True
 
 # The five die types the commanded-pick demo distinguishes between (d100/d10_pct
 # is an alias of d10, not a separate physical die in this scene - see Gate G's
@@ -154,7 +168,7 @@ class DiceSceneCfg(InteractiveSceneCfg):
     placeholders overwritten by the demo script's own randomized,
     minimum-spacing table layout before `sim.reset()`."""
 
-    robot = FRANKA_PANDA_HIGH_PD_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
+    robot = _FRANKA_ROBOT_CFG_WITH_CONTACT.replace(prim_path="{ENV_REGEX_NS}/Robot")
 
     table = AssetBaseCfg(
         prim_path="{ENV_REGEX_NS}/Table",
@@ -187,6 +201,35 @@ class DiceSceneCfg(InteractiveSceneCfg):
     die_d10: RigidObjectCfg = _die_cfg("d10", (0.50, 0.0, 0.10))
     die_d12: RigidObjectCfg = _die_cfg("d12", (0.58, 0.10, 0.10))
     die_d20: RigidObjectCfg = _die_cfg("d20", (0.65, 0.20, 0.10))
+
+    # d4-only contact instrumentation (2026-07-13, Task 2 - see module-level
+    # comment above `_FRANKA_ROBOT_CFG_WITH_CONTACT`). filter_prim_paths_expr
+    # targets ONLY Die_d4, not a wildcard over all 5 dice - these sensors
+    # report zero/empty data for the whole scene unless something specifically
+    # touches Die_d4, and scripts/dice_pick_demo.py's non-d4 code path never
+    # reads `scene["d4_*_contact"]` at all, so this is additive/inert for the
+    # d8/d10/d12/d20 runs (same "spawn universally, read only on the relevant
+    # branch" pattern the die_d4 RigidObjectCfg itself already uses). Two
+    # separate single-body sensors (not one two-body sensor) because PhysX
+    # requires the filter match count to equal the sensor body count - see
+    # tasks/ar4/pickplace_env_cfg.py's gripper_jaw1_contact/
+    # gripper_jaw2_contact, the same pattern already validated in this repo.
+    d4_leftfinger_contact: ContactSensorCfg = ContactSensorCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/panda_leftfinger",
+        update_period=0.0,
+        history_length=0,
+        track_contact_points=True,
+        debug_vis=False,
+        filter_prim_paths_expr=["{ENV_REGEX_NS}/Die_d4"],
+    )
+    d4_rightfinger_contact: ContactSensorCfg = ContactSensorCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/panda_rightfinger",
+        update_period=0.0,
+        history_length=0,
+        track_contact_points=True,
+        debug_vis=False,
+        filter_prim_paths_expr=["{ENV_REGEX_NS}/Die_d4"],
+    )
 
     camera: CameraCfg = CameraCfg(
         prim_path="{ENV_REGEX_NS}/DiceCamera",

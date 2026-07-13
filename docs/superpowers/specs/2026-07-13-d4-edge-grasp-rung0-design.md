@@ -258,3 +258,72 @@ waypoint computation's consistent dz bias, or an XY+Z refine fallback
 analogous to the non-d4 path's) before treating rung 0 as falsified and
 climbing to rung 1 per the research doc's ladder. This is a controller/
 Principal-level scoping decision, not unilaterally executed here.
+
+### Addendum: bounded debugging pass (2026-07-13, controller-authorized)
+
+Full detail in `.superpowers/sdd/task-d4-rung0-trials-report.md`'s own
+addendum. Summary: (1) the "standoff/waypoint computation's dz bias"
+candidate cause named above is **ruled out by direct arithmetic** -
+reconstructing `grasp_center_world` from logged values reproduces the
+die's own GT position to ~6 nanometers (the die's mesh is centroid-
+centered, and a tetrahedron's opposite-edge-pair axis provably passes
+through the centroid, so this is the mathematically correct result, not
+a bug). (2) The real failure, from the per-step logs, is a **monotonic
+divergence** in stage2's rot_err (and secondarily pos_err) after an
+initial fast-converging phase - not oscillation, not a hard joint-limit
+lockout. (3) A principled candidate fix (3x finer DiffIK per-step caps,
+the standard mitigation for this class of divergence) was implemented,
+regression-verified clean, and tested on-GPU (1 trial) - it did **not**
+help (43.9mm final residual vs, 30.7mm baseline, same seed) - evidence
+against "oversized per-step linearization error" as the dominant
+mechanism and toward a more structural reachability/conditioning
+limitation for this exact tilted-pose-at-low-table-height target. Fix
+reverted (unproven, tree restored to the contact-instrumentation-only
+diff). (4) The d20-seed42 regression attribution is now **confirmed via
+a controlled test** (git-stash isolation + rerun on clean HEAD
+reproduces the identical FAIL) rather than inferred from log evidence
+alone. Verdict unchanged: 0/5, hypothesis untested not falsified,
+regression guard clean.
+
+## Rung-0 closure (Principal analysis, 2026-07-13 evening)
+
+The debug pass root-caused the stage-2 divergence to arithmetic
+precision (waypoint math exact to ~6nm; TCP-offset hypothesis
+disproven; finer IK caps made divergence worse, no joint at a limit).
+Combining that with the desk-check geometry closes the question at the
+mechanism level:
+
+**The commanded grasp pose is in collision with the table.** For a
+face-resting d4 (centroid 4.8mm above the table) gripped along the
+35.26°-tilted opposite-edge axis, the lower jaw's lowest structure
+point sits at z ≈ −3mm (closed, minimal fingertip extent) to −15mm
+(40mm opening, 10mm fingertip extent) — below the table plane for
+every plausible opening/finger-geometry combination. PhysX blocks the
+descent; DiffIK diverges monotonically fighting the contact — exactly
+the observed signature, and why no IK tuning can fix it.
+
+**Verdict: rung 0 FALSIFIED at the reachability level** — not the
+ejection mechanism the hypothesis targeted (never reached), but a
+harder constraint upstream: an open parallel jaw cannot straddle a
+table-resting ~24mm tetrahedron along its opposite-edge axis without
+occupying space below the table. The desk check analyzed contact-φ at
+the bottom edge but not the open-jaw sweep volume — recorded as a
+desk-check methodology gap for future grasp-geometry specs (add a
+"swept-volume vs support surface" check alongside the friction-cone
+check).
+
+**Ladder: climb to rung 1** (fingertip pad modification, per the
+pre-registered climb rule). Note rung 1's natural design dodges this
+entire constraint: a V-groove or compliant pad works with the existing
+STRAIGHT-DOWN approach (capturing the top edge/vertex), no tilt, no
+table interaction — Guo et al. ICRA 2017's 93.7%-vs-28.7% result under
+comparable position error remains the grounding. Rung-1 spec is the
+next d4 step.
+
+Contact instrumentation from Task 2 (never exercised, cleared of the
+d20-regression suspicion by a controlled stash test on clean HEAD) is
+committed with this closure — it is exactly what rung 1's trials will
+need. Open ops question logged separately: clean HEAD now fails the
+d20-seed42 smoke that passed pre-d4-work (2026-07-11) — deterministic,
+detector-side (8.4mm xy error), independent of the instrumentation;
+archaeology smoke on the pre-d4 commit queued.

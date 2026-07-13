@@ -232,6 +232,9 @@ _MAX_STEPS_DESCEND = 400  # stage 2 budget (position-only in practice, orientati
 _MAX_STEPS_LIFT = 300  # stage 4 budget (short vertical move)
 _MAX_STEPS_REFINE = 200  # fallback XY-only refine sub-stage budget (see stage2_descend's try/except in run_pick_sequence) - only used if the tighter _GRASP_POS_TOL times out on the first attempt
 #
+_D4_CONTACT_FORCE_THRESHOLD_N = 0.05  # N, minimum net contact force to count as "touching" - matches this repo's
+# own precedent for the AR4 gripper-vs-sphere case (scripts/classical_grasp_contact_check.py's
+# FORCE_THRESHOLD/BILATERAL_CONTACT_THRESHOLD), not a new value invented for this task.
 # Speed fix (2026-07-11, after stage 0's joint-space prep - see below - fixed
 # the orientation/joint4-lockup problem cleanly: rot_err converged to
 # ~0.0000rad by step 50, joint4 stayed healthy around -2.2 to -2.3, no limit
@@ -1446,11 +1449,37 @@ def run_pick_sequence(
         closure_full_displacement_m = float(np.linalg.norm(closure_delta))
         ee_pos_at_closure = robot.data.body_pos_w[0, hand_body_id].cpu().numpy()
         ee_quat_at_closure = robot.data.body_quat_w[0, hand_body_id].cpu().numpy()
+
+        # Contact-force/point instrumentation (2026-07-13, Task 2 - see
+        # tasks/franka/dice_scene_cfg.py's d4_leftfinger_contact/
+        # d4_rightfinger_contact ContactSensorCfg entries and this task's
+        # report's "table-clearance / phi at a contact-height offset delta"
+        # section). scene.update() runs every sim step inside `_hold` above,
+        # so these sensors' buffers already reflect the just-completed
+        # closure hold - no extra step needed. force_matrix_w shape is
+        # (num_envs=1, num_bodies=1, num_filters=1, 3); contact_pos_w is NaN
+        # when no contact is registered (track_contact_points=True).
+        left_contact = scene["d4_leftfinger_contact"]
+        right_contact = scene["d4_rightfinger_contact"]
+        left_force_vec_n = left_contact.data.force_matrix_w[0, 0, 0].cpu().numpy()
+        right_force_vec_n = right_contact.data.force_matrix_w[0, 0, 0].cpu().numpy()
+        left_force_n = float(np.linalg.norm(left_force_vec_n))
+        right_force_n = float(np.linalg.norm(right_force_vec_n))
+        left_contact_point_w = left_contact.data.contact_pos_w[0, 0, 0].cpu().numpy()
+        right_contact_point_w = right_contact.data.contact_pos_w[0, 0, 0].cpu().numpy()
+        bilateral_contact = (
+            left_force_n > _D4_CONTACT_FORCE_THRESHOLD_N and right_force_n > _D4_CONTACT_FORCE_THRESHOLD_N
+        )
         print(
             f"[GATE G] d4 closure-window die displacement: lateral(xy)={closure_lateral_ejection_m * 1000:.2f}mm "
             f"full3d={closure_full_displacement_m * 1000:.2f}mm (pos before={die_pos_before_close} "
             f"after={die_pos_after_close}) ee_pos_at_closure={ee_pos_at_closure} "
             f"ee_quat_at_closure={ee_quat_at_closure}"
+        )
+        print(
+            f"[GATE G] d4 closure-window contact: left_force={left_force_n:.4f}N right_force={right_force_n:.4f}N "
+            f"bilateral={bilateral_contact} (threshold={_D4_CONTACT_FORCE_THRESHOLD_N}N) "
+            f"left_contact_pt_w={left_contact_point_w} right_contact_pt_w={right_contact_point_w}"
         )
         waypoint_status["closure_lateral_ejection_m"] = closure_lateral_ejection_m
         waypoint_status["closure_full_displacement_m"] = closure_full_displacement_m
@@ -1459,6 +1488,15 @@ def run_pick_sequence(
         waypoint_status["grasp_axis_pair_id"] = best_axis.pair_id
         waypoint_status["grasp_axis_span_m"] = best_axis.span_m
         waypoint_status["grasp_axis_tilt_rad"] = best_axis.tilt_from_horizontal_rad
+        waypoint_status["closure_left_finger_force_n"] = left_force_n
+        waypoint_status["closure_right_finger_force_n"] = right_force_n
+        waypoint_status["closure_bilateral_contact"] = bilateral_contact
+        waypoint_status["closure_left_contact_pt_w"] = (
+            None if np.isnan(left_contact_point_w).any() else left_contact_point_w.tolist()
+        )
+        waypoint_status["closure_right_contact_pt_w"] = (
+            None if np.isnan(right_contact_point_w).any() else right_contact_point_w.tolist()
+        )
         _print_live_hand_orientation("stage3_after_close_d4")
 
         # Stage 4: vertical lift - reuses the same straight-up-in-world-Z
@@ -1476,6 +1514,26 @@ def run_pick_sequence(
             max_steps=_MAX_STEPS_LIFT, require_rot=True,
         )
         _print_live_hand_orientation("stage4_lift_d4")
+
+        # Post-lift contact re-read (sustained-grip evidence, distinct from
+        # the closure-window reading above) - same sensors, same threshold.
+        post_lift_left_force_n = float(
+            np.linalg.norm(scene["d4_leftfinger_contact"].data.force_matrix_w[0, 0, 0].cpu().numpy())
+        )
+        post_lift_right_force_n = float(
+            np.linalg.norm(scene["d4_rightfinger_contact"].data.force_matrix_w[0, 0, 0].cpu().numpy())
+        )
+        post_lift_bilateral_contact = (
+            post_lift_left_force_n > _D4_CONTACT_FORCE_THRESHOLD_N
+            and post_lift_right_force_n > _D4_CONTACT_FORCE_THRESHOLD_N
+        )
+        print(
+            f"[GATE G] d4 post-lift contact: left_force={post_lift_left_force_n:.4f}N "
+            f"right_force={post_lift_right_force_n:.4f}N bilateral={post_lift_bilateral_contact}"
+        )
+        waypoint_status["post_lift_left_finger_force_n"] = post_lift_left_force_n
+        waypoint_status["post_lift_right_finger_force_n"] = post_lift_right_force_n
+        waypoint_status["post_lift_bilateral_contact"] = post_lift_bilateral_contact
     else:
         # Stage 1: approach - translate to (target_xy, stage1_hand_z) AND rotate
         # to the canonical down orientation TOGETHER (orientation is allowed to

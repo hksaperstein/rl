@@ -42,7 +42,15 @@ parser.add_argument("--video_length", type=int, default=200, help="Length of eac
 parser.add_argument("--video_interval", type=int, default=2000, help="Steps between recorded videos.")
 parser.add_argument(
     "--variant",
-    choices=["ik-cube", "joint-die", "joint-cube", "joint-die-heavy", "joint-die-big", "joint-cube-baked"],
+    choices=[
+        "ik-cube",
+        "joint-die",
+        "joint-cube",
+        "joint-die-heavy",
+        "joint-die-big",
+        "joint-cube-baked",
+        "joint-die-mixed",
+    ],
     default="ik-cube",
     help=(
         "ik-cube: the existing stock-recipe cube-lift with relative-IK actions (default, unchanged). "
@@ -56,7 +64,10 @@ parser.add_argument(
         "mass pinned at 0.216kg (docs/superpowers/specs/2026-07-12-asset-bisect-design.md). "
         "joint-cube-baked: asset-bisect rung 3 - a flat-faced cube baked through this repo's own "
         "bake_die_asset.py pipeline at 48.0mm/0.216kg, isolating shape from pipeline provenance "
-        "(docs/superpowers/specs/2026-07-12-asset-bisect-design.md)."
+        "(docs/superpowers/specs/2026-07-12-asset-bisect-design.md). "
+        "joint-die-mixed: size-curriculum primary arm - per-env d20 size varied across "
+        "{48.0,43.6,39.1,34.7,30.3}mm (deterministic round-robin), mass pinned 0.216kg "
+        "(docs/superpowers/specs/2026-07-13-size-curriculum-design.md)."
     ),
 )
 parser.add_argument(
@@ -120,6 +131,10 @@ def main() -> None:
         from tasks.franka.dice_lift_joint_env_cfg import FrankaCubeBakedLiftJointEnvCfg
 
         env_cfg = FrankaCubeBakedLiftJointEnvCfg()
+    elif args_cli.variant == "joint-die-mixed":
+        from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftJointMixedEnvCfg
+
+        env_cfg = FrankaDieLiftJointMixedEnvCfg()
     else:
         env_cfg = FrankaLiftEnvCfg()
     env_cfg.scene.num_envs = args_cli.num_envs
@@ -142,6 +157,7 @@ def main() -> None:
         "joint-die-heavy": "_jointdieheavy",
         "joint-die-big": "_jointdiebig",
         "joint-cube-baked": "_jointcubebaked",
+        "joint-die-mixed": "_jointdiemixed",
     }[args_cli.variant]
     log_dir = os.path.join(
         LOG_ROOT + _log_suffix,

@@ -27,6 +27,7 @@ import os
 from isaaclab.assets import RigidObjectCfg
 from isaaclab.sim.schemas.schemas_cfg import MassPropertiesCfg, RigidBodyPropertiesCfg
 from isaaclab.sim.spawners.from_files.from_files_cfg import UsdFileCfg
+from isaaclab.sim.spawners.wrappers import MultiAssetSpawnerCfg
 from isaaclab.utils import configclass
 
 from . import mdp
@@ -44,6 +45,18 @@ _CUBE48_USD = os.path.join(
     "assets",
     "dice",
     "cube48_physics.usd",
+)
+
+# Extracted from FrankaDieLiftJointEnvCfg's original inline RigidBodyPropertiesCfg literal
+# (single source of truth for both the base class and FrankaDieLiftJointMixedEnvCfg's
+# per-asset entries, task-1-brief.md Step 2 note) - value-identical to the prior inline block.
+_D20_RIGID_PROPS = RigidBodyPropertiesCfg(
+    solver_position_iteration_count=16,
+    solver_velocity_iteration_count=1,
+    max_angular_velocity=1000.0,
+    max_linear_velocity=1000.0,
+    max_depenetration_velocity=5.0,
+    disable_gravity=False,
 )
 
 
@@ -69,14 +82,7 @@ class FrankaDieLiftJointEnvCfg(FrankaLiftEnvCfg):
             spawn=UsdFileCfg(
                 usd_path=_D20_USD,
                 scale=(0.001, 0.001, 0.001),
-                rigid_props=RigidBodyPropertiesCfg(
-                    solver_position_iteration_count=16,
-                    solver_velocity_iteration_count=1,
-                    max_angular_velocity=1000.0,
-                    max_linear_velocity=1000.0,
-                    max_depenetration_velocity=5.0,
-                    disable_gravity=False,
-                ),
+                rigid_props=_D20_RIGID_PROPS,
             ),
         )
 
@@ -202,6 +208,69 @@ class FrankaCubeBakedLiftJointEnvCfg_PLAY(FrankaCubeBakedLiftJointEnvCfg):
 
     def __post_init__(self) -> None:
         super().__post_init__()
+        self.scene.num_envs = 50
+        self.scene.env_spacing = 2.5
+        self.observations.policy.enable_corruption = False
+
+
+@configclass
+class FrankaDieLiftJointMixedEnvCfg(FrankaDieLiftJointHeavyEnvCfg):
+    """Size-curriculum primary arm (docs/superpowers/specs/2026-07-13-size-
+    curriculum-design.md): per-env die size varied across {48.0, 43.6,
+    39.1, 34.7, 30.3}mm (deterministic round-robin via MultiAssetSpawnerCfg
+    with random_choice=False - confirmed by direct source read of
+    isaaclab/sim/spawners/wrappers/wrappers.py:spawn_multi_asset,
+    task-1-report.md - proto_prim_paths[index % len(proto_prim_paths)],
+    giving an exact ~819-envs-per-size split over 4096 envs), mass pinned
+    0.216kg on every size (rung 1/2's already-pinned value, not a new
+    variable here). Everything else inherits from the heavy variant
+    unchanged.
+
+    scene.replicate_physics = False (controller decision, task-1-report.md
+    NEEDS_CONTEXT finding): InteractiveSceneCfg's replicate_physics defaults
+    True, and when True InteractiveScene.clone_environments(copy_from_source=
+    False) clones every env from env_0's own content AFTER spawn_multi_asset
+    has already authored heterogeneous per-env assets - silently discarding
+    the round-robin variation before it reaches the live PhysX stage (live-
+    verified: 16 envs all read the SAME 48.0mm scale with this unset). Isaac
+    Lab's own only other MultiAssetSpawnerCfg consumer,
+    isaaclab_tasks/manager_based/manipulation/dexsuite/dexsuite_env_cfg.py:395,
+    sets this same flag for the same reason. Scoped to this class only -
+    every other variant in this file keeps the InteractiveSceneCfg default
+    (True), unaffected."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.scene.replicate_physics = False
+        _scales = (0.001585, 0.001440, 0.001291, 0.001146, 0.001000)
+        self.scene.object.spawn = MultiAssetSpawnerCfg(
+            assets_cfg=[
+                UsdFileCfg(
+                    usd_path=_D20_USD,
+                    scale=(s, s, s),
+                    rigid_props=_D20_RIGID_PROPS,
+                    mass_props=MassPropertiesCfg(mass=0.216),
+                )
+                for s in _scales
+            ],
+            random_choice=False,
+        )
+
+
+@configclass
+class FrankaDieLiftJointMixedEnvCfg_PLAY(FrankaDieLiftJointMixedEnvCfg):
+    """All-30.3mm eval probe (the spec's verdict measurement) - a single
+    UsdFileCfg (not a MultiAssetSpawnerCfg), matching FrankaDieLiftJointEnvCfg
+    at its original size/mass."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.scene.object.spawn = UsdFileCfg(
+            usd_path=_D20_USD,
+            scale=(0.001, 0.001, 0.001),
+            rigid_props=_D20_RIGID_PROPS,
+            mass_props=MassPropertiesCfg(mass=0.216),
+        )
         self.scene.num_envs = 50
         self.scene.env_spacing = 2.5
         self.observations.policy.enable_corruption = False

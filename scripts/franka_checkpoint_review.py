@@ -67,7 +67,15 @@ parser.add_argument(
 )
 parser.add_argument(
     "--variant",
-    choices=["ik-cube", "joint-die", "joint-cube", "joint-die-heavy", "joint-die-big", "joint-cube-baked"],
+    choices=[
+        "ik-cube",
+        "joint-die",
+        "joint-cube",
+        "joint-die-heavy",
+        "joint-die-big",
+        "joint-cube-baked",
+        "joint-die-mixed",
+    ],
     default="ik-cube",
     help=(
         "ik-cube: the existing stock-recipe cube-lift with relative-IK actions (default, unchanged). "
@@ -82,7 +90,11 @@ parser.add_argument(
         "mass pinned at 0.216kg (docs/superpowers/specs/2026-07-12-asset-bisect-design.md). "
         "joint-cube-baked: asset-bisect rung 3 - a flat-faced cube baked through this repo's own "
         "bake_die_asset.py pipeline at 48.0mm/0.216kg, isolating shape from pipeline provenance "
-        "(docs/superpowers/specs/2026-07-12-asset-bisect-design.md)."
+        "(docs/superpowers/specs/2026-07-12-asset-bisect-design.md). "
+        "joint-die-mixed: size-curriculum primary arm - per-env d20 size varied across "
+        "{48.0,43.6,39.1,34.7,30.3}mm (deterministic round-robin), mass pinned 0.216kg "
+        "(docs/superpowers/specs/2026-07-13-size-curriculum-design.md); _PLAY probe is a single "
+        "all-30.3mm size."
     ),
 )
 AppLauncher.add_app_launcher_args(parser)
@@ -123,6 +135,8 @@ elif args_cli.variant == "joint-die-big":
     from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftJointBigEnvCfg_PLAY  # noqa: E402
 elif args_cli.variant == "joint-cube-baked":
     from tasks.franka.dice_lift_joint_env_cfg import FrankaCubeBakedLiftJointEnvCfg_PLAY  # noqa: E402
+elif args_cli.variant == "joint-die-mixed":
+    from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftJointMixedEnvCfg_PLAY  # noqa: E402
 
 VIDEO_DIR = args_cli.output_dir or os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs", "videos", "franka_checkpoint_review"
@@ -161,6 +175,8 @@ def main() -> None:
         env_cfg = FrankaDieLiftJointBigEnvCfg_PLAY()
     elif args_cli.variant == "joint-cube-baked":
         env_cfg = FrankaCubeBakedLiftJointEnvCfg_PLAY()
+    elif args_cli.variant == "joint-die-mixed":
+        env_cfg = FrankaDieLiftJointMixedEnvCfg_PLAY()
     else:
         env_cfg = FrankaLiftEnvCfg_PLAY()
     env_cfg.scene.num_envs = args_cli.num_envs

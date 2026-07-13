@@ -32,12 +32,25 @@ d12/d20 guard intact (0.946/0.907, slightly up). Confirms the
 apparent-size confound as a major contributor; the model can read
 geometry/numeral cues when the data stops letting it cheat on size.
 
-Two open items for iteration 3: (1) **d6 regressed 0.519→0.275**
-(outside the pre-registered guard, mechanism unknown — possibly d6's
-cue set is more scale-sensitive); (2) absolute mAP50-95 still far below
+Two open items for iteration 3: (1) **d6 regressed 0.519→0.275** —
+mechanism root-caused same day
+(`vision/docs/results/2026-07-dice-detector-v1/d6_regression_analysis.md`):
+NOT scale sensitivity (checked, killed) — d10 became a network-wide
+attractor after the close-up slice made its glyph convention legible
+(d10 trains ~78% arabic numerals by domain-config design; real d6
+photos are ~100% arabic numerals vs d6's own ~28%-arabic synthetic
+pool, so "legible arabic digit on compact faceted object" now reads as
+d10). Iteration-3 hypotheses pre-drafted: H1 glyph-mix rebalance, H2
+d10 hard-negative pass. (2) absolute mAP50-95 still far below
 `s_plus_r`'s real-fine-tuned 0.71–0.77 — close-up slice fixes the class
 confound, not the full synthetic-to-real gap (glyph styles, photographic
 degradation remain the deferred suspects).
+
+The d6 episode is a clean instance of a general synthetic-data lesson:
+**per-class asymmetries in any nuisance parameter's sampling
+distribution (here, glyph style) become class cues the moment another
+data change makes them perceptible** — the apparent-size confound and
+the glyph confound are the same failure shape on different parameters.
 
 Methodology note: synthetic-val was ~identical for `s` and `s_v2`
 (≥0.966 everywhere) while real-test moved by ±0.4 — synthetic val is

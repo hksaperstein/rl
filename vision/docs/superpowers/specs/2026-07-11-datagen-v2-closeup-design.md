@@ -239,11 +239,19 @@ pre-registered, but it roughly halves the one cubic die's transfer and
 is the top candidate question for iteration 3 (alongside the summary's
 deferred suspects: glyph-style distribution, photographic degradation,
 absolute mAP50-95 still low across the board vs `s_plus_r`'s
-real-fine-tuned 0.71–0.77). Hypothesis-shaped lead: the close-up slice's
-per-scene target frame-height sampling changes the size distribution
-d6 is seen at too, and d6's cue set (square faces, pip-or-numeral) may
-be more scale-sensitive than the polyhedral classes — unverified,
-needs its own analysis before any fix.
+real-fine-tuned 0.71–0.77). ~~Hypothesis-shaped lead: scale
+sensitivity of d6's cue set~~ — **analyzed 2026-07-13, lead killed**
+(`vision/docs/results/2026-07-dice-detector-v1/d6_regression_analysis.md`):
+d6's close-up training size distribution matches real d6 well, and the
+regression is broad across framing subgroups. The actual mechanism: the
+regression is almost entirely d6→d10 reassignment (6.2%→49.7%), and
+d10 became a network-wide attractor class after the close-up slice made
+its heavily-arabic-numeral glyph convention (~78% by domain-config
+design vs ~28% for d6) legible at scale — real d6 photos are ~100%
+arabic numerals, matching d10's training convention better than d6's
+own. Two falsifiable iteration-3 hypotheses recorded in the analysis
+doc (H1 glyph-mix rebalance; H2 d10 decision-boundary overshoot /
+hard-negative pass).
 
 Synthetic-val numbers stayed ~identical between `s` and `s_v2` (both
 ≥0.966 mAP50 everywhere) — reconfirming the spec's premise that

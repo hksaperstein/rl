@@ -205,7 +205,47 @@ overlays). **Never trains or validates on `data/real/test`.**
   iteration depending on this one's verdict).
 - A leak-free synthetic val split (unrelated to this hypothesis).
 
-## Verdict
+## Verdict (2026-07-13)
 
-_(appended after the run — see "Verdict" section below once evaluation
-completes.)_
+**Hypothesis SUPPORTED — both pre-registered criteria met.**
+
+Training completed 60/60 epochs on 2026-07-12 (run `s_v2`); authoritative
+eval (`scripts/evaluate.py`, frozen real test set, conf 0.25) run
+2026-07-13 morning. Side-by-side, real-test mAP50 (mAP50-95 in parens),
+variant `s` (detection_v1 only) vs `s_v2` (v1 + close-up slice):
+
+| class | s (baseline) | s_v2 | Δ mAP50 |
+|---|---|---|---|
+| d4 | 0.695 (0.162) | 0.784 (0.174) | +0.089 |
+| d6 | 0.519 (0.132) | 0.275 (0.077) | **−0.244** |
+| d8 | 0.090 (0.018) | **0.442** (0.105) | +0.352 |
+| d10 | 0.097 (0.034) | **0.534** (0.233) | +0.437 |
+| d12 | 0.936 (0.403) | 0.946 (0.410) | +0.010 |
+| d20 | 0.855 (0.264) | 0.907 (0.284) | +0.052 |
+
+- **Primary criterion (pre-registered): PASS.** d8 0.442 ≥ 0.40 and
+  d10 0.534 ≥ 0.40 (up from 0.090/0.097). The apparent-size-as-class-cue
+  confound is a major contributor to the v1 d8/d10 transfer failure, as
+  hypothesized.
+- **Guard (d12/d20 regression): PASS.** d12 0.946 ≥ 0.886 and d20 0.907
+  ≥ 0.805 — both actually improved slightly.
+- Controller spot-check (seeded random, 3 overlays): single-die extreme
+  close-up d10s now correctly classified d10 at 0.95/0.96/0.61 conf —
+  exactly the framing v1 systematically misread as d12/d20.
+
+**Open item the guard did not cover: d6 regressed 0.519 → 0.275.** The
+guard was defined only over d12/d20, so this does not falsify anything
+pre-registered, but it roughly halves the one cubic die's transfer and
+is the top candidate question for iteration 3 (alongside the summary's
+deferred suspects: glyph-style distribution, photographic degradation,
+absolute mAP50-95 still low across the board vs `s_plus_r`'s
+real-fine-tuned 0.71–0.77). Hypothesis-shaped lead: the close-up slice's
+per-scene target frame-height sampling changes the size distribution
+d6 is seen at too, and d6's cue set (square faces, pip-or-numeral) may
+be more scale-sensitive than the polyhedral classes — unverified,
+needs its own analysis before any fix.
+
+Synthetic-val numbers stayed ~identical between `s` and `s_v2` (both
+≥0.966 mAP50 everywhere) — reconfirming the spec's premise that
+synthetic val is blind to this real-transfer failure mode and cannot be
+used as the verdict metric.

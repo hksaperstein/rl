@@ -2654,6 +2654,20 @@ running); (2) hyperparameter hill-climb (Tier 2 pattern, scored on a
 real-val slice, frozen test reserved for verdicts) — deferred until the
 dataset loop lands its first win.
 
+**Datagen-v2 verdict (2026-07-13): hypothesis SUPPORTED, both
+pre-registered criteria met.** The `s_v2` run (detection_v1 + 3,000-image
+close-up slice with camera distance decoupled from class) raised real-test
+mAP50 d8 0.090→0.442 and d10 0.097→0.534 (primary threshold 0.40 cleared
+by both), with the d12/d20 guard passed (0.946/0.907, both slightly up).
+The apparent-size-as-class-cue confound is confirmed as a major
+contributor to v1's d8/d10 transfer collapse. New open item the guard
+didn't cover: **d6 regressed 0.519→0.275** — top candidate question for
+datagen iteration 3, alongside the still-large absolute gap to `s_plus_r`
+real-fine-tuned mAP50-95 (0.71–0.77 vs s_v2's 0.08–0.41). Full
+side-by-side + verdict note appended to
+`vision/docs/superpowers/specs/2026-07-11-datagen-v2-closeup-design.md`;
+per-class tables in `vision/docs/results/2026-07-dice-detector-v1/eval_s_v2.md`.
+
 **Convergence milestone — dice + Franka + detection: ACHIEVED (2026-07-11,
 dice-pick demo, `franka-panda-pivot`).** Given a commanded die type among
 {d4, d8, d10, d12, d20}, the Franka arm picks up the CORRECT die on a

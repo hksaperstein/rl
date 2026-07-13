@@ -5,3 +5,7 @@ logs/
 __pycache__/
 *.py[cod]
 *$py.class
+
+# site/ portfolio bundle media is a deliverable (deploy agent pulls it from GitHub)
+!site/assets/
+!site/assets/**

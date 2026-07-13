@@ -2811,3 +2811,18 @@ missing XY+Z refine fallback analogous to the non-d4 path's own) as a
 scoped follow-up before treating rung 0 as falsified and climbing to
 rung 1 (pad geometry) — rung 1 wouldn't address this failure mode
 either, since it never reaches the point where pad geometry matters.
+
+**d4 edge-grasp rung 0: FALSIFIED at reachability (2026-07-13 evening).**
+The tilted opposite-edge grasp pose puts the lower jaw 3-15mm below the
+table for every plausible opening/finger-geometry combination — PhysX
+blocks it, DiffIK diverges fighting the contact (root-caused via exact
+waypoint-arithmetic reconstruction + a failed finer-step-caps trial; the
+geometry helper itself is nanometer-exact). Mechanism-level result: stock
+Franka jaws cannot straddle a table-resting ~24mm tetrahedron along its
+edge-pair axis. Ladder climbs to rung 1 (pad modification — V-groove /
+compliant pad with the existing straight-down approach; Guo et al. 2017
+grounding). New standing desk-check rule: grasp-geometry specs must check
+swept jaw volume vs the support surface, not just contact friction cones.
+Open ops item: d20-seed42 demo smoke now fails deterministically on clean
+HEAD (detector-side, 8.4mm) despite passing 2026-07-11 — archaeology
+pending. Full trail: spec's Rung-0 closure section.

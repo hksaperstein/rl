@@ -2773,3 +2773,41 @@ appended to `docs/superpowers/specs/2026-07-13-size-curriculum-design.md`.
 Pre-authorized staged-anneal fallback (48→39.1→30.3mm,
 checkpoint-resumed stages, full-population discovery odds at 48mm)
 firing next, queued behind the d4 edge-grasp rung-0 trials.
+
+**d4 edge-grasp rung 0: seeded trials FALSIFIED at the implementation
+layer, grasp-mechanism hypothesis untested (2026-07-13).** Spec
+`docs/superpowers/specs/2026-07-13-d4-edge-grasp-rung0-design.md`, full
+trial data `.superpowers/sdd/task-d4-rung0-trials-report.md`. Tasks 0-1
+(desk check + implementation — shape-general opposite-edge-pair grasp
+geometry, `tasks/franka/antipodal_edge_grasp.py`, 17 unit tests) passed
+review clean. Tasks 2-3 (5 seeded trials, seeds 42/123/7/1000/2026): 0/5
+— every trial failed identically at `stage2_descend_d4` (tilted-axis
+descent to grasp height never converged within budget, final residual
+26.6-40.1mm vs a 5mm tolerance), so **no trial ever closed the gripper**
+— zero grasp attempts, zero ejection/z-gain data, the die never
+perturbed in any trial. This does not falsify the edge-grasp mechanism
+itself (the spec's own falsification condition requires a *converged*
+tilted approach before an ejection counts as evidence) — it's an
+unresolved IK-reachability gap in the scripted controller. Diagnostic
+signature points at implementation, not mechanism: 100% reproducible
+non-convergence, a consistent ~13mm z-bias present already at the end
+of stage 1 in all 5 trials regardless of which edge-pair/wrist-yaw was
+selected, and orientation error growing during the failed stage-2
+attempt in 3/5 trials despite starting stage 2 already converged.
+Contact-force instrumentation (`d4_leftfinger_contact`/
+`d4_rightfinger_contact` `ContactSensorCfg`s, filtered to `Die_d4`,
+added this task per the spec's own flagged phi-regime-verification need)
+is implemented and regression-clean but never exercised (no trial
+reached closure). Non-d4 regression guard: code path confirmed
+byte-identical (`git diff -w`); d20 smoke (seed 42, run twice,
+byte-identical both times) came back FAIL but traced directly to a
+pre-existing, seed-specific detector-vs-GT offset (8.4mm, exceeds the
+squeeze-out margin) matching fragility already documented in
+`kb/wiki/experiments/dice-pick-demo.md` before this task — not
+attributed to the d4 work. **Recommendation flagged to Principal, not
+unilaterally executed**: root-cause the stage2 IK non-convergence
+(leading suspect: the tilted-approach waypoint/standoff math, or a
+missing XY+Z refine fallback analogous to the non-d4 path's own) as a
+scoped follow-up before treating rung 0 as falsified and climbing to
+rung 1 (pad geometry) — rung 1 wouldn't address this failure mode
+either, since it never reaches the point where pad geometry matters.

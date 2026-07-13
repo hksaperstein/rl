@@ -170,4 +170,91 @@ the platform's grasp strategy.
 
 ## Verdict
 
-_(appended after the seeded trials)_
+**FALSIFIED at the implementation layer - 0/5 seeded trials, but the
+grasp-mechanism hypothesis itself was never actually exercised.**
+Full per-trial data: `.superpowers/sdd/task-d4-rung0-trials-report.md`.
+
+All 5 seeded trials (42, 123, 7, 1000, 2026) failed identically: the d4
+branch's `stage2_descend_d4` waypoint (descent to the tilted grasp height
+along the computed edge-pair axis) never converged within its 400-step
+budget (final position residual 26.6-40.1mm against a 5mm tolerance -
+and against the desk check's corrected +-3.05mm positional window, worse
+still). The gripper never closed on any trial. Consequently:
+
+- **Zero grasp attempts across all 5 trials** - `waypoint_status` in
+  every trial's verdict JSON is `{"error": "...stage2_descend_d4 did NOT
+  converge..."}`, populated before the code path that would ever measure
+  closure-window lateral ejection, read the new contact-force sensors
+  (`tasks/franka/dice_scene_cfg.py`'s `d4_leftfinger_contact`/
+  `d4_rightfinger_contact`, added this task specifically to verify the
+  desk check's flagged phi-regime risk), or attempt a lift.
+- **The die was never touched or perturbed** in any trial (verified
+  directly, not assumed): `z_now == z_before` and `xy_drift ~= 0` (all
+  sub-micron, i.e. simulation noise floor) for the d4 in all 5 verdict
+  tables.
+- **This does not test the hypothesis.** The spec's own falsification
+  condition requires "a converged, correctly-tilted edge-pair approach
+  (convergence and axis alignment verified from logged EE pose, not
+  assumed)" before an ejection outcome counts as evidence against the
+  line-contact mechanism. No trial reached that state, so rung 0's
+  actual grasp-mechanism question (does opposite-edge-pair contact
+  survive closure without ejecting the die) remains **untested**, not
+  falsified.
+- **Diagnostic pattern is consistent with an implementation/reachability
+  gap, not per-trial grasp instability**: all 5 trials fail via the
+  identical mechanism (stage2 non-convergence) regardless of which of
+  the 3 edge-pairs was selected (pair_id 0 picked 3x, pair_id 2 picked
+  2x, spanning wrist_yaw -20.9deg to +21.2deg) or seed. Stage 1
+  (approach, looser 15mm tolerance) "converges" in every trial but with
+  a suspiciously consistent large residual concentrated in one axis
+  (dz = -12.6mm to -13.4mm in all 5 trials, same sign and magnitude
+  regardless of pair/yaw) - a systematic bias, not seed noise. Stage 2
+  then fails outright, and in 3/5 trials orientation error also grows
+  substantially during the failed stage-2 attempt (rot_err reaching
+  0.33-0.64 rad, i.e. 19-36deg, despite converging to 0.0007rad after
+  stage 1) - the bounded relative-step IK controller (`_step_toward`)
+  appears to fight itself on the combined tilted-orientation +
+  off-axis-position target rather than smoothly converge. The Task 1
+  report's own item #6 flagged this exact gap in advance: the d4 path
+  has no XY/Z refine fallback for a stalled stage2, unlike the non-d4
+  path's proven fallback for its own (much smaller, ~14mm) oscillation
+  floor.
+- **Per the climb rule's own carve-out** ("do NOT iterate rung-0
+  parameters beyond one bounded debugging pass, and only if a trial
+  failure is clearly implementation... rather than mechanism"), this
+  failure signature qualifies as clearly implementation, not mechanism -
+  100% reproducible non-convergence with a consistent directional bias,
+  not stochastic per-seed ejection variance. Task 2/3's implementer did
+  NOT spend the one authorized bounded debugging pass under this
+  dispatch (out of scope for a trials+verdict task, and root-causing the
+  IK oscillation properly needs dedicated investigation rather than a
+  guess burned against the one-pass budget) - flagged back to the
+  controller as the recommended next step (a scoped Task 4) rather than
+  climbing straight to rung 1: the pad-geometry mechanism change rung 1
+  represents would not even address this failure mode, since it never
+  reaches the point where pad geometry matters.
+- **Regression guard**: non-d4 code path confirmed byte-identical
+  (`git diff -w` shows zero changed lines inside the pre-existing
+  `else:` branch). The d20 smoke (seed 42, run twice) both came back
+  FAIL (0.0mm z-gain, 38.5mm lateral drift, byte-identical between the
+  two reruns) - traced directly to the perception subprocess reporting
+  an 8.4mm detector-vs-GT xy error for this exact seed's rendered scene,
+  which exceeds the ~8mm lateral squeeze-out margin already documented
+  as a pre-existing, seed-dependent d20 fragility in
+  `kb/wiki/experiments/dice-pick-demo.md` ("occasionally exceeds the
+  ~8mm lateral squeeze-out margin even for the d20... 1 FAIL in 3 d20
+  runs") predating this task. The detector subprocess is causally
+  isolated from every change in this task's diff (independent process,
+  reads only the saved camera frame; dice settle positions and the
+  non-d4 control path are both confirmed unchanged) - this is not
+  attributed to the d4 rung-0 work.
+
+**Disposition**: rung 0's edge-grasp geometry/orientation math is
+implemented and unit-tested correct (Task 1), but the scripted pick
+controller cannot currently reach the tilted grasp waypoint reliably
+enough to test it in sim. Recommend a scoped, bounded follow-up (root-
+cause the stage2 IK non-convergence - likely candidates: the standoff/
+waypoint computation's consistent dz bias, or an XY+Z refine fallback
+analogous to the non-d4 path's) before treating rung 0 as falsified and
+climbing to rung 1 per the research doc's ladder. This is a controller/
+Principal-level scoping decision, not unilaterally executed here.

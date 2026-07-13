@@ -110,9 +110,36 @@ detector/pick pipeline survive them? (`--colored-dice` +
   margin even for the d20 (observed: die pushed 32mm sideways, 1 FAIL in
   3 d20 runs). Hardening options: multi-frame detection averaging at
   capture; detect-again retry on zero post-lift z-gain.
+  **Reproduced again 2026-07-13** (d4 rung-0 regression smoke, seed 42,
+  run twice, byte-identical both times): this exact seed's rendered
+  scene deterministically yields an 8.4mm detector-vs-GT xy error,
+  enough to push the d20 38.5mm sideways with 0.0mm z-gain. Confirms
+  this fragility is seed/scene-deterministic, not run-to-run stochastic
+  noise as the "run-to-run" framing above might suggest — see
+  `.superpowers/sdd/task-d4-rung0-trials-report.md`.
 
-- d4 grasp strategy (reorient/edge-grasp/push-assist — flat-pad
-  mid-height squeeze fails on a tetrahedron).
+- **d4 grasp strategy — rung 0 (opposite-edge antipodal axis) attempted
+  2026-07-13, FALSIFIED at the implementation layer, mechanism itself
+  untested.** Spec
+  `docs/superpowers/specs/2026-07-13-d4-edge-grasp-rung0-design.md`;
+  geometry/orientation math implemented and unit-tested correct
+  (`tasks/franka/antipodal_edge_grasp.py`, 17 tests) but all 5 seeded
+  trials (42/123/7/1000/2026) failed identically at the tilted-axis
+  descent waypoint (`stage2_descend_d4` never converged, 26.6-40.1mm
+  residual vs a 5mm tolerance) — the gripper never closed in any trial,
+  so the actual grasp-mechanism question (does opposite-edge-pair line
+  contact survive closure without ejecting the die) remains untested,
+  not falsified. Diagnostic pattern (100% reproducible non-convergence,
+  a consistent ~13mm z-bias already present at the end of stage 1
+  across all 5 trials regardless of which edge-pair was picked) points
+  at an IK-reachability/waypoint-math gap in the scripted controller,
+  not per-trial grasp instability. Full data:
+  `.superpowers/sdd/task-d4-rung0-trials-report.md`. Next step
+  (flagged, not yet scoped): root-cause the stage2 non-convergence
+  before deciding whether to retry rung 0 or climb to rung 1 (pad
+  geometry, research doc's ladder) — rung 1 wouldn't help with this
+  particular failure mode either, since it's upstream of pad contact
+  ever occurring.
 - Phase I: detection-derived observations inside a trained policy
   (the RL lift line), then learned shape-general grasping.
 - Camera angle: single fixed view occludes the die once gripped;

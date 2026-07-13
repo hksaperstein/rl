@@ -1,0 +1,495 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Robot manipulation research — Harrison Saperstein</title>
+<meta name="description" content="Isaac Lab manipulation research: a Franka Panda that picks the commanded die off a table using a trained detector, RL lift experiments, and a synthetic-to-real dice detector. Self-contained status dashboard." />
+<link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+
+<nav class="site-nav">
+  <div class="wrap">
+    <a class="brand" href="#top">Harrison Saperstein</a>
+    <div class="links">
+      <a href="https://github.com/hksaperstein/rl">GitHub</a>
+      <a href="#research-process">Process</a>
+      <a href="#stack">Stack</a>
+    </div>
+  </div>
+</nav>
+
+<!--
+  ================================================================
+  INTEGRATION NOTE FOR THE DEPLOY AGENT
+  This file is a standalone dashboard AND a source of content blocks
+  to graft into the live Astro site (hksaperstein.github.io). Each
+  major section below is wrapped in a matching pair of HTML comment
+  markers: an opening marker reading GRAFT colon target colon slug,
+  and a closing marker reading slash GRAFT. Target is one of:
+    - dashboard-only        no existing home for this yet; either keep
+                             it here as a standalone page, or use it to
+                             extend franka-dice-pick.md with a new
+                             section, controller's call.
+    - franka-dice-pick      new material for src/content/projects/franka-dice-pick.md
+    - dice-detection        new material for src/content/projects/dice-detection.md
+
+  See site/README-deploy.md for the full integration map, including
+  which content is genuinely new vs. already live on those two pages
+  (most of the dice-pick gallery is already shipped, don't duplicate it).
+  ================================================================
+-->
+
+<main id="top">
+
+<!-- GRAFT:dashboard-only:hero -->
+<section class="hero">
+  <div class="wrap">
+    <div class="hero-grid">
+      <div>
+        <div class="tag-row">
+          <span class="pill">Isaac Lab</span>
+          <span class="pill">Reinforcement learning</span>
+          <span class="pill">Computer vision</span>
+          <span class="pill">Blender synthetic data</span>
+        </div>
+        <h1>I'm building a robot manipulation research platform on Isaac Sim / Isaac Lab.</h1>
+        <p>
+          Right now that means one arm — a Franka Panda — one object class (a set of
+          seven TTRPG dice), and one task: find the die I ask for and pick it up. The
+          video on the right is that task running end to end: a trained detector finds
+          the commanded die on a five-die table, depth deprojection turns the detection
+          into a 3D target, and a staged inverse-kinematics controller descends, grasps,
+          and lifts it. Four of the five die types succeed. The fifth, the d4, doesn't,
+          and I explain why further down.
+        </p>
+        <p>
+          Underneath the demo is a longer thread of RL experiments on the same platform
+          — most of them documented failures on the way to two real wins — and a
+          synthetic-to-real object detector I built from a headless Blender pipeline.
+          This page is a status dashboard across all of it: what works, what doesn't
+          yet, and the numbers behind both.
+        </p>
+        <div class="btn-row">
+          <a class="btn btn-accent" href="#demo-gallery">Watch the demos</a>
+          <a class="btn" href="https://github.com/hksaperstein/rl">Source on GitHub</a>
+        </div>
+      </div>
+      <div class="card hero-video-card">
+        <video autoplay muted loop playsinline controls preload="metadata"
+          poster="assets/images/projects/franka-dice-pick/dice-pick-d20-poster.jpg"
+          src="assets/videos/projects/franka-dice-pick/dice-pick-d20.mp4"></video>
+        <div class="hero-video-caption">
+          Commanded d20. The detector finds it among five dice, depth deprojection gives
+          the 3D target, and the staged IK sequence descends, grasps, and lifts. Overlay
+          text is the actual commanded/detected/confidence readout the script prints, not
+          added after the fact.
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+<!-- /GRAFT -->
+
+<!-- GRAFT:dashboard-only:highlights -->
+<section id="highlights">
+  <div class="wrap">
+    <p class="eyebrow">Where things stand</p>
+    <h2>Four numbers I can actually point to a source for</h2>
+    <div class="stat-grid">
+      <div class="stat-card">
+        <div class="stat-num">4 / 5</div>
+        <div class="stat-label">die types picked correctly by the vision-driven grasp (seed 42). The d4 is the one I can't pick yet.</div>
+        <div class="stat-src">outputs/dice_demo/gate_v/verdict_d*.json — z-gains 237–241mm on d8/d10/d12/d20, ~0.3mm on d4</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-num">0.090 → 0.442</div>
+        <div class="stat-label">d8 real-photo detection mAP50, synthetic-only detector, before → after fixing an apparent-size confound in the training data. d10 moved 0.097 → 0.534 the same way.</div>
+        <div class="stat-src">vision/docs/results/2026-07-dice-detector-v1/eval_s.md, eval_s_v2.md</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-num">8 / 8</div>
+        <div class="stat-label">envs with a sustained learned lift on the first RL checkpoint that ever picked up a die (asset-bisect rung 2, seed 123, 48mm d20).</div>
+        <div class="stat-src">logs/videos/franka_checkpoint_review/heights_joint-die-big_model_1499.json</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-num">&lt; $1</div>
+        <div class="stat-label">total cost of the first full cloud training run I proved out on GCP — create instance, install Isaac Sim, train, sync checkpoints, tear down, verified clean.</div>
+        <div class="stat-src">docs/cloud/franka-cloud-shakedown.md — status: PROVEN, 2026-07-13</div>
+      </div>
+    </div>
+  </div>
+</section>
+<!-- /GRAFT -->
+
+<!-- GRAFT:franka-dice-pick:dice-pick-gallery (already live, informational only) -->
+<section id="demo-gallery">
+  <div class="wrap">
+    <p class="eyebrow">Demo</p>
+    <h2>Picking the die I ask for</h2>
+    <p class="section-intro">
+      This part is already written up in full on the live site's Franka write-up —
+      I'm showing two of the five clips here for context before the new material
+      below. The controller is scripted, not learned: a trained YOLO detector plus
+      depth deprojection gives the 3D target, and a staged differential-IK sequence
+      does the grasp. What's being tested is the platform and the perception bridge,
+      not a learned policy.
+    </p>
+    <div class="gallery-grid cols-2 mt-lg">
+      <figure class="card">
+        <span class="figure-tag tag-pass" style="margin:0.9rem 0 0 1rem;">Pass</span>
+        <video controls preload="metadata"
+          poster="assets/images/projects/franka-dice-pick/dice-pick-d10-poster.jpg"
+          src="assets/videos/projects/franka-dice-pick/dice-pick-d10.mp4"></video>
+        <figcaption>
+          Commanded d10, one of the two smallest dice on the table. This is the one
+          where grasp-position tolerance actually mattered — at 15mm tolerance the
+          fingers close beside a 15–18mm die instead of on it; tightening to about 5mm
+          fixed it.
+        </figcaption>
+      </figure>
+      <figure class="card">
+        <span class="figure-tag tag-fail" style="margin:0.9rem 0 0 1rem;">The permitted failure</span>
+        <video controls preload="metadata"
+          poster="assets/images/projects/franka-dice-pick/dice-pick-d4-poster.jpg"
+          src="assets/videos/projects/franka-dice-pick/dice-pick-d4.mp4"></video>
+        <figcaption>
+          Commanded d4. Detection and positioning both converge to sub-millimeter
+          accuracy, and the pick still fails: the z-gain on the target die is about
+          0.3mm versus 237–241mm on the four that succeed. Flat parallel gripper pads
+          squeeze a tetrahedron out of the grasp. I declared this a permitted failure
+          before the demo ran, and it failed exactly that way — it's an open grasp-
+          strategy problem, not a bug I haven't gotten to.
+        </figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
+<!-- /GRAFT -->
+
+<!-- GRAFT:franka-dice-pick:rl-milestones -->
+<section id="rl-milestones">
+  <div class="wrap">
+    <p class="eyebrow">New since the last write-up</p>
+    <h2>Getting a policy to lift a die at all</h2>
+    <p class="section-intro">
+      The demo above is scripted, not learned — Phase I of this project is a trained
+      policy that can grasp and lift, and that's turned out to be its own project. I
+      swapped the validated Franka lift recipe (direct joint-position actions, no IK)
+      onto the physics-baked d20 die and it failed completely: 1500 iterations,
+      <code>lifting_object</code> never left its 0.12 spawn-artifact floor, position
+      error never beat the do-nothing baseline. The recipe itself wasn't broken — the
+      pre-authorized fallback, the same config with NVIDIA's DexCube swapped back in,
+      trained a clean lift and carry in the same 1500 iterations. So the die asset was
+      the variable, and I bisected it.
+    </p>
+    <div class="gallery-grid cols-3 mt-lg">
+      <figure class="card">
+        <span class="figure-tag tag-fail" style="margin:0.9rem 0 0 1rem;">0 / 8 sustained lifts</span>
+        <video controls preload="metadata"
+          poster="assets/images/projects/franka-dice-pick/rl-joint-die-falsified-poster.jpg"
+          src="assets/videos/projects/franka-dice-pick/rl-joint-die-d20-falsified.mp4"></video>
+        <figcaption>
+          <strong>d20 at its real 30.3mm size.</strong> Reach-then-settle, every
+          episode, across every seed I ran at this size. Value loss stayed bounded —
+          training wasn't unstable, the policy just never discovered a grasp.
+        </figcaption>
+      </figure>
+      <figure class="card">
+        <span class="figure-tag tag-pass" style="margin:0.9rem 0 0 1rem;">8 / 8 sustained lifts</span>
+        <video controls preload="metadata"
+          poster="assets/images/projects/franka-dice-pick/rl-first-die-lift-poster.jpg"
+          src="assets/videos/projects/franka-dice-pick/rl-first-die-lift-rung2-seed123.mp4"></video>
+        <figcaption>
+          <strong>The same d20, scaled to 48mm (DexCube's size), mass pinned at
+          0.216kg.</strong> Seed 123 out of three found the grasp — position error
+          0.0956, better than the DexCube reference run's own 0.105. Seeds 42 and 7 at
+          the same size still failed, a 1-of-3 split rather than a clean pass, but this
+          is the first checkpoint on the whole platform that ever picked up a die. Wide
+          eval camera, all 8 parallel envs shown.
+        </figcaption>
+      </figure>
+      <figure class="card">
+        <span class="figure-tag tag-pass" style="margin:0.9rem 0 0 1rem;">Decisive: 13.4 / 15 lift steps</span>
+        <video controls preload="metadata"
+          poster="assets/images/projects/franka-dice-pick/rl-joint-cube-poster.jpg"
+          src="assets/videos/projects/franka-dice-pick/rl-joint-cube-lift-carry.mp4"></video>
+        <figcaption>
+          <strong>The DexCube fallback</strong> that told me the joint-space recipe
+          itself was sound before I started bisecting the die asset: position error
+          0.105 (half the do-nothing baseline), mean episode reward 138 versus 2 for
+          the failed d20 run. This is what "the recipe works" looks like.
+        </figcaption>
+      </figure>
+    </div>
+
+    <div class="process-list mt-lg">
+      <div class="process-item">
+        <h3><span class="step-num">Ladder result</span> Shape gates grasp discovery. Size makes it worse. Mass and the asset pipeline are both cleared.</h3>
+        <p>
+          I ran the same object at three seeds per rung, holding size and mass fixed
+          and swapping one variable at a time against the 0.216kg / 48mm baseline:
+        </p>
+        <p>
+          <strong>Mass</strong> — d20 at 30.3mm, mass raised 21.6x (0.01kg → 0.216kg):
+          0/3, all three runs nearly identical failure curves. Mass isn't the gate.<br />
+          <strong>Size</strong> — d20 scaled to 48mm, mass pinned: 1/3 (the seed-123
+          run above). Formally a fail under my own 2/3 rule, but the split itself is
+          the finding: 30.3mm is a deterministic 0/4 across every full run I have at
+          that size; 48mm is "sometimes discoverable." Size is load-bearing.<br />
+          <strong>Shape</strong> — a cube from my own bake pipeline at the same 48mm /
+          0.216kg: 3/3, matching DexCube's own reliability. This also clears the bake
+          pipeline itself — it's not producing broken assets, since a policy handles
+          the baked cube expertly once it finds the grasp.
+        </p>
+        <p>
+          Reading it together: a flat-faced object gives a clumsy early contact
+          somewhere to land — a wide antipodal-grasp basin. A near-spherical polyhedron
+          rolls away from a clumsy contact and offers the policy no parallel faces to
+          discover, and at 30mm that first rewarding grasp is, in three seeds of
+          evidence, never found. That's grasp-affordance scarcity as an exploration
+          failure, not a physics bug — consistent with what I found in the
+          manipulation-RL literature on shape-conditioned grasp discovery (Zhou &amp;
+          Held 2022; Danielczuk et al.) before I ran this ladder.
+        </p>
+        <p class="stat-src">docs/superpowers/plans/2026-07-12-asset-bisect-report.md — full per-seed table and run paths</p>
+      </div>
+    </div>
+  </div>
+</section>
+<!-- /GRAFT -->
+
+<!-- GRAFT:dice-detection:datagen-v2 -->
+<section id="detection-fix">
+  <div class="wrap">
+    <p class="eyebrow">New since the last write-up</p>
+    <h2>Fixing the d8/d10 sim-to-real collapse — and the regression that came with it</h2>
+    <p class="section-intro">
+      The detector's original real-photo failure (documented on the dice-detection
+      page) was a systematic classification drift up the shape-complexity ladder:
+      d8 and d10 kept getting called d12 or d20 on real close-up photos. My working
+      hypothesis was that the synthetic scenes render dice at realistic relative
+      sizes in multi-die tabletop shots, so apparent in-frame size becomes a class
+      cue the model leans on — and real test photos are almost all single-die
+      close-ups, where every die looks "big." I pre-registered two thresholds before
+      testing it: real mAP50 on d8 and d10 clearing 0.40 (primary), and d12/d20 not
+      regressing (guard).
+    </p>
+    <div class="chart-card card mt-lg">
+      <svg viewBox="0 0 720 340" role="img" aria-label="Grouped bar chart of real-photo detection mAP50 per die class, variant S versus variant S v2, six classes d4 d6 d8 d10 d12 d20">
+        <title>Real-test mAP50 by class: synthetic-only (S) vs. datagen-v2 (S_v2)</title>
+        <!-- gridlines -->
+        <line class="chart-axis" x1="44" x2="700" y1="300" y2="300"></line>
+        <line class="chart-axis" x1="44" x2="700" y1="230" y2="230" stroke-dasharray="2,3"></line>
+        <line class="chart-axis" x1="44" x2="700" y1="160" y2="160" stroke-dasharray="2,3"></line>
+        <line class="chart-axis" x1="44" x2="700" y1="90" y2="90" stroke-dasharray="2,3"></line>
+        <line class="chart-axis" x1="44" x2="700" y1="20" y2="20" stroke-dasharray="2,3"></line>
+        <text class="chart-axis-text" x="38" y="303" text-anchor="end">0.0</text>
+        <text class="chart-axis-text" x="38" y="233" text-anchor="end">0.25</text>
+        <text class="chart-axis-text" x="38" y="163" text-anchor="end">0.5</text>
+        <text class="chart-axis-text" x="38" y="93" text-anchor="end">0.75</text>
+        <text class="chart-axis-text" x="38" y="23" text-anchor="end">1.0</text>
+
+        <!-- d4 -->
+        <rect x="59.3" y="105.4" width="35" height="194.6" fill="var(--accent-2)"></rect>
+        <text class="chart-value-label" x="76.8" y="99" text-anchor="middle">0.70</text>
+        <rect x="100.9" y="80.5" width="35" height="219.5" fill="var(--accent)"></rect>
+        <text class="chart-value-label" x="118.4" y="74" text-anchor="middle">0.78</text>
+        <text class="chart-bar-label" x="97.6" y="320" text-anchor="middle">d4</text>
+
+        <!-- d6 -->
+        <rect x="168.6" y="154.7" width="35" height="145.3" fill="var(--accent-2)"></rect>
+        <text class="chart-value-label" x="186.1" y="148" text-anchor="middle">0.52</text>
+        <rect x="210.2" y="223.0" width="35" height="77" fill="var(--accent)"></rect>
+        <text class="chart-value-label" x="227.7" y="217" text-anchor="middle">0.28</text>
+        <text class="chart-bar-label" x="206.9" y="320" text-anchor="middle">d6</text>
+
+        <!-- d8 -->
+        <rect x="278.0" y="274.8" width="35" height="25.2" fill="var(--accent-2)"></rect>
+        <text class="chart-value-label" x="295.5" y="269" text-anchor="middle">0.09</text>
+        <rect x="319.5" y="176.2" width="35" height="123.8" fill="var(--accent)"></rect>
+        <text class="chart-value-label" x="337.0" y="170" text-anchor="middle">0.44</text>
+        <text class="chart-bar-label" x="316.3" y="320" text-anchor="middle">d8</text>
+
+        <!-- d10 -->
+        <rect x="387.3" y="272.8" width="35" height="27.2" fill="var(--accent-2)"></rect>
+        <text class="chart-value-label" x="404.8" y="267" text-anchor="middle">0.10</text>
+        <rect x="428.9" y="150.5" width="35" height="149.5" fill="var(--accent)"></rect>
+        <text class="chart-value-label" x="446.4" y="144" text-anchor="middle">0.53</text>
+        <text class="chart-bar-label" x="425.6" y="320" text-anchor="middle">d10</text>
+
+        <!-- d12 -->
+        <rect x="496.6" y="37.9" width="35" height="262.1" fill="var(--accent-2)"></rect>
+        <text class="chart-value-label" x="514.1" y="32" text-anchor="middle">0.94</text>
+        <rect x="538.2" y="35.1" width="35" height="264.9" fill="var(--accent)"></rect>
+        <text class="chart-value-label" x="555.7" y="29" text-anchor="middle">0.95</text>
+        <text class="chart-bar-label" x="534.9" y="320" text-anchor="middle">d12</text>
+
+        <!-- d20 -->
+        <rect x="606.0" y="60.6" width="35" height="239.4" fill="var(--accent-2)"></rect>
+        <text class="chart-value-label" x="623.5" y="55" text-anchor="middle">0.86</text>
+        <rect x="647.5" y="46.0" width="35" height="254" fill="var(--accent)"></rect>
+        <text class="chart-value-label" x="665.0" y="40" text-anchor="middle">0.91</text>
+        <text class="chart-bar-label" x="644.3" y="320" text-anchor="middle">d20</text>
+      </svg>
+      <div class="chart-legend">
+        <span><span class="swatch" style="background:var(--accent-2)"></span>S — synthetic only</span>
+        <span><span class="swatch" style="background:var(--accent)"></span>S_v2 — apparent-size-decoupled close-up slice added</span>
+      </div>
+    </div>
+    <p>
+      Both pre-registered thresholds passed: d8 went 0.090 → 0.442 and d10 went
+      0.097 → 0.534, both past the 0.40 bar, and d12/d20 held or improved slightly
+      (0.946, 0.907). That's real support for the size-confound hypothesis, not just
+      a number that moved.
+    </p>
+    <p>
+      It also cost me d6, which the guard didn't cover: 0.519 → 0.275. I looked at it
+      rather than filing it as noise — the confusion matrices show d6's own false-
+      positive rate actually fell; what happened is d6 recall collapsed because d10
+      started absorbing d6 detections that used to scatter across d10/d12/d20 (d6→d10
+      confusion rose from 6% to 50%). d10 didn't just get better at being itself, it
+      got more aggressive at claiming ambiguous cases, and d6 lost that fight. That's
+      the open item for the next data-generation pass, not something I'm rounding off.
+    </p>
+    <p class="stat-src">
+      vision/docs/results/2026-07-dice-detector-v1/eval_s_v2.md,
+      vision/docs/results/2026-07-dice-detector-v1/d6_regression_analysis.md
+    </p>
+
+    <div class="gallery-grid cols-2 mt-lg">
+      <figure class="card">
+        <div class="compare-pair">
+          <div>
+            <span class="compare-label">S — before</span>
+            <img src="assets/images/projects/dice-detection/d10-before-s-mislabeled-d12.jpg" alt="Real photo of a d10 die, detected and labeled d12 with confidence 0.84 by the synthetic-only model" loading="lazy" />
+          </div>
+          <div>
+            <span class="compare-label">S_v2 — after</span>
+            <img src="assets/images/projects/dice-detection/d10-after-s_v2-correct.jpg" alt="Same real photo of the d10 die, correctly detected and labeled d10 with confidence 0.86 by the datagen-v2 model" loading="lazy" />
+          </div>
+        </div>
+        <figcaption>
+          Same real photo, same die, run through both models. The synthetic-only
+          model boxes it correctly but calls it a d12 at 0.84 confidence — localization
+          was never the problem, the class head was reading "big die in frame" as a
+          cue. The datagen-v2 model gets the class right at 0.86.
+        </figcaption>
+      </figure>
+      <figure class="card">
+        <div style="padding:1.25rem;">
+          <h3>What actually changed</h3>
+          <p class="muted">
+            A 3,000-image close-up slice added to training, with camera distance
+            decoupled from class — every die type now appears at every apparent
+            scale, not just its physically realistic one in a multi-die tabletop
+            shot. Nothing else in the generator or training recipe changed.
+          </p>
+        </div>
+      </figure>
+    </div>
+  </div>
+</section>
+<!-- /GRAFT -->
+
+<!-- GRAFT:dashboard-only:research-process -->
+<section id="research-process">
+  <div class="wrap">
+    <p class="eyebrow">How I run this</p>
+    <h2>Hypothesis first, pre-registered thresholds, someone else reviews the diff</h2>
+    <p class="section-intro">
+      This project runs on a two-tier process. Anything that changes what the
+      policy can perceive, do, or be scored on — a new action space, a new
+      curriculum, a new reward term — gets a real hypothesis, grounded in
+      background research, before I write a spec. Reward-weight tuning inside an
+      already-validated mechanism runs on a faster hill-climbing loop instead;
+      that distinction is deliberate, not an excuse to skip rigor where it
+      matters. Three examples from the work above:
+    </p>
+    <div class="process-list">
+      <div class="process-item">
+        <h3><span class="step-num">01</span> The asset-bisect ladder</h3>
+        <p>
+          Before touching the d20 asset, I fixed the protocol: three seeds per
+          rung, a verdict requires 2 of 3, and the authoritative metric
+          (<code>position_error</code> against the do-nothing baseline) is decided
+          before any run starts, not chosen afterward to fit the result. Rung 2
+          (size) technically failed that rule at 1/3 — I reported it as a fail and
+          wrote up the split, because the split was more informative than forcing
+          a clean pass/fail label onto it.
+        </p>
+      </div>
+      <div class="process-item">
+        <h3><span class="step-num">02</span> The datagen-v2 verdict</h3>
+        <p>
+          Two thresholds, written down before training: d8/d10 real mAP50 past
+          0.40, d12/d20 not regressing. Both passed. The d6 regression the guard
+          didn't cover doesn't get folded into a "success" narrative — it's a
+          separate open item with its own root-cause note.
+        </p>
+      </div>
+      <div class="process-item">
+        <h3><span class="step-num">03</span> A caught defect before it cost a training run</h3>
+        <p>
+          On an earlier touch-then-goal reward redesign, a whole-branch review
+          caught a real bug before any GPU time was spent on it: a running-max
+          milestone mechanism that would have banked partial credit at the first
+          waypoint and then paid nothing for the rest of the episode — almost
+          certainly reproducing an earlier "reach, then freeze" failure mode and
+          getting misread as "even the easier task fails." Independently re-derived,
+          not just trusted, and fixed before training started.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+<!-- /GRAFT -->
+
+<!-- GRAFT:dashboard-only:tech-stack -->
+<section id="stack">
+  <div class="wrap">
+    <p class="eyebrow">Under the hood</p>
+    <h2>Stack</h2>
+    <div class="stack-grid">
+      <div class="stack-card card">
+        <h4>Simulation</h4>
+        <p class="muted">Isaac Sim / Isaac Lab, Franka Panda (previously an AR4 hobby arm — I moved off it after repeated evidence the grasp-discoverability problem traced to AR4-asset defects, not the RL approach).</p>
+      </div>
+      <div class="stack-card card">
+        <h4>RL</h4>
+        <p class="muted">rsl_rl PPO, direct joint-position and task-space action variants, staged/gated reward shaping where a plain weighted sum proved exploitable.</p>
+      </div>
+      <div class="stack-card card">
+        <h4>Perception</h4>
+        <p class="muted">YOLO11s trained on procedurally generated data, depth deprojection with a geometric-plausibility filter, ONNX + manifest export as the deployment interface.</p>
+      </div>
+      <div class="stack-card card">
+        <h4>Synthetic data</h4>
+        <p class="muted">Headless Blender pipeline: procedural dice geometry via convex-hull + boolean ops, randomized materials/glyphs, occlusion-aware COCO annotation from a second ID-pass render.</p>
+      </div>
+      <div class="stack-card card">
+        <h4>Cloud</h4>
+        <p class="muted">GCP spot L4 instances for a second training lane — proven end to end (install, train, checkpoint sync, teardown) at under $1 per run, with a recorded recipe for spot-preemption recovery.</p>
+      </div>
+      <div class="stack-card card">
+        <h4>Repo</h4>
+        <p class="muted">Monorepo: the RL/sim side and the vision side (a separate repo originally) merged with full history. Everything here traces back to <a href="https://github.com/hksaperstein/rl">github.com/hksaperstein/rl</a>.</p>
+      </div>
+    </div>
+  </div>
+</section>
+<!-- /GRAFT -->
+
+</main>
+
+<footer class="site-footer">
+  <div class="wrap footer-row">
+    <div>Harrison Saperstein — robot manipulation research, Isaac Lab.</div>
+    <div><a href="https://github.com/hksaperstein/rl">github.com/hksaperstein/rl</a></div>
+  </div>
+</footer>
+
+<script src="js/script.js"></script>
+</body>
+</html>

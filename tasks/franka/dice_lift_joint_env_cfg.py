@@ -274,3 +274,32 @@ class FrankaDieLiftJointMixedEnvCfg_PLAY(FrankaDieLiftJointMixedEnvCfg):
         self.scene.num_envs = 50
         self.scene.env_spacing = 2.5
         self.observations.policy.enable_corruption = False
+
+
+@configclass
+class FrankaDieLiftJointMidEnvCfg(FrankaDieLiftJointHeavyEnvCfg):
+    """Staged-anneal fallback, stage 2 (docs/superpowers/specs/2026-07-13-
+    size-curriculum-design.md Verdict section - fired after the mixed-size
+    primary arm was FALSIFIED 0/3): d20 scaled 30.3mm -> 39.1mm, the
+    curriculum's middle rung between stage 1 (48.0mm, the existing
+    `joint-die-big` variant) and stage 3 (30.3mm, the existing
+    `joint-die-heavy` variant). Mass stays pinned at 0.216kg via the
+    inherited mass_props override, same pattern as FrankaDieLiftJointBigEnvCfg
+    - size is this rung's only new variable relative to its parent. Trained
+    by resuming each seed's stage-1 checkpoint via train_franka.py's existing
+    --checkpoint flag; not a from-scratch run."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.scene.object.spawn.scale = (0.001291, 0.001291, 0.001291)
+
+
+@configclass
+class FrankaDieLiftJointMidEnvCfg_PLAY(FrankaDieLiftJointMidEnvCfg):
+    """Smaller, non-corrupted-observation variant for eval/play."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.scene.num_envs = 50
+        self.scene.env_spacing = 2.5
+        self.observations.policy.enable_corruption = False

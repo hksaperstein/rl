@@ -75,6 +75,7 @@ parser.add_argument(
         "joint-die-big",
         "joint-cube-baked",
         "joint-die-mixed",
+        "joint-die-mid",
     ],
     default="ik-cube",
     help=(
@@ -94,7 +95,9 @@ parser.add_argument(
         "joint-die-mixed: size-curriculum primary arm - per-env d20 size varied across "
         "{48.0,43.6,39.1,34.7,30.3}mm (deterministic round-robin), mass pinned 0.216kg "
         "(docs/superpowers/specs/2026-07-13-size-curriculum-design.md); _PLAY probe is a single "
-        "all-30.3mm size."
+        "all-30.3mm size. "
+        "joint-die-mid: size-curriculum staged-anneal fallback, stage 2 - the d20 at 39.1mm, mass "
+        "pinned at 0.216kg (docs/superpowers/specs/2026-07-13-size-curriculum-design.md Verdict section)."
     ),
 )
 AppLauncher.add_app_launcher_args(parser)
@@ -137,6 +140,8 @@ elif args_cli.variant == "joint-cube-baked":
     from tasks.franka.dice_lift_joint_env_cfg import FrankaCubeBakedLiftJointEnvCfg_PLAY  # noqa: E402
 elif args_cli.variant == "joint-die-mixed":
     from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftJointMixedEnvCfg_PLAY  # noqa: E402
+elif args_cli.variant == "joint-die-mid":
+    from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftJointMidEnvCfg_PLAY  # noqa: E402
 
 VIDEO_DIR = args_cli.output_dir or os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs", "videos", "franka_checkpoint_review"
@@ -177,6 +182,8 @@ def main() -> None:
         env_cfg = FrankaCubeBakedLiftJointEnvCfg_PLAY()
     elif args_cli.variant == "joint-die-mixed":
         env_cfg = FrankaDieLiftJointMixedEnvCfg_PLAY()
+    elif args_cli.variant == "joint-die-mid":
+        env_cfg = FrankaDieLiftJointMidEnvCfg_PLAY()
     else:
         env_cfg = FrankaLiftEnvCfg_PLAY()
     env_cfg.scene.num_envs = args_cli.num_envs

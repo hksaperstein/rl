@@ -50,6 +50,7 @@ parser.add_argument(
         "joint-die-big",
         "joint-cube-baked",
         "joint-die-mixed",
+        "joint-die-mid",
     ],
     default="ik-cube",
     help=(
@@ -67,7 +68,11 @@ parser.add_argument(
         "(docs/superpowers/specs/2026-07-12-asset-bisect-design.md). "
         "joint-die-mixed: size-curriculum primary arm - per-env d20 size varied across "
         "{48.0,43.6,39.1,34.7,30.3}mm (deterministic round-robin), mass pinned 0.216kg "
-        "(docs/superpowers/specs/2026-07-13-size-curriculum-design.md)."
+        "(docs/superpowers/specs/2026-07-13-size-curriculum-design.md). "
+        "joint-die-mid: size-curriculum staged-anneal fallback, stage 2 - the d20 scaled to 39.1mm, "
+        "mass pinned at 0.216kg, meant to be --checkpoint-resumed from a joint-die-big run and itself "
+        "resumed onward into joint-die-heavy (docs/superpowers/specs/2026-07-13-size-curriculum-design.md "
+        "Verdict section)."
     ),
 )
 parser.add_argument(
@@ -135,6 +140,10 @@ def main() -> None:
         from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftJointMixedEnvCfg
 
         env_cfg = FrankaDieLiftJointMixedEnvCfg()
+    elif args_cli.variant == "joint-die-mid":
+        from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftJointMidEnvCfg
+
+        env_cfg = FrankaDieLiftJointMidEnvCfg()
     else:
         env_cfg = FrankaLiftEnvCfg()
     env_cfg.scene.num_envs = args_cli.num_envs
@@ -158,6 +167,7 @@ def main() -> None:
         "joint-die-big": "_jointdiebig",
         "joint-cube-baked": "_jointcubebaked",
         "joint-die-mixed": "_jointdiemixed",
+        "joint-die-mid": "_jointdiemid",
     }[args_cli.variant]
     log_dir = os.path.join(
         LOG_ROOT + _log_suffix,

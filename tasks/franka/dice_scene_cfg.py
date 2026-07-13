@@ -72,7 +72,7 @@ _DICE_SET_DIR = os.path.join(
     "vision",
     "data",
     "raw",
-    "dice_sets_v1_colored",  # TEMPORARY (task-dice-usd-materials follow-up) -- revert before commit
+    "dice_sets_v1",
 )
 _DICE_SET_NAME = "set_00000"  # every DIE_TYPES manifest for this set has empty mesh_quality_warnings
 

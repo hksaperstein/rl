@@ -160,3 +160,24 @@ recrop) are the fix path if/when the demo needs to be robust across
 sessions — the razor margin is also exactly what the
 noise-robustness principle (N≥20 varied-seed evals) is meant to
 surface.
+
+## Colored-dice / exposure mystery RESOLVED (2026-07-13)
+
+Root cause of the "white dice" and every blowout observation since
+2026-07-11: **doubled light energy** — the scene stacked a
+DistantLight(3000) "stage light" on the default DomeLight(3000). Not
+auto-exposure: `/rtx/post/histogram/enabled` was measured False all
+along (manual exposure: f/5.0, ISO 100, 1/50s), killing the earlier
+"RTX auto-exposure reacting to material rebind" theory. The dice USDs
+always carried correct authored UsdPreviewSurface materials (verified
+by pxr inspection + from-scratch regeneration reproducing the shipped
+set). With the DistantLight removed (user directive, commit 1f860a9),
+pixel samples match the healthy documented baseline within 1 RGB unit
+and the dice render their authored pale blue-violet with legible
+numerals — frames: outputs/dice_demo/exposure_check/gate_a/.
+`--colored-dice` runtime rebinding and `--light-scale` workarounds are
+now obsolete for the standard scene. Caveats recorded in the task
+report: n=1 per lighting condition; residual run-to-run RTX render
+variance exists independently (see the d20-seed42 fragility section
+above). If more saturated dice are wanted, that's a datagen manifest
+parameter (HSV saturation range), not a rendering fix.

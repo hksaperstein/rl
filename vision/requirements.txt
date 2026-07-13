@@ -15,3 +15,9 @@ pyyaml
 onnx>=1.12.0,<2.0.0
 onnxruntime
 onnxslim>=0.1.82
+# Plain pxr/USD inspection with no Isaac Sim/Kit dependency (Isaac's own pxr
+# bindings require the full Kit environment via isaacsim.SimulationApp --
+# see scripts/_diag_dice_material_check.py's docstring). Used to fresh-reload
+# and verify dice USD exports (structure/material/geometry) directly from
+# vision/.venv -- see .superpowers/sdd/task-dice-usd-materials-report.md.
+usd-core

@@ -81,7 +81,31 @@ def export_asset(die_obj, manifest_record, outdir, bevel_fraction, size_mm):
     _save_blend_copy(blend_path)
 
     usd_path = os.path.join(outdir, f"{asset_id}.usd")
-    bpy.ops.wm.usd_export(filepath=usd_path, selected_objects_only=True)
+    # Materials/textures ARE exported by this call -- confirmed by direct
+    # pxr inspection of shipped dice_sets_v1 USDs (every die's base +
+    # engraving-fill/decal material round-trips as a bound UsdPreviewSurface
+    # with diffuseColor/roughness matching materials.py's authored values,
+    # textures/*.png resolve relative to the .usd file) and by a fresh
+    # regeneration test against this exact code (see
+    # .superpowers/sdd/task-dice-usd-materials-report.md) that reproduced
+    # the shipped set's material data exactly. That happens purely because
+    # export_materials/generate_preview_surface/generate_materialx_network/
+    # export_textures_mode already default to the values pinned explicitly
+    # below in this Blender install (5.1.2) -- there was never a dropped-
+    # material bug in this exporter. Pinning them here isn't a functional
+    # change; it's so a future Blender upgrade flipping one of these
+    # operator defaults (this pipeline has already hit renamed/rebehaving
+    # sockets across Blender versions once, see materials.py's docstring)
+    # can't silently reintroduce untextured exports without an explicit,
+    # visible diff here.
+    bpy.ops.wm.usd_export(
+        filepath=usd_path,
+        selected_objects_only=True,
+        export_materials=True,
+        generate_preview_surface=True,
+        generate_materialx_network=False,
+        export_textures_mode='NEW',
+    )
 
     stl_path = os.path.join(outdir, f"{asset_id}.stl")
     bpy.ops.wm.stl_export(filepath=stl_path, export_selected_objects=True)

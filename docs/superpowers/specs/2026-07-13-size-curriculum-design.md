@@ -67,3 +67,43 @@ new research).
 
 Reward/observation changes; shape curriculum (cube→die morphing);
 detector-in-loop anything; d4.
+
+## Verdict (2026-07-13): hypothesis FALSIFIED, 0/3 seeds
+
+Instrumented all-30.3mm eval (8 envs, model_2999, sustained-lift
+criterion per this spec): seed 42 **0/8**, seed 7 **0/8** (twice —
+original + a redundant re-run, identical result), seed 123 **0/8**.
+Pre-registered bar was ≥6/8 in ≥2/3 seeds; no seed produced a single
+sustained lift. Training metrics corroborate across all three seeds:
+`lifting_object` pinned at its 0.1200 spawn-z artifact floor for the
+entire 3000 iterations, `reaching_object` peaked early (0.34/0.42/0.58)
+then decayed, blended `position_error` never beat the 0.216 do-nothing
+baseline.
+
+**Diagnostic reading (why the mechanism never engaged):** the
+hypothesis depended on grasp discovery in the large-size envs supplying
+a transferable gradient. Discovery never happened at ANY size,
+including 48mm. The bisect's 48mm-only anchor was itself only 1/3
+seeds at 4096 envs; mixing five sizes cut the 48mm population to ~819
+envs — the already-rare discovery event became ~5x rarer per update,
+and the curriculum's source signal never fired. Mixed-size DR dilutes
+discovery when discovery is the bottleneck; it helps when the easy
+regime is *reliably* learnable (which 48mm was not).
+
+**Decision:** fire the pre-authorized staged-anneal fallback arm
+(48.0 → 39.1 → 30.3mm, checkpoint-resumed, 1000 iters/stage, seeds
+42/123/7) — stage 1 trains the full 4096-env population at 48mm,
+restoring the bisect's discovery odds rather than diluting them.
+Queued behind the d4 rung-0 trials on the GPU.
+
+**Ops notes from this batch:** (1) seed 123's first run hit a NEW
+Isaac failure mode — mid-training livelock at ~iter 260 (log+ckpt
+frozen 2.5h, 3 cores spinning, GPU 12%, SIGKILL required); a log-mtime
+stall detector is now standing practice. (2)
+`franka_checkpoint_review.py` writes fixed output filenames — three
+same-variant evals overwrote each other's json/video (verdicts
+recovered from per-launch tee logs; seed-7's artifacts survive, both
+runs). Future multi-seed evals must rename artifacts between runs or
+the script needs an output-suffix flag. (3) flock lock handoff among
+multiple queued waiters is NOT FIFO — do not infer artifact identity
+from queue order.

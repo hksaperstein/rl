@@ -2762,3 +2762,14 @@ Recipe: `docs/cloud/franka-cloud-shakedown.md` (status: PROVEN).
 Implication: cloud is a working second training lane (one GPU), and
 SPOT preemption churn is real — long runs need checkpoint-resume
 tolerance or on-demand provisioning.
+
+**Size-curriculum (mixed-size DR) verdict: FALSIFIED 0/3 (2026-07-13).**
+No sustained lift in any seed's all-30.3mm eval (0/8, 0/8, 0/8);
+lifting never left the spawn-z floor at any size during training.
+Mechanism diagnosis: mixing five sizes diluted the 48mm population
+~5x, and 48mm discovery was already marginal (bisect: 1/3) — the
+curriculum's transfer source never fired. Full verdict + ops notes
+appended to `docs/superpowers/specs/2026-07-13-size-curriculum-design.md`.
+Pre-authorized staged-anneal fallback (48→39.1→30.3mm,
+checkpoint-resumed stages, full-population discovery odds at 48mm)
+firing next, queued behind the d4 edge-grasp rung-0 trials.

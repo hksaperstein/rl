@@ -71,6 +71,12 @@ class FrankaDieLiftJointMixedEnvCfg(FrankaDieLiftJointHeavyEnvCfg):
 
     def __post_init__(self) -> None:
         super().__post_init__()
+        # REQUIRED for heterogeneous per-env assets (decision 2026-07-13,
+        # NEEDS_CONTEXT resolution): the default replicate_physics=True
+        # clones env_0 over the varied assets (measured: 1 scale across 16
+        # envs). Isaac Lab's dexsuite multi-asset task sets this False for
+        # exactly this reason. Scoped to this class only.
+        self.scene.replicate_physics = False
         _scales = (0.001585, 0.001440, 0.001291, 0.001146, 0.001000)
         self.scene.object.spawn = MultiAssetSpawnerCfg(
             assets_cfg=[

@@ -1,0 +1,119 @@
+{
+ "generated": "2026-07-13",
+ "note": "Content pack for hksaperstein.github.io site agent. Captions are first-person-adaptable facts; narrative copy in content/*.md is already in VOICE.md register. Numbers all trace to repo sources (public: github.com/hksaperstein/rl, branch franka-panda-pivot).",
+ "videos": [
+  {
+   "file": "assets/videos/projects/franka-dice-pick/dice-pick-d20.mp4",
+   "poster": "assets/images/projects/franka-dice-pick/dice-pick-d20-poster.jpg",
+   "duration_s": 18.2,
+   "bytes": 670880,
+   "caption": "Commanded d20 on a five-die table: detector finds it, depth deprojection gives the 3D target, staged IK descends, grasps, lifts. Pass, z-gain 237.1mm.",
+   "provenance": "outputs/dice_demo/gate_v/dice_pick_d20.mp4 (seed 42)",
+   "tag": "pass"
+  },
+  {
+   "file": "assets/videos/projects/franka-dice-pick/dice-pick-d12.mp4",
+   "poster": "assets/images/projects/franka-dice-pick/dice-pick-d12-poster.jpg",
+   "duration_s": 17.3,
+   "bytes": 418801,
+   "caption": "Commanded d12, pass, z-gain ~241mm.",
+   "provenance": "outputs/dice_demo/gate_v/dice_pick_d12.mp4 (seed 42)",
+   "tag": "pass"
+  },
+  {
+   "file": "assets/videos/projects/franka-dice-pick/dice-pick-d10.mp4",
+   "poster": "assets/images/projects/franka-dice-pick/dice-pick-d10-poster.jpg",
+   "duration_s": 18.1,
+   "bytes": 570943,
+   "caption": "Commanded d10, one of the two smallest dice. The trial where grasp-position tolerance mattered: 15mm tolerance closed beside the die; ~5mm fixed it. Pass, z-gain 239.3mm.",
+   "provenance": "outputs/dice_demo/gate_v/dice_pick_d10.mp4 (seed 42)",
+   "tag": "pass"
+  },
+  {
+   "file": "assets/videos/projects/franka-dice-pick/dice-pick-d8.mp4",
+   "poster": "assets/images/projects/franka-dice-pick/dice-pick-d8-poster.jpg",
+   "duration_s": 17.7,
+   "bytes": 515940,
+   "caption": "Commanded d8, pass, z-gain ~238mm.",
+   "provenance": "outputs/dice_demo/gate_v/dice_pick_d8.mp4 (seed 42)",
+   "tag": "pass"
+  },
+  {
+   "file": "assets/videos/projects/franka-dice-pick/dice-pick-d4.mp4",
+   "poster": "assets/images/projects/franka-dice-pick/dice-pick-d4-poster.jpg",
+   "duration_s": 18.1,
+   "bytes": 668201,
+   "caption": "Commanded d4. Detection and positioning converge to sub-millimeter accuracy and the pick still fails: flat parallel pads squeeze the tetrahedron out (z-gain ~0.3mm vs 237-241mm on the four that succeed). Declared a permitted failure before the run; it failed exactly that way. Open grasp-strategy problem, not a bug.",
+   "provenance": "outputs/dice_demo/gate_v/dice_pick_d4.mp4 (seed 42)",
+   "tag": "fail-honest"
+  },
+  {
+   "file": "assets/videos/projects/franka-dice-pick/rl-joint-die-d20-falsified.mp4",
+   "poster": "assets/images/projects/franka-dice-pick/rl-joint-die-falsified-poster.jpg",
+   "duration_s": 5.0,
+   "bytes": 316283,
+   "caption": "RL policy trained 1500 iters on the real-size (30.3mm) d20: reaches, never grasps. 0/8 sustained lifts - the falsified arm of the joint-space experiment.",
+   "provenance": "checkpoint logs/train_franka_jointdie/2026-07-12_06-56-02/model_1499.pt",
+   "tag": "fail-honest"
+  },
+  {
+   "file": "assets/videos/projects/franka-dice-pick/rl-first-die-lift-rung2-seed123.mp4",
+   "poster": "assets/images/projects/franka-dice-pick/rl-first-die-lift-poster.jpg",
+   "duration_s": 10.0,
+   "bytes": 389874,
+   "caption": "First learned die lift on this platform: d20 scaled to 48mm, 8/8 sustained lifts (asset-bisect rung 2, seed 123).",
+   "provenance": "checkpoint logs/train_franka_jointdiebig/2026-07-12_15-07-49/model_1499.pt, heights json 8/8",
+   "tag": "milestone"
+  },
+  {
+   "file": "assets/videos/projects/franka-dice-pick/rl-joint-cube-lift-carry.mp4",
+   "poster": "assets/images/projects/franka-dice-pick/rl-joint-cube-poster.jpg",
+   "duration_s": 5.0,
+   "bytes": 246160,
+   "caption": "Same training recipe, DexCube object: decisive lift+carry (8/8 sustained, position_error 0.105 vs 0.216 do-nothing baseline). Proves the recipe; isolates the failure to the die asset.",
+   "provenance": "checkpoint logs/train_franka_jointcube/2026-07-12_07-31-58/model_1499.pt",
+   "tag": "milestone"
+  }
+ ],
+ "images": [
+  {
+   "file": "assets/images/projects/dice-detection/d10-before-s-mislabeled-d12.jpg",
+   "bytes": 33525,
+   "caption": "Real d10 photo, synthetic-only v1 detector: mislabeled d12 (the apparent-size confound)",
+   "provenance": "vision/models/eval overlays, frozen real test set"
+  },
+  {
+   "file": "assets/images/projects/dice-detection/d10-after-s_v2-correct.jpg",
+   "bytes": 33676,
+   "caption": "Same class of photo after the close-up training slice: correct d10 at high confidence",
+   "provenance": "vision/models/eval overlays, frozen real test set"
+  }
+ ],
+ "stats": [
+  {
+   "value": "4/5",
+   "label": "die types picked correctly by the vision-driven grasp (seed 42); the d4 is the open failure",
+   "source": "outputs/dice_demo/gate_v/verdict_d*.json; kb/wiki/experiments/dice-pick-demo.md"
+  },
+  {
+   "value": "0.090 -> 0.442 (d8), 0.097 -> 0.534 (d10)",
+   "label": "real-photo detection mAP50 before/after fixing the apparent-size confound in synthetic training data; both pre-registered thresholds (>=0.40) passed. d6 regressed 0.519 -> 0.275 (root-caused: d10 glyph-convention attractor)",
+   "source": "vision/docs/results/2026-07-dice-detector-v1/eval_s.md, eval_s_v2.md, d6_regression_analysis.md"
+  },
+  {
+   "value": "8/8",
+   "label": "envs with sustained lift on the first RL checkpoint that ever lifted a die (48mm d20, asset-bisect rung 2 seed 123)",
+   "source": "heights_joint-die-big_model_1499.json"
+  },
+  {
+   "value": "0/3",
+   "label": "mixed-size curriculum falsified same-day: size-DR dilutes discovery when discovery is the bottleneck; staged-anneal fallback is the next arm",
+   "source": "docs/superpowers/specs/2026-07-13-size-curriculum-design.md verdict"
+  },
+  {
+   "value": "<$1",
+   "label": "cost of the first full cloud training run (GCP spot L4): create, install Isaac Sim, train 1200 iters, sync checkpoints, tear down",
+   "source": "docs/cloud/franka-cloud-shakedown.md (PROVEN)"
+  }
+ ]
+}

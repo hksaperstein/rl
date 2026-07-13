@@ -65,7 +65,7 @@ VARIANT_MAP = {
     "train_franka_jointcubebaked": "joint-cube-baked",
 }
 
-DEFAULT_BUCKET = "gs://rl-manipulation-hks-runs"
+DEFAULT_BUCKET = os.environ.get("GCS_BUCKET", "gs://rl-manipulation-hks-runs")
 
 
 def parse_args():

@@ -83,6 +83,29 @@ Geometry of a regular tetrahedron, edge a = 30.3mm, resting on a face:
   friction cone; if it cannot, that is a desk-stage falsification and the
   ladder climbs to rung 1 without burning sim runs.
 
+### Desk-check corrections (2026-07-13, post-Task-0 measurement)
+
+Task 0 measured the real assets (full arithmetic:
+`.superpowers/sdd/task-d4-rung0-tasks01-report.md`); three numbers above
+change, none alter the hypothesis or criteria:
+
+- **Edge length a = 23.591mm measured** from the actual d4 mesh (the
+  30.3mm assumed above was the d20's size, carried over in error). Span
+  between edge midpoints: 16.68mm. Tilt 35.26° is edge-length-independent.
+- **Positional window is ±3.05mm** ((a − w)/2 with measured pad width
+  w = 17.5mm), not ±6mm — the upper end of the 1–5mm IK error budget
+  exceeds it. This narrows the expected pass margin; the pre-registered
+  ≥4/5 gate and climb rule stand unchanged, and per-trial logging must
+  record the closure-time positional residual against ±3.05mm explicitly.
+- **μ = 0.5 verified** (neither the Franka hand nor the die USD authors a
+  physics material; Isaac Lab's `RigidBodyMaterialCfg()` default 0.5/0.5
+  applies), so arctan μ = 26.6°. The table-clearance analysis passes for
+  small contact-height offsets (φ ≈ 0 while the pad still spans the
+  bottom edge) but φ jumps discontinuously to 54.7° (half the dihedral
+  angle's complement geometry) if contact falls entirely onto the wedge
+  faces — Task 2 must verify actual contact via instrumentation, not
+  assume the small-δ regime held.
+
 ## Design
 
 - **Scope:** `scripts/dice_pick_demo.py` gate G only, d4-only branch. The

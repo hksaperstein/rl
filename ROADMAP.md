@@ -2770,9 +2770,31 @@ Mechanism diagnosis: mixing five sizes diluted the 48mm population
 ~5x, and 48mm discovery was already marginal (bisect: 1/3) — the
 curriculum's transfer source never fired. Full verdict + ops notes
 appended to `docs/superpowers/specs/2026-07-13-size-curriculum-design.md`.
-Pre-authorized staged-anneal fallback (48→39.1→30.3mm,
-checkpoint-resumed stages, full-population discovery odds at 48mm)
-firing next, queued behind the d4 edge-grasp rung-0 trials.
+
+**Size-curriculum staged-anneal fallback verdict: also FALSIFIED, 1/3
+seeds (2026-07-13).** 48.0→39.1→30.3mm, checkpoint-resumed per stage
+(1000 iters/stage, full 4096-env population every stage, seeds
+42/123/7). Stage-1 discovery check (48mm, instrumented eval): 0/8,
+**8/8**, 0/8 — 1/3 seeds discover, exactly reproducing the bisect's own
+48mm anchor (rung 2: 1/3, same seed). Stage-3 verdict (30.3mm,
+instrumented eval): 0/8, **8/8**, 0/8 — same 1/3, below the >=2/3 bar.
+All 9 training runs healthy (zero NaN, VF loss bounded). Mechanism
+reading: unlike the primary's dilution failure, the transfer mechanism
+itself works cleanly here — seed 123's discovered grasp carried
+undegraded through both anneal stages (`position_error` ~0.11→0.099→
+0.102, monotonic improvement, 8/8 sustained lift at both the 48mm and
+final 30.3mm checks). The bottleneck is the 1/3 base discovery rate at
+48mm itself; neither curriculum variant creates NEW discovery for
+seeds that never find a grasp — they only propagate discovery when it
+already happened. Both pre-authorized size-curriculum arms are now
+falsified; per the spec's own next-step, shape itself (grasp-strategy/
+reward changes) needs a new spec/research pass rather than further
+object-scale curriculum variants on this asset. Seed 123's 8/8
+30.3mm result is the project's first confirmed d20 lift+carry policy
+at the real target size — a reusable baseline for that next
+investigation. Full verdict + ops notes appended to
+`docs/superpowers/specs/2026-07-13-size-curriculum-design.md`; task
+report `.superpowers/sdd/task-staged-anneal-report.md`.
 
 **d4 edge-grasp rung 0: seeded trials FALSIFIED at the implementation
 layer, grasp-mechanism hypothesis untested (2026-07-13).** Spec

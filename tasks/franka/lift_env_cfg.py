@@ -38,6 +38,8 @@ Import this module only after an Isaac Sim/Isaac Lab AppLauncher has been
 created.
 """
 
+import os
+
 import isaaclab.sim as sim_utils
 from isaaclab.assets import ArticulationCfg, AssetBaseCfg, RigidObjectCfg
 from isaaclab.controllers.differential_ik_cfg import DifferentialIKControllerCfg
@@ -99,9 +101,31 @@ class FrankaLiftSceneCfg(InteractiveSceneCfg):
         spawn=GroundPlaneCfg(),
     )
 
+    # Isaac Sim default-stage light rig (2026-07-13, direct user directive
+    # "use default light rig for all work") — values verbatim from the
+    # installed omni.kit.stage_templates default_stage.py template; HDR
+    # vendored in tasks/franka/assets/. Visualization-only for this
+    # camera-less RL env: zero physics/observation/reward effect.
     light = AssetBaseCfg(
         prim_path="/World/light",
-        spawn=sim_utils.DomeLightCfg(color=(0.75, 0.75, 0.75), intensity=3000.0),
+        spawn=sim_utils.DomeLightCfg(
+            intensity=1.0,
+            exposure=9.0,
+            enable_color_temperature=True,
+            color_temperature=6250.0,
+            texture_file=os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "CarLight_512x256.hdr"),
+        ),
+    )
+
+    sun = AssetBaseCfg(
+        prim_path="/World/sun",
+        spawn=sim_utils.DistantLightCfg(
+            angle=2.5,
+            intensity=1.0,
+            exposure=10.0,
+            enable_color_temperature=True,
+            color_temperature=7250.0,
+        ),
     )
 
     object: RigidObjectCfg = RigidObjectCfg(

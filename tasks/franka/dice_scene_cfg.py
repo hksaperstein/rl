@@ -182,16 +182,36 @@ class DiceSceneCfg(InteractiveSceneCfg):
         spawn=GroundPlaneCfg(),
     )
 
+    # Isaac Sim's ACTUAL default-stage light rig (2026-07-13, direct user
+    # directive "use default light rig for all work"), values transcribed
+    # verbatim from the installed omni.kit.stage_templates default_stage.py
+    # template: an HDR "Sky" dome (CarLight HDR, intensity 1 x exposure 9,
+    # 6250K) + a soft "sun" DistantLight (angle 2.5, intensity 1 x
+    # exposure 10, 7250K). The HDR is vendored into tasks/franka/assets/
+    # (the extscache path is Isaac-version-fragile). Replaces the earlier
+    # flat grey DomeLight(3000) which rendered dark, and the removed
+    # DistantLight(3000) stage light which blew the scene out.
     light = AssetBaseCfg(
         prim_path="/World/light",
-        spawn=sim_utils.DomeLightCfg(color=(0.75, 0.75, 0.75), intensity=3000.0),
+        spawn=sim_utils.DomeLightCfg(
+            intensity=1.0,
+            exposure=9.0,
+            enable_color_temperature=True,
+            color_temperature=6250.0,
+            texture_file=os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "CarLight_512x256.hdr"),
+        ),
     )
 
-    # NOTE (2026-07-13, direct user directive): the DistantLight that used
-    # to sit here alongside the dome ("stage light", added for camera-sensor
-    # illumination) is REMOVED — default DomeLight rig only. It doubled the
-    # scene illumination and was the standing suspect for the RTX
-    # auto-exposure blowout documented in the colored-dice reports.
+    sun = AssetBaseCfg(
+        prim_path="/World/sun",
+        spawn=sim_utils.DistantLightCfg(
+            angle=2.5,
+            intensity=1.0,
+            exposure=10.0,
+            enable_color_temperature=True,
+            color_temperature=7250.0,
+        ),
+    )
 
     die_d4: RigidObjectCfg = _die_cfg("d4", (0.35, -0.20, 0.10))
     die_d8: RigidObjectCfg = _die_cfg("d8", (0.42, -0.10, 0.10))

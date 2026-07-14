@@ -9,3 +9,5 @@ __pycache__/
 # site/ portfolio bundle media is a deliverable (deploy agent pulls it from GitHub)
 !site/assets/
 !site/assets/**
+!tasks/franka/assets/
+!tasks/franka/assets/**

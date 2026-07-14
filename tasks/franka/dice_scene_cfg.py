@@ -195,7 +195,7 @@ class DiceSceneCfg(InteractiveSceneCfg):
         prim_path="/World/light",
         spawn=sim_utils.DomeLightCfg(
             intensity=1.0,
-            exposure=9.0,
+            exposure=10.0,  # +1 stop over the Kit template (its rig targets the default light-grey ground; our table albedo is dark - measured 63 vs target ~130 mean)
             enable_color_temperature=True,
             color_temperature=6250.0,
             texture_file=os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "CarLight_512x256.hdr"),
@@ -207,7 +207,7 @@ class DiceSceneCfg(InteractiveSceneCfg):
         spawn=sim_utils.DistantLightCfg(
             angle=2.5,
             intensity=1.0,
-            exposure=10.0,
+            exposure=11.0,  # +1 stop over template, same rationale as the dome
             enable_color_temperature=True,
             color_temperature=7250.0,
         ),

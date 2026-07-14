@@ -44,11 +44,12 @@ officially-supported, validated reference platform for manipulation
 it removes an entire class of custom-asset/calibration risk this project
 hit repeatedly building and tuning the AR4's own asset from a raw URDF,
 and gives a known-good baseline to compare this project's own reward/task
-design against directly. This work is being done on a separate git branch
-(`franka-panda-pivot`), not directly on `main`, per direct instruction —
-an explicit, deliberate exception to this repo's normal "commit straight
-to main" convention (see Git conventions below) for the duration of this
-pivot specifically. The AR4-specific investigations (IK positioning bug,
+design against directly. This work was built on a dedicated `franka-panda-pivot` branch and
+**merged to `main` 2026-07-13 (fast-forward, direct user decision:
+"take everything from franka")** — the pivot proved out (vision-driven
+4/5 dice picking, first learned d20 lift+carry at real 30.3mm size,
+cloud pipeline, datagen-v2 detector win). Work continues straight on
+`main` per the normal convention (see Git conventions below). The AR4-specific investigations (IK positioning bug,
 jaw-mimic defect, gripper contact geometry) are not abandoned — they may
 still matter if this project returns to AR4 later, or as a concrete test
 of the North Star's own "drop in a new arm, training should succeed
@@ -257,11 +258,14 @@ Push to `origin/main` regularly during a session (after each finished
 experiment/task/plan, not just at the end) rather than letting commits
 accumulate unpushed.
 
-**Exception**: the Franka platform pivot (see North Star above) is being
-built on a dedicated `franka-panda-pivot` branch, not `main`, per direct
-instruction — `main` stays on the validated AR4 line until/unless the
-pivot proves out and a merge decision is made. Push this branch to
-`origin` too, just not to `main`.
+(The 2026-07-09→13 Franka pivot was built on a dedicated
+`franka-panda-pivot` branch as a deliberate exception; merged to `main`
+by fast-forward 2026-07-13 per direct user decision. The branch is kept
+on origin for history; all new work goes straight to `main` again.)
+
+Public repo as of 2026-07-13 (user decision) — no secrets/keys/datasets
+tracked; keep it that way (env-var references only, data/ and models/
+stay gitignored).
 
 ## Status
 

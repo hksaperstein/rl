@@ -1664,26 +1664,57 @@ def run_gate_g() -> None:
     for det in detections:
         print(f"  class={det['class']:<8} conf={det['confidence']:.3f} world_pos={det['world_pos']}")
 
-    target_det = select_target_detection(detections, choice)
-    det_x, det_y, det_z = target_det["world_pos"]
-    print(
-        f"[GATE G] target detection for '{choice}': class={target_det['class']} "
-        f"conf={target_det['confidence']:.3f} world_pos=({det_x:.4f}, {det_y:.4f}, {det_z:.4f})"
-    )
+    # 2026-07-15 fix: the first --gt-xy-bypass implementation called
+    # select_target_detection() unconditionally above this point, so a
+    # TOTAL detection miss (0 candidates for `choice`, exactly d4's
+    # observed failure mode) raised RuntimeError before the bypass branch
+    # below ever ran - the bypass only ever helped an INACCURATE
+    # detection, never a MISSING one, which is the dominant failure mode
+    # it exists to route around (found live on a cloud rerun, seed 42,
+    # see .superpowers/sdd/task-2-report.md). Fix: only let the exception
+    # propagate when the bypass is OFF (preserves today's exact fail-loud
+    # behavior for every non-bypass call); when the bypass is ON, catch
+    # it, record that no real detection exists, and continue - GT alone
+    # is sufficient to compute target_xy below, no detection required.
+    target_det: dict | None = None
+    det_x = det_y = det_z = None
+    try:
+        target_det = select_target_detection(detections, choice)
+        det_x, det_y, det_z = target_det["world_pos"]
+        print(
+            f"[GATE G] target detection for '{choice}': class={target_det['class']} "
+            f"conf={target_det['confidence']:.3f} world_pos=({det_x:.4f}, {det_y:.4f}, {det_z:.4f})"
+        )
+    except RuntimeError as e:
+        if not args_cli.gt_xy_bypass:
+            raise
+        print(
+            f"[GATE G] detector FAILED to find '{choice}' ({e}) - continuing because "
+            f"--gt-xy-bypass is active; target_xy will be sourced from ground truth below, "
+            f"detector-vs-GT diagnostic print skipped (nothing to compare against)."
+        )
+
+    gt_pos = np.array([results[choice]["x"], results[choice]["y"], results[choice]["z"]])
 
     # Diagnostic-only GT comparison (measure, don't blind-nudge - CLAUDE.md's
     # explicit guidance re: this repo's own AR4-era unexplained IK misses).
     # This value is NEVER used to compute the grasp target - x/y come only
-    # from the detection above.
-    gt_pos = np.array([results[choice]["x"], results[choice]["y"], results[choice]["z"]])
-    det_pos = np.array([det_x, det_y, det_z])
-    full_err = float(np.linalg.norm(gt_pos - det_pos))
-    xy_err = float(np.linalg.norm(gt_pos[:2] - det_pos[:2]))
-    print(
-        f"[GATE G] detector-vs-GT offset for '{choice}' [DIAGNOSTIC ONLY, not used for grasp]: "
-        f"xy={xy_err * 1000:.1f}mm full-3d={full_err * 1000:.1f}mm "
-        f"(gt={gt_pos.tolist()}, det={det_pos.tolist()})"
-    )
+    # from the detection above. Only meaningful when a detection exists;
+    # None when the bypass caught a total detection miss (nothing to
+    # compare GT against) - the verdict JSON below records this explicitly
+    # rather than crashing on a None.
+    det_pos = None
+    xy_err = None
+    full_err = None
+    if target_det is not None:
+        det_pos = np.array([det_x, det_y, det_z])
+        full_err = float(np.linalg.norm(gt_pos - det_pos))
+        xy_err = float(np.linalg.norm(gt_pos[:2] - det_pos[:2]))
+        print(
+            f"[GATE G] detector-vs-GT offset for '{choice}' [DIAGNOSTIC ONLY, not used for grasp]: "
+            f"xy={xy_err * 1000:.1f}mm full-3d={full_err * 1000:.1f}mm "
+            f"(gt={gt_pos.tolist()}, det={det_pos.tolist()})"
+        )
 
     half_height_m = _die_half_height_m(choice)  # diagnostic only now, see _DIE_REST_HEIGHT_M's comment
     grasp_height_m = _die_grasp_height_m(choice)  # the value actually used for grasp math
@@ -1695,17 +1726,19 @@ def run_gate_g() -> None:
     # Ground-truth XY-bypass (2026-07-15, see this task's brief and the
     # spec's "Addendum: ground-truth XY-bypass"): --gt-xy-bypass is OFF by
     # default, so target_xy stays sourced from the detector above -
-    # byte-identical to pre-flag behavior. select_target_detection's own
-    # "fails loudly, never falls back to GT" contract is untouched by this
-    # branch (it already ran, and already raised if it had nothing to
-    # select) - this is a separate, explicit override of target_xy in the
-    # CALLER, not a fallback inside that function.
+    # byte-identical to pre-flag behavior (target_det is guaranteed
+    # non-None here in that case, since the except-block above re-raises
+    # when the bypass is off). select_target_detection's own "fails
+    # loudly, never falls back to GT" contract is untouched for the
+    # non-bypass path - this is a separate, explicit override of
+    # target_xy in the CALLER, not a fallback inside that function.
     if args_cli.gt_xy_bypass:
         target_xy = (float(gt_pos[0]), float(gt_pos[1]))
         print(
             f"[GATE G] target_xy SOURCED FROM GROUND TRUTH (bypass active) for '{choice}': "
             f"({target_xy[0]:.4f}, {target_xy[1]:.4f}) - grasp-mechanism isolation only, NOT a "
-            f"perception result; detector-vs-GT diagnostic above still reflects the real detector output."
+            f"perception result; detector-vs-GT diagnostic above (if printed) still reflects the "
+            f"real detector output."
         )
     else:
         target_xy = (det_x, det_y)
@@ -1763,9 +1796,10 @@ def run_gate_g() -> None:
     result = {
         "choice": choice,
         "seed": args_cli.seed,
-        "detected_class": target_det["class"],
-        "detection_confidence": target_det["confidence"],
-        "detector_world_pos": det_pos.tolist(),
+        "gt_xy_bypass_active": bool(args_cli.gt_xy_bypass),
+        "detected_class": target_det["class"] if target_det is not None else None,
+        "detection_confidence": target_det["confidence"] if target_det is not None else None,
+        "detector_world_pos": det_pos.tolist() if det_pos is not None else None,
         "gt_world_pos_at_settle": gt_pos.tolist(),
         "detector_vs_gt_xy_error_m": xy_err,
         "detector_vs_gt_full_error_m": full_err,
@@ -1864,24 +1898,44 @@ def run_gate_v() -> None:
     for det in detections:
         print(f"  class={det['class']:<8} conf={det['confidence']:.3f} world_pos={det['world_pos']}")
 
-    target_det = select_target_detection(detections, choice)
-    det_x, det_y, det_z = target_det["world_pos"]
-    print(
-        f"[GATE V] target detection for '{choice}': class={target_det['class']} "
-        f"conf={target_det['confidence']:.3f} world_pos=({det_x:.4f}, {det_y:.4f}, {det_z:.4f}) "
-        f"bbox_xyxy={target_det['bbox_xyxy']}"
-    )
+    # 2026-07-15 fix: identical bug/fix as Gate G's own (see that gate's
+    # comment for the full rationale) - select_target_detection() was
+    # called unconditionally before the bypass branch, so a TOTAL
+    # detection miss raised before the bypass ever got a chance to run.
+    target_det: dict | None = None
+    det_x = det_y = det_z = None
+    try:
+        target_det = select_target_detection(detections, choice)
+        det_x, det_y, det_z = target_det["world_pos"]
+        print(
+            f"[GATE V] target detection for '{choice}': class={target_det['class']} "
+            f"conf={target_det['confidence']:.3f} world_pos=({det_x:.4f}, {det_y:.4f}, {det_z:.4f}) "
+            f"bbox_xyxy={target_det['bbox_xyxy']}"
+        )
+    except RuntimeError as e:
+        if not args_cli.gt_xy_bypass:
+            raise
+        print(
+            f"[GATE V] detector FAILED to find '{choice}' ({e}) - continuing because "
+            f"--gt-xy-bypass is active; target_xy will be sourced from ground truth below, "
+            f"detector-vs-GT diagnostic print and video overlay both skipped (nothing to "
+            f"compare/draw against)."
+        )
 
     # Diagnostic-only GT comparison - identical to Gate G's, never used for
-    # the grasp target itself.
+    # the grasp target itself. Only meaningful when a detection exists.
     gt_pos = np.array([results[choice]["x"], results[choice]["y"], results[choice]["z"]])
-    det_pos = np.array([det_x, det_y, det_z])
-    full_err = float(np.linalg.norm(gt_pos - det_pos))
-    xy_err = float(np.linalg.norm(gt_pos[:2] - det_pos[:2]))
-    print(
-        f"[GATE V] detector-vs-GT offset for '{choice}' [DIAGNOSTIC ONLY, not used for grasp]: "
-        f"xy={xy_err * 1000:.1f}mm full-3d={full_err * 1000:.1f}mm (gt={gt_pos.tolist()}, det={det_pos.tolist()})"
-    )
+    det_pos = None
+    xy_err = None
+    full_err = None
+    if target_det is not None:
+        det_pos = np.array([det_x, det_y, det_z])
+        full_err = float(np.linalg.norm(gt_pos - det_pos))
+        xy_err = float(np.linalg.norm(gt_pos[:2] - det_pos[:2]))
+        print(
+            f"[GATE V] detector-vs-GT offset for '{choice}' [DIAGNOSTIC ONLY, not used for grasp]: "
+            f"xy={xy_err * 1000:.1f}mm full-3d={full_err * 1000:.1f}mm (gt={gt_pos.tolist()}, det={det_pos.tolist()})"
+        )
 
     half_height_m = _die_half_height_m(choice)
     grasp_height_m = _die_grasp_height_m(choice)
@@ -1894,13 +1948,16 @@ def run_gate_v() -> None:
     # Gate G's own (see that gate's comment for the full rationale); kept
     # as a separate, explicit override here rather than a shared helper to
     # match this file's existing convention of Gate V mirroring Gate G's
-    # flow line-for-line rather than factoring it out.
+    # flow line-for-line rather than factoring it out. target_det is
+    # guaranteed non-None in the non-bypass branch (the except-block above
+    # re-raises when the bypass is off).
     if args_cli.gt_xy_bypass:
         target_xy = (float(gt_pos[0]), float(gt_pos[1]))
         print(
             f"[GATE V] target_xy SOURCED FROM GROUND TRUTH (bypass active) for '{choice}': "
             f"({target_xy[0]:.4f}, {target_xy[1]:.4f}) - grasp-mechanism isolation only, NOT a "
-            f"perception result; detector-vs-GT diagnostic above still reflects the real detector output."
+            f"perception result; detector-vs-GT diagnostic above (if printed) still reflects the "
+            f"real detector output."
         )
     else:
         target_xy = (det_x, det_y)
@@ -1990,16 +2047,25 @@ def run_gate_v() -> None:
     print(f"[GATE V] {choice}: {'PASS' if all_ok else 'FAIL'} (waypoints={waypoint_status})")
 
     # --- Overlay: draw the commanded die's detection bbox+label on the
-    # pre-pick segment's frames (post-hoc, after capture, before encode). ---
-    overlay_font = _load_overlay_font()
-    for i in range(pre_pick_frame_count):
-        video_frames[i] = _draw_video_overlay_frame(
-            video_frames[i], target_det["bbox_xyxy"], choice, target_det["class"], target_det["confidence"], overlay_font
+    # pre-pick segment's frames (post-hoc, after capture, before encode).
+    # Skipped when the bypass caught a total detection miss (target_det is
+    # None) - there is no real bbox to draw, and drawing a fake one would
+    # misrepresent a bypassed run as a working perception result. ---
+    if target_det is not None:
+        overlay_font = _load_overlay_font()
+        for i in range(pre_pick_frame_count):
+            video_frames[i] = _draw_video_overlay_frame(
+                video_frames[i], target_det["bbox_xyxy"], choice, target_det["class"], target_det["confidence"], overlay_font
+            )
+        print(
+            f"[GATE V] drew detection overlay on {pre_pick_frame_count} opening frames "
+            f"(bbox={target_det['bbox_xyxy']}, class={target_det['class']}, conf={target_det['confidence']:.3f})"
         )
-    print(
-        f"[GATE V] drew detection overlay on {pre_pick_frame_count} opening frames "
-        f"(bbox={target_det['bbox_xyxy']}, class={target_det['class']}, conf={target_det['confidence']:.3f})"
-    )
+    else:
+        print(
+            f"[GATE V] no detection overlay drawn for '{choice}' - bypass active, no real "
+            f"detection exists to draw a bbox from."
+        )
 
     # --- Encode video (imageio, writer pattern from
     # scripts/graspgoal_closeup_video.py) ---
@@ -2017,10 +2083,11 @@ def run_gate_v() -> None:
     result = {
         "choice": choice,
         "seed": args_cli.seed,
-        "detected_class": target_det["class"],
-        "detection_confidence": target_det["confidence"],
-        "detection_bbox_xyxy": target_det["bbox_xyxy"],
-        "detector_world_pos": det_pos.tolist(),
+        "gt_xy_bypass_active": bool(args_cli.gt_xy_bypass),
+        "detected_class": target_det["class"] if target_det is not None else None,
+        "detection_confidence": target_det["confidence"] if target_det is not None else None,
+        "detection_bbox_xyxy": target_det["bbox_xyxy"] if target_det is not None else None,
+        "detector_world_pos": det_pos.tolist() if det_pos is not None else None,
         "gt_world_pos_at_settle": gt_pos.tolist(),
         "detector_vs_gt_xy_error_m": xy_err,
         "detector_vs_gt_full_error_m": full_err,

@@ -59,7 +59,7 @@ _OMNI_USD_LIBS_ROOT = (
 if _OMNI_USD_LIBS_ROOT not in sys.path:
     sys.path.insert(0, _OMNI_USD_LIBS_ROOT)
 
-from pxr import Gf, Usd, UsdGeom  # noqa: E402
+from pxr import Gf, Usd, UsdGeom, UsdShade  # noqa: E402
 
 # A bare (no-SimulationApp) pxr process has no https/Nucleus asset resolver
 # plugin loaded (those are supplied by additional Kit extensions that
@@ -158,8 +158,131 @@ def _local_mesh_bbox(finger_prim: Usd.Prim) -> tuple[Gf.Vec3d, Gf.Vec3d, int]:
     return lo, hi, mesh_count
 
 
+def _subset_bboxes_by_material(finger_prim: Usd.Prim) -> dict[str, tuple[Gf.Vec3d, Gf.Vec3d, int, int]]:
+    """Bounding box of each `GeomSubset` under `finger_prim`'s mesh(es),
+    keyed by the material it's bound to (e.g. `RubberGray` for the rubber
+    contact pad, `PlasticWhite` for the rigid finger shaft), expressed in
+    `finger_prim`'s own local frame (same transform approach as
+    `_local_mesh_bbox` - reused here rather than duplicated).
+
+    For each mesh's `GeomSubset` child: reads the subset's `indices`
+    attribute (face indices, relative to the parent mesh's face list), maps
+    those face indices through the parent mesh's `faceVertexCounts`/
+    `faceVertexIndices` to the actual set of point indices that subset's
+    faces reference, then bounds only those points. This is the geometric
+    equivalent of "isolate just the rubber pad's own faces from the whole
+    finger mesh" - a `GeomSubset` only groups face indices, it carries no
+    points/bbox of its own.
+
+    Material name is read from the subset's raw `material:binding`
+    relationship target path (`rel.GetTargets()[0].name`), NOT via
+    `UsdShade.MaterialBindingAPI.ComputeBoundMaterial()` - confirmed by hand
+    that the latter returns an invalid/null material here, because this
+    script's local asset cache deliberately does not download
+    `Materials/Materials.usd` (the actual shader network the RubberGray/
+    PlasticWhite prims reference) - see the ~11 "Could not open asset...
+    Materials.usd" stage-resolution warnings printed to stderr on every run
+    (expected, harmless: the cache intentionally holds only the 4 files this
+    script actually needs). The relationship's target path itself still
+    resolves correctly (relationships store plain `SdfPath`s, independent of
+    whether the target prim's own defining layer loaded), so reading
+    `.name` off the raw target path gives the right material name
+    (`RubberGray`/`PlasticWhite`) without needing that missing layer at all.
+
+    Returns a dict `material_name -> (lo, hi, num_faces, num_verts)`. If
+    multiple subsets across multiple meshes under `finger_prim` share the
+    same material name, their bboxes are merged (union) and face/vert
+    counts summed - in practice this asset has exactly one mesh (the visual
+    mesh) with two subsets (`RubberGray`, `PlasticWhite`); the separate
+    collision mesh has no material subsets at all."""
+    stage = finger_prim.GetStage()
+    xform_cache = UsdGeom.XformCache()
+    finger_to_world = xform_cache.GetLocalToWorldTransform(finger_prim)
+    world_to_finger = finger_to_world.GetInverse()
+
+    results: dict[str, tuple[Gf.Vec3d, Gf.Vec3d, int, int]] = {}
+    for prim in Usd.PrimRange(finger_prim, Usd.TraverseInstanceProxies()):
+        if not prim.IsA(UsdGeom.Mesh):
+            continue
+        mesh = UsdGeom.Mesh(prim)
+        points = mesh.GetPointsAttr().Get()
+        face_vertex_counts = mesh.GetFaceVertexCountsAttr().Get()
+        face_vertex_indices = mesh.GetFaceVertexIndicesAttr().Get()
+        if not points or not face_vertex_counts or not face_vertex_indices:
+            continue
+
+        # Prefix-sum offsets into face_vertex_indices for each face, so a
+        # face index (from a subset's `indices` attr) can be mapped to its
+        # slice of face_vertex_indices in O(1).
+        face_starts = []
+        offset = 0
+        for count in face_vertex_counts:
+            face_starts.append(offset)
+            offset += count
+
+        mesh_to_world = xform_cache.GetLocalToWorldTransform(prim)
+        mesh_to_finger = mesh_to_world * world_to_finger
+
+        # Instance proxies support GetChildren() the same as ordinary
+        # prims (confirmed by hand) - no need for a nested PrimRange to see
+        # a mesh's GeomSubset children.
+        for child in prim.GetChildren():
+            if not child.IsA(UsdGeom.Subset):
+                continue
+            subset = UsdGeom.Subset(child)
+            face_indices = subset.GetIndicesAttr().Get()
+            if not face_indices:
+                continue
+
+            rel = child.GetRelationship("material:binding")
+            targets = rel.GetTargets() if rel.IsValid() else []
+            material_name = targets[0].name if targets else "<unbound>"
+
+            vertex_indices: set[int] = set()
+            for f in face_indices:
+                if f >= len(face_starts):
+                    continue
+                start = face_starts[f]
+                count = face_vertex_counts[f]
+                for k in range(count):
+                    vertex_indices.add(face_vertex_indices[start + k])
+
+            lo = Gf.Vec3d(float("inf"), float("inf"), float("inf"))
+            hi = Gf.Vec3d(float("-inf"), float("-inf"), float("-inf"))
+            for vi in vertex_indices:
+                wp = mesh_to_finger.Transform(Gf.Vec3d(points[vi]))
+                for i in range(3):
+                    lo[i] = min(lo[i], wp[i])
+                    hi[i] = max(hi[i], wp[i])
+
+            if material_name in results:
+                prev_lo, prev_hi, prev_faces, prev_verts = results[material_name]
+                lo = Gf.Vec3d(*(min(prev_lo[i], lo[i]) for i in range(3)))
+                hi = Gf.Vec3d(*(max(prev_hi[i], hi[i]) for i in range(3)))
+                results[material_name] = (lo, hi, prev_faces + len(face_indices), prev_verts + len(vertex_indices))
+            else:
+                results[material_name] = (lo, hi, len(face_indices), len(vertex_indices))
+
+    return results
+
+
 def main() -> None:
     local_usd_path = _ensure_local_cache()
+    # Expect ~11 "Could not open asset ... Materials.usd" / "... panda_linkN
+    # ... visuals" stage-resolution Warnings printed to STDERR by
+    # Usd.Stage.Open() below - this is expected, not a real failure. The
+    # local cache deliberately only downloads the 4 files this script's own
+    # finger-prim measurement needs (see _NEEDED_RELATIVE_FILES above), not
+    # the full asset tree (all panda_link0-7 visual payloads, nor
+    # Materials/Materials.usd, the actual shader network the RubberGray/
+    # PlasticWhite material prims reference). USD reports each unresolved
+    # reference as a Warning rather than failing the whole stage open, so
+    # the script still runs fine to completion with these on stderr, and
+    # confirmed by hand: the missing Materials.usd does NOT block
+    # `_subset_bboxes_by_material` from reading the correct material name
+    # off each GeomSubset's raw `material:binding` relationship target path
+    # (a plain SdfPath, resolvable independent of whether that path's own
+    # prim actually loaded) - see that function's docstring for detail.
     stage = Usd.Stage.Open(local_usd_path)
     if stage is None:
         print(f"FAILED to open {local_usd_path}")
@@ -201,6 +324,25 @@ def main() -> None:
             f"min_mm={tuple(round(v * mpu * 1000, 3) for v in lo)} "
             f"max_mm={tuple(round(v * mpu * 1000, 3) for v in hi)}"
         )
+
+        # Per-material-GeomSubset bbox - isolates the rubber contact PAD
+        # (material RubberGray) from the rigid plastic finger shaft
+        # (material PlasticWhite) within the same whole-finger mesh printed
+        # above. This is the figure the notch-fixture design (Task 1)
+        # actually depends on, not the whole-finger bbox.
+        subset_bboxes = _subset_bboxes_by_material(prim)
+        if not subset_bboxes:
+            print("    (no GeomSubsets found under this finger's mesh(es))")
+        for material_name, (s_lo, s_hi, num_faces, num_verts) in sorted(subset_bboxes.items()):
+            s_dims = [s_hi[i] - s_lo[i] for i in range(3)]
+            print(
+                f"    [GeomSubset material={material_name}] faces={num_faces} verts={num_verts}"
+            )
+            print(
+                f"      local-frame bbox (mm): dims={tuple(round(d * mpu * 1000, 3) for d in s_dims)} "
+                f"min_mm={tuple(round(v * mpu * 1000, 3) for v in s_lo)} "
+                f"max_mm={tuple(round(v * mpu * 1000, 3) for v in s_hi)}"
+            )
 
     print("\n[DONE]")
 

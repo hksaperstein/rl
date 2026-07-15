@@ -1,0 +1,28 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c '\nPIDFILE=/tmp/claude-rl-tensorboard.pid\nLOGFILE=/tmp/claude-rl-tensorboard.log\nif [ -f \"$PIDFILE\" ] && kill -0 \"$(cat \"$PIDFILE\")\" 2>/dev/null; then\n  exit 0\nfi\ncd /home/saps/projects/rl\nsetsid nohup scripts/tensorboard_gcs.sh > \"$LOGFILE\" 2>&1 < /dev/null &\necho $! > \"$PIDFILE\"\n' 2>/dev/null || true",
+            "timeout": 15,
+            "statusMessage": "Starting local TensorBoard mirror..."
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c '\nPIDFILE=/tmp/claude-rl-tensorboard.pid\nif [ -f \"$PIDFILE\" ]; then\n  PID=$(cat \"$PIDFILE\")\n  kill -TERM \"-$PID\" 2>/dev/null\n  rm -f \"$PIDFILE\"\nfi\n' 2>/dev/null || true",
+            "timeout": 10,
+            "statusMessage": "Stopping local TensorBoard mirror..."
+          }
+        ]
+      }
+    ]
+  }
+}

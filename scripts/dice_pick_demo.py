@@ -110,6 +110,26 @@ parser.add_argument(
         "permanently changing the scene's default lighting."
     ),
 )
+parser.add_argument(
+    "--gt-xy-bypass",
+    action="store_true",
+    default=False,
+    help=(
+        "Grasp-mechanism-isolation bypass for Gates G/V (see "
+        "docs/superpowers/specs/2026-07-15-d4-rung1-pad-geometry-design.md's 'Addendum: ground-truth "
+        "XY-bypass'). Default OFF - every die type's/existing call's target_xy still comes ONLY from "
+        "select_target_detection's detector-sourced result, byte-identical to pre-flag behavior. When "
+        "set, target_xy is instead sourced from the commanded die's own settled ground-truth (x, y) "
+        "(the same value already computed, diagnostic-only, as gt_pos in both gates) - the detector "
+        "subprocess still runs and select_target_detection's own 'fails loudly, never falls back to "
+        "ground truth' contract is UNCHANGED (this bypass is a separate, explicit branch in the caller, "
+        "not a fallback inside that function), so the diagnostic detector-vs-GT comparison print/verdict "
+        "fields stay populated either way. This isolates the grasp-mechanism variable from the (currently "
+        "under separate investigation) d4 perception weakness - same isolation principle rung 0 already "
+        "used for orientation. NOT a fix for detection and must not be represented as one; a bypassed run "
+        "claims only 'the grasp mechanism works', not 'the perception-driven demo can pick this die'."
+    ),
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 args_cli.enable_cameras = True
@@ -1672,7 +1692,27 @@ def run_gate_g() -> None:
         f"{half_height_m * 1000:.1f}mm grasp_height(MEASURED resting height, actually used)="
         f"{grasp_height_m * 1000:.1f}mm"
     )
-    target_xy = (det_x, det_y)
+    # Ground-truth XY-bypass (2026-07-15, see this task's brief and the
+    # spec's "Addendum: ground-truth XY-bypass"): --gt-xy-bypass is OFF by
+    # default, so target_xy stays sourced from the detector above -
+    # byte-identical to pre-flag behavior. select_target_detection's own
+    # "fails loudly, never falls back to GT" contract is untouched by this
+    # branch (it already ran, and already raised if it had nothing to
+    # select) - this is a separate, explicit override of target_xy in the
+    # CALLER, not a fallback inside that function.
+    if args_cli.gt_xy_bypass:
+        target_xy = (float(gt_pos[0]), float(gt_pos[1]))
+        print(
+            f"[GATE G] target_xy SOURCED FROM GROUND TRUTH (bypass active) for '{choice}': "
+            f"({target_xy[0]:.4f}, {target_xy[1]:.4f}) - grasp-mechanism isolation only, NOT a "
+            f"perception result; detector-vs-GT diagnostic above still reflects the real detector output."
+        )
+    else:
+        target_xy = (det_x, det_y)
+        print(
+            f"[GATE G] target_xy sourced from DETECTOR for '{choice}': "
+            f"({target_xy[0]:.4f}, {target_xy[1]:.4f})"
+        )
 
     # A stage timeout is a "fail loudly" signal (see _StageTimeoutError /
     # _go_to_pose), not a script crash: catch it here so the run still
@@ -1850,7 +1890,24 @@ def run_gate_v() -> None:
         f"{half_height_m * 1000:.1f}mm grasp_height(MEASURED resting height, actually used)="
         f"{grasp_height_m * 1000:.1f}mm"
     )
-    target_xy = (det_x, det_y)
+    # Ground-truth XY-bypass (2026-07-15) - identical branch/contract to
+    # Gate G's own (see that gate's comment for the full rationale); kept
+    # as a separate, explicit override here rather than a shared helper to
+    # match this file's existing convention of Gate V mirroring Gate G's
+    # flow line-for-line rather than factoring it out.
+    if args_cli.gt_xy_bypass:
+        target_xy = (float(gt_pos[0]), float(gt_pos[1]))
+        print(
+            f"[GATE V] target_xy SOURCED FROM GROUND TRUTH (bypass active) for '{choice}': "
+            f"({target_xy[0]:.4f}, {target_xy[1]:.4f}) - grasp-mechanism isolation only, NOT a "
+            f"perception result; detector-vs-GT diagnostic above still reflects the real detector output."
+        )
+    else:
+        target_xy = (det_x, det_y)
+        print(
+            f"[GATE V] target_xy sourced from DETECTOR for '{choice}': "
+            f"({target_xy[0]:.4f}, {target_xy[1]:.4f})"
+        )
 
     # --- Video capture setup ---
     camera = scene["camera"]

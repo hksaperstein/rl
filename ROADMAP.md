@@ -2903,3 +2903,47 @@ any training run; it's a target for a future d20 grasp-strategy spec
 (shape itself, per the size-curriculum verdict above, is the next thing
 needing a direct attack).
 
+**d4 edge-grasp rung 1 (V-notch fingertip fixture): UNTESTED — 0/5 seeded
+trials reached the grasp mechanism, blocked entirely at perception
+(2026-07-15).** Spec
+`docs/superpowers/specs/2026-07-15-d4-rung1-pad-geometry-design.md`,
+research `.superpowers/sdd/research-d4-rung1-pad-geometry.md` +
+independent review `.superpowers/sdd/review-d4-rung1-pad-geometry.md`
+(one citation-attribution error caught and corrected: the V-groove
+precedent is Habibi/Sutera/Guastella/Muscato, *Robotics* 14(7):87, 2025,
+not "Zhang et al. 2026" as the research pass first wrote it — the paper
+and its numbers were real, only the author label was fabricated, per
+this project's known citation-detail-fabrication risk). Built a rigid
+110° V-notch fixture (compound convex-wall collider, fixed-jointed onto
+both Franka fingertips unconditionally, not a d4-only branch), unifying
+`dice_pick_demo.py`'s straight-down path across all 5 dice (rung 0's
+tilted-axis d4 branch removed entirely). Task-review caught one
+Critical, sim-crashing bug before any cloud run (missing
+`activate_contact_sensors=True` on the fixture's spawn config — fixed
+and re-verified against isaaclab source). On GCP cloud (SPOT
+g2-standard-4 + L4, ~$1-2 total across 3 preemptions/1 zone stockout,
+recovered via disk-snapshot cross-zone restore): all 5 d4 seeded trials
+(42/123/7/1000/2026) failed identically at the detector step — zero
+`d4`-class detections returned in any trial, `select_target_detection`
+raising before any grasp attempt, so **the notch mechanism itself
+remains completely untested, not falsified** (same category as rung
+0's own outcome, different upstream cause). `sim.reset()` succeeded
+cleanly in every trial — Task 1's fixed Critical bug holds under real
+physics. Non-d4 regression guard: **3/4 clean PASS** (d8/d10/d12, all
+matching/exceeding the kb baseline z-gain range, zero cross-die drift —
+the unconditional-fixture North Star call does not regress the working
+die types), **1/4 attributable FAIL** (d20, byte-identical reproduction
+of `kb/wiki/experiments/dice-pick-demo.md`'s already-closed
+seed-42 RTX-nondeterminism finding, predating this rung). **New finding
+distinct from rung 1's own hypothesis**: 5/5 identical-shaped d4
+detection misses across 5 different seeds/scene layouts is a more
+systematic-looking signal than the kb's previously-documented
+occasional per-seed offset noise — the one near-hit (seed 123) was
+low-confidence (0.27-0.36) and displaced by a colocated higher-confidence
+`d10` candidate. Reads as "d4 is a weak/marginal detection class for
+this detector," not investigated further (out of this task's scope).
+Full data: `.superpowers/sdd/task-2-report.md`. Open decision for
+Principal: scope a ground-truth XY-bypass path to test the grasp
+mechanism in isolation from perception (extending rung 0's own
+GT-for-orientation isolation precedent to position), or treat the d4
+detection weakness as its own prerequisite research question.

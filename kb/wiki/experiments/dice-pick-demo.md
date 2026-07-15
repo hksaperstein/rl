@@ -145,6 +145,24 @@ detector/pick pipeline survive them? (`--colored-dice` +
 - Camera angle: single fixed view occludes the die once gripped;
   Gate V verification used convergent evidence — a second angle would
   make future video evidence unambiguous.
+- **d4 may be a systematically weak detection class, not just
+  occasional noise (2026-07-15, d4 rung-1 cloud trials).** Distinct
+  from the "Fragility attribution closed" finding above (which is about
+  one seed's occasional few-mm offset): all 5 seeded trials
+  (42/123/7/1000/2026) run for the rung-1 V-notch fixture work returned
+  **zero** `d4`-class detections — not an offset, a total miss, in
+  every trial, across 5 different scene layouts. The one trial where a
+  `d4` candidate appeared at all (seed 123) was low-confidence
+  (0.27-0.36) and got displaced by a same-location, higher-confidence
+  `d10` candidate. 5/5 identical-shaped failures is a stronger,
+  more-systematic-looking pattern than a single seed's noise — reads as
+  "d4 is a weak/marginal class for this detector on this scene region,"
+  not investigated further as of this pass (out of scope for the task
+  that found it). See ROADMAP.md's 2026-07-15 entry and
+  `.superpowers/sdd/task-2-report.md` for the full per-trial data. This
+  blocks any future grasp-mechanism test that depends on this demo's
+  perception step to find the d4 at all — not just rung 1's own V-notch
+  hypothesis.
 
 ## Fragility attribution closed (2026-07-13 archaeology)
 

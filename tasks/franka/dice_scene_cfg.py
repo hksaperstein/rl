@@ -152,7 +152,7 @@ def _notch_fixture_cfg(prim_name: str, init_pos: tuple[float, float, float]) -> 
     return AssetBaseCfg(
         prim_path="{ENV_REGEX_NS}/" + prim_name,
         init_state=AssetBaseCfg.InitialStateCfg(pos=init_pos),
-        spawn=UsdFileCfg(usd_path=_notch_fixture_usd_path()),
+        spawn=UsdFileCfg(usd_path=_notch_fixture_usd_path(), activate_contact_sensors=True),
     )
 
 
@@ -283,11 +283,16 @@ class DiceSceneCfg(InteractiveSceneCfg):
     # `panda_leftfinger`/`panda_rightfinger` is not straightforwardly
     # authorable (instanceable prims), which is why the design is "new
     # sibling rigid body + fixed joint", not "new child mesh under the
-    # existing finger". Declared BEFORE the ContactSensorCfg fields below -
-    # `InteractiveScene._add_entities_from_cfg` spawns each configclass field
-    # in declaration order, so these prims must exist before the contact
-    # sensors (retargeted below to point AT these fixtures, not the bare
-    # finger prims - see their own comment) are constructed.
+    # existing finger". Declared BEFORE the ContactSensorCfg fields below
+    # purely for readability (grouping "what exists" ahead of "what reads
+    # it") - NOT a correctness requirement: `ContactSensor.__init__` never
+    # touches the stage, and its actual prim/PhysxContactReportAPI lookup
+    # happens lazily in `_initialize_impl`, deferred to a play-event
+    # callback that runs after every scene field (regardless of declaration
+    # order) has already been spawned. See instead the module-level
+    # `activate_contact_sensors=True` fix on `_notch_fixture_cfg`'s
+    # `UsdFileCfg` (2026-07-15 review finding) for what actually determines
+    # whether these contact sensors find a body to attach to.
     notch_fixture_left: AssetBaseCfg = _notch_fixture_cfg("NotchFixtureLeft", (0.13, -0.03, 0.85))
     notch_fixture_right: AssetBaseCfg = _notch_fixture_cfg("NotchFixtureRight", (0.13, 0.03, 0.85))
 

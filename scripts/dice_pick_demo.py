@@ -128,7 +128,7 @@ import imageio  # noqa: E402
 import numpy as np  # noqa: E402
 import torch  # noqa: E402
 from PIL import Image, ImageDraw, ImageFont  # noqa: E402
-from pxr import PhysxSchema, Sdf, Usd, UsdGeom, UsdPhysics, UsdShade  # noqa: E402
+from pxr import Gf, PhysxSchema, Sdf, Usd, UsdGeom, UsdPhysics, UsdShade  # noqa: E402
 
 import isaaclab.sim as sim_utils  # noqa: E402
 from isaaclab.controllers import DifferentialIKController, DifferentialIKControllerCfg  # noqa: E402
@@ -140,12 +140,6 @@ from isaacsim.core.utils.stage import get_current_stage  # noqa: E402
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # noqa: E402
 
-from tasks.franka.antipodal_edge_grasp import (  # noqa: E402
-    best_reachable_pair,
-    edge_pair_grasp_axes,
-    extract_polyhedron_vertices,
-    stage_waypoints_world,
-)
 from tasks.franka.dice_scene_cfg import (  # noqa: E402
     DICE_CAMERA_POS,
     DICE_CAMERA_QUAT_WORLD,
@@ -154,6 +148,11 @@ from tasks.franka.dice_scene_cfg import (  # noqa: E402
     _DICE_COLLISION_PROPS,
     _DICE_MASS,
     _DICE_RIGID_PROPS,
+)
+from tasks.franka.notch_fixture import (  # noqa: E402
+    grip_height_above_table_m,
+    joint_local_pos0_m,
+    joint_local_rot1_wxyz,
 )
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -479,67 +478,94 @@ def apply_convex_hull_collision(stage, die_prim_path: str) -> int:
     return mesh_count
 
 
-# mm-as-m -> real meters, same factor dice_scene_cfg.py's own die RigidObjectCfg
-# spawns apply as a USD xform scale (see that module's `_die_cfg` comment). The
-# die's raw UsdGeom.Mesh points (read directly below, BEFORE that spawn-time
-# scale, i.e. straight off the mesh prim) are in the original mm-as-m units, so
-# reading them for the d4 edge-grasp geometry needs this SAME factor applied
-# manually to land in the world/physics meter scale everything else uses.
-_DIE_MESH_MM_TO_M = 0.001
+# d4 rung-1 V-notch fingertip fixture attachment (2026-07-15, see
+# docs/superpowers/specs/2026-07-15-d4-rung1-pad-geometry-design.md and
+# .superpowers/sdd/task-1-brief.md). Rung-0's tilted-axis edge-grasp branch
+# (read_die_local_vertices/edge_pair_grasp_axes/best_reachable_pair/
+# stage_waypoints_world - all previously imported/called here) has been
+# REMOVED from this file, not extended: rung-0 was falsified at the
+# reachability level (spec's own "Prior result"), and rung 1's whole premise
+# is that the ORIGINAL straight-down approach (already reachable/working for
+# d8/d10/d12/d20) plus this notch fixture is sufficient - no per-die tilted
+# waypoint computation is needed anymore. `tasks/franka/antipodal_edge_grasp.py`
+# and its own unit tests (tests/test_antipodal_edge_grasp.py) are NOT
+# deleted (kept on record per the spec's "Future work" - the asymmetric
+# edge/face-ramp refinement, if ever built, may reuse its mesh-vertex-
+# extraction utilities), just no longer imported/called from this file.
 
 
-def read_die_local_vertices(stage, die_prim_path: str, num_vertices: int = 4) -> np.ndarray:
-    """Reads every point of every `UsdGeom.Mesh` prim under `die_prim_path`
-    (world-scale-corrected via `_DIE_MESH_MM_TO_M`, LOCAL/body frame - no
-    additional transform, since a die's mesh points are already authored
-    relative to the die's own root prim) and k-means-clusters them down to
-    `num_vertices` true corners via
-    `tasks.franka.antipodal_edge_grasp.extract_polyhedron_vertices` - the
-    real d4 mesh has 244 points for its 4 true corners (small manufacturing-
-    style bevels/chamfers - see Task 0's report), not already a clean
-    4-vertex list.
+def attach_notch_fixtures(stage, robot_prim_path: str) -> None:
+    """Rigidly attaches the notch fixture (tasks/franka/notch_fixture.py,
+    authored offline by scripts/build_notch_fixture_asset.py into
+    `{ENV_REGEX_NS}/NotchFixtureLeft`/`NotchFixtureRight`, see
+    dice_scene_cfg.py) to `panda_leftfinger`/`panda_rightfinger` via a new
+    `UsdPhysics.FixedJoint` per side - UNCONDITIONAL (called for every die
+    type, not gated on `choice`), per the spec's North Star call. Must run
+    BEFORE `sim.reset()` (matches `apply_convex_hull_collision`'s own
+    runtime-schema-patching timing), so PhysX cooks the joint constraint
+    into its very first physics step rather than needing to correct an
+    already-settled mismatch.
 
-    Runs a defensive regular-polyhedron consistency check (all
-    `num_vertices choose 2` pairwise corner distances within 5% of their own
-    mean) and raises `ValueError` if the recovered corners are too
-    irregular to trust for this rung's regular-tetrahedron-only geometry
-    (`edge_pair_grasp_axes` doesn't itself validate this - the die-specific
-    caller is responsible for catching a garbled mesh read HERE, before it
-    ever reaches the geometry helper)."""
-    root_prim = stage.GetPrimAtPath(die_prim_path)
-    if not root_prim.IsValid():
-        raise RuntimeError(f"Die prim path not found on stage: {die_prim_path}")
+    Each joint prim is authored as a CHILD OF THE FIXTURE prim (a plain,
+    non-instanced prim this file fully owns), NOT as a child of the finger
+    prim - `panda_leftfinger`/`panda_rightfinger` are instance proxies
+    (Task 0's own finding: this Franka asset is instanceable), and USD does
+    not allow authoring new child prims directly under an instance proxy's
+    own path. `body0`/`body1` RELATIONSHIPS on the joint prim can still
+    TARGET an instance-proxy path with no such restriction (this repo's own
+    `d4_leftfinger_contact`/`d4_rightfinger_contact` `ContactSensorCfg`
+    already relies on exactly that - unaffected by where the joint prim
+    itself happens to live).
 
-    all_points = []
-    for prim in Usd.PrimRange(root_prim):
-        if prim.IsA(UsdGeom.Mesh):
-            pts = np.array(UsdGeom.Mesh(prim).GetPointsAttr().Get(), dtype=float)
-            all_points.append(pts)
-    if not all_points:
-        raise RuntimeError(f"No UsdGeom.Mesh prims found under {die_prim_path} - cannot read vertices.")
-    mesh_points_m = np.concatenate(all_points, axis=0) * _DIE_MESH_MM_TO_M
+    Before creating each joint, this function overwrites the fixture
+    prim's own initial WORLD transform (translate only) to the finger's
+    OWN live tip-attachment-point world position (via `UsdGeom.XformCache`,
+    the same local-to-world technique
+    scripts/_diag_franka_fingertip_geometry.py already established for
+    Task 0) - a stability nicety (avoids relying on
+    dice_scene_cfg.py's own placeholder `init_state.pos` guess), not a
+    correctness requirement (the fixed joint's own `localPos0`/`localPos1`
+    offsets are what define the enforced pose once physics starts, not the
+    initial placement)."""
+    xform_cache = UsdGeom.XformCache()
+    local_pos0 = joint_local_pos0_m()
 
-    vertices = extract_polyhedron_vertices(mesh_points_m, num_vertices=num_vertices)
+    for finger_name, fixture_name, mirror in [
+        ("panda_leftfinger", "NotchFixtureLeft", False),
+        ("panda_rightfinger", "NotchFixtureRight", True),
+    ]:
+        finger_prim = stage.GetPrimAtPath(f"{robot_prim_path}/{finger_name}")
+        if not finger_prim.IsValid():
+            raise RuntimeError(f"attach_notch_fixtures: finger prim not found: {robot_prim_path}/{finger_name}")
+        # fixture prims live at the env root (siblings of Robot/Die_*, see
+        # dice_scene_cfg.py), not under robot_prim_path.
+        env_root = os.path.dirname(robot_prim_path)
+        fixture_prim = stage.GetPrimAtPath(f"{env_root}/{fixture_name}")
+        if not fixture_prim.IsValid():
+            raise RuntimeError(f"attach_notch_fixtures: fixture prim not found: {env_root}/{fixture_name}")
 
-    pairwise = [
-        float(np.linalg.norm(vertices[i] - vertices[j]))
-        for i in range(num_vertices)
-        for j in range(i + 1, num_vertices)
-    ]
-    mean_d = float(np.mean(pairwise))
-    max_rel_dev = max(abs(d - mean_d) / mean_d for d in pairwise) if mean_d > 0 else float("inf")
-    print(
-        f"[GATE G] read_die_local_vertices({die_prim_path}): {len(mesh_points_m)} raw mesh points -> "
-        f"{num_vertices} corners, pairwise distances(mm)={[round(d * 1000, 3) for d in pairwise]} "
-        f"mean={mean_d * 1000:.3f}mm max_rel_dev={max_rel_dev * 100:.2f}%"
-    )
-    if max_rel_dev > 0.05:
-        raise ValueError(
-            f"read_die_local_vertices({die_prim_path}): recovered corners are not consistent with a "
-            f"regular polyhedron (max pairwise-distance deviation {max_rel_dev * 100:.2f}% > 5% "
-            f"tolerance) - mesh read/clustering likely garbled, refusing to use it for grasp geometry."
+        finger_to_world = xform_cache.GetLocalToWorldTransform(finger_prim)
+        attach_point_world = finger_to_world.Transform(Gf.Vec3d(*local_pos0))
+        UsdGeom.XformCommonAPI(fixture_prim).SetTranslate(attach_point_world)
+        print(
+            f"[SPAWN] attach_notch_fixtures: {fixture_name} initial world pos set to "
+            f"{tuple(round(c, 5) for c in attach_point_world)} (from {finger_name}'s live tip transform)"
         )
-    return vertices
+
+        joint_path = f"{fixture_prim.GetPath()}/attach_joint"
+        joint = UsdPhysics.FixedJoint.Define(stage, joint_path)
+        joint.CreateBody0Rel().SetTargets([finger_prim.GetPath()])
+        joint.CreateBody1Rel().SetTargets([fixture_prim.GetPath()])
+        joint.CreateLocalPos0Attr().Set(Gf.Vec3f(*local_pos0))
+        joint.CreateLocalRot0Attr().Set(Gf.Quatf(1.0, 0.0, 0.0, 0.0))
+        joint.CreateLocalPos1Attr().Set(Gf.Vec3f(0.0, 0.0, 0.0))
+        rot1_wxyz = joint_local_rot1_wxyz(mirror=mirror)
+        joint.CreateLocalRot1Attr().Set(Gf.Quatf(rot1_wxyz[0], Gf.Vec3f(*rot1_wxyz[1:])))
+        print(
+            f"[SPAWN] attach_notch_fixtures: created FixedJoint {joint_path} "
+            f"(body0={finger_prim.GetPath()}, body1={fixture_prim.GetPath()}, "
+            f"localPos0={local_pos0}, localRot1_wxyz={rot1_wxyz})"
+        )
 
 
 def _die_material_params(die_type: str) -> dict:
@@ -678,6 +704,12 @@ def spawn_scene_and_settle(
                 f"({mat_mesh_count} mesh prim(s) bound)"
             )
 
+    # d4 rung-1 V-notch fingertip fixture (2026-07-15) - UNCONDITIONAL, every
+    # scene spawn regardless of --choice, per the spec's North Star call (see
+    # attach_notch_fixtures's own docstring). Must run before sim.reset(),
+    # same ordering as the dice collision-schema patching above.
+    attach_notch_fixtures(stage, f"{env_root}/Robot")
+
     sim.reset()
     # Step 0 fix (this task's brief): sim.reset() alone does NOT populate the
     # Camera sensor's pos_w/quat_w_ros buffers - IsaacLab's Camera only does
@@ -724,11 +756,11 @@ def spawn_scene_and_settle(
         # quat_wxyz: settled world-frame ORIENTATION (w,x,y,z), added
         # alongside x/y/z (d4 edge-grasp rung-0 task, 2026-07-13) - purely
         # additive to this dict (every existing "x"/"y"/"z"/"sampled_x"/
-        # "sampled_y" key/consumer is untouched). Only the d4 branch of
-        # run_pick_sequence reads it (rung 0's pre-registered GT-pose scope
-        # decision, see spec's Design section) - other die types settle with
-        # a fixed identity rotation per dice_scene_cfg.py's init_state.rot,
-        # so this is diagnostic-only for them.
+        # "sampled_y" key/consumer is untouched). No longer read by
+        # run_pick_sequence at all (rung 0's tilted-axis branch, the one
+        # consumer that needed it, was removed in the 2026-07-15 rung-1
+        # task - see that function's own docstring) - kept in this dict as
+        # diagnostic-only for every die type, harmless to leave in place.
         quat_wxyz = die.data.root_quat_w[0].cpu().numpy()
         results[die_type] = {
             "x": x, "y": y, "z": z, "sampled_x": sampled_pos[0], "sampled_y": sampled_pos[1],
@@ -875,9 +907,27 @@ _DIE_REST_HEIGHT_M = {
 
 def _die_grasp_height_m(die_type: str) -> float:
     """World-frame z (meters) for the gripper fingertip pinch-point target
-    for a straight-down grasp of this die type - the die's MEASURED resting
-    height (`_DIE_REST_HEIGHT_M`), not half its manifest `size_mm`. d10_pct
-    maps to d10's measured height (same physical die in this scene)."""
+    for a straight-down grasp of this die type.
+
+    For d8/d10/d12/d20: the die's MEASURED resting height
+    (`_DIE_REST_HEIGHT_M`, unchanged from before this task) - close enough
+    to these dice's own centroid that gripping there gives real contact
+    area against their roundish geometry.
+
+    For d4 (rung-1 V-notch fixture, 2026-07-15, see
+    docs/superpowers/specs/2026-07-15-d4-rung1-pad-geometry-design.md):
+    `_DIE_REST_HEIGHT_M["d4"]` (2.2mm, the die's own centroid height) is
+    deliberately NOT used here anymore - that number describes where a
+    FLAT pad would need to close to straddle the die's centroid, but the
+    notch fixture's whole design point is to grip HIGHER on the pyramid
+    (`tasks.franka.notch_fixture.grip_height_above_table_m`, ~9.3mm above
+    the table - 10mm below the d4's own apex), where the local
+    cross-section is wide enough for the notch's two walls to make flush
+    facet contact instead of a near-point contact at the flat centroid
+    height. d10_pct maps to d10's measured height (same physical die in
+    this scene, not affected by the d4 special-case)."""
+    if die_type == "d4":
+        return grip_height_above_table_m()
     manifest_type = "d10" if die_type in D10_ALIASES else die_type
     return _DIE_REST_HEIGHT_M[manifest_type]
 
@@ -968,16 +1018,29 @@ def run_pick_sequence(
     ready-to-descend prep -> Cartesian approach -> descend -> close -> lift)
     via a raw DifferentialIKController (pattern:
     IsaacLab/scripts/tutorials/05_controllers/run_diff_ik.py). Targets the
-    CANONICAL straight-down orientation for every die EXCEPT d4 (not the
-    tilted post-reset default - see the "Senior fix pass" section of this
-    task's report for why that rule was revoked). Raises `_StageTimeoutError`
-    (loudly, with live hand pos/orientation + the commanded target in the
-    message) if any stage doesn't converge within its step budget - callers
-    should catch this rather than treat a stuck stage as silent success.
-    Returns a dict of per-stage convergence status (all True if this returns
-    at all, since a non-convergent stage raises instead) - the d4 path adds
-    extra closure-window instrumentation keys, see that branch's own
-    comments.
+    CANONICAL straight-down orientation for EVERY die type, including d4
+    (2026-07-15 rung-1 change - see
+    docs/superpowers/specs/2026-07-15-d4-rung1-pad-geometry-design.md).
+    Rung 0's separate tilted-axis d4 branch (a different target orientation,
+    computed per-run from the die's own resting pose) has been REMOVED, not
+    kept dormant: rung 0 was falsified at the reachability level (the
+    spec's own "Prior result"), and rung 1's whole premise is that the
+    ORIGINAL straight-down approach - already reachable/working for
+    d8/d10/d12/d20 - is sufficient once the fingertips carry the notch
+    fixture (`attach_notch_fixtures`, unconditional, every die type); d4 is
+    therefore no longer geometrically special relative to the other four
+    dice at the CONTROL-PATH level (only its own `_die_grasp_height_m`
+    target height differs, same as every other die type already has its
+    own height). Raises `_StageTimeoutError` (loudly, with live hand
+    pos/orientation + the commanded target in the message) if any stage
+    doesn't converge within its step budget - callers should catch this
+    rather than treat a stuck stage as silent success. Returns a dict of
+    per-stage convergence status (all True if this returns at all, since a
+    non-convergent stage raises instead) - when `choice == "d4"`, this dict
+    additionally carries the closure-window contact/displacement
+    instrumentation keys (see the `if choice == "d4":` blocks around
+    stage 3/stage 4 below), reading the fixture-targeted contact sensors
+    dice_scene_cfg.py retargeted for this same rung.
 
     `on_step`, if given, is called once after EVERY physics step this
     function takes (stage 0's joint-space prep and every `_step_toward` call
@@ -986,11 +1049,11 @@ def run_pick_sequence(
     default), so Gate G's already-validated mechanism/timing is completely
     unchanged by this parameter's existence.
 
-    `results`, if given, is `spawn_scene_and_settle`'s per-die GT dict
-    (needs its "quat_wxyz" field) - REQUIRED when `choice == "d4"` (the
-    edge-grasp axis computation needs the die's resting orientation, which
-    only sim ground truth provides - see the d4 branch below), unused for
-    every other die type (d4 edge-grasp rung-0 task, 2026-07-13)."""
+    `results` is accepted for call-site compatibility with the (now
+    removed) rung-0 d4 branch's own signature - no longer read by this
+    function at all (the common straight-down path never needed the die's
+    resting orientation; only `target_xy`/`grasp_height_m`, both
+    detector/measured-height-derived, are used)."""
     robot = scene["robot"]
     sim_dt = sim.get_physics_dt()
 
@@ -1351,114 +1414,99 @@ def run_pick_sequence(
     _joint_space_prep(_READY_TO_DESCEND_JOINT_POS, open_target, _MAX_STEPS_JOINT_PREP, "stage0_joint_prep")
     _print_live_hand_orientation("stage0_joint_prep")
 
-    # d4 edge-grasp rung-0 branch (2026-07-13, see
-    # docs/superpowers/specs/2026-07-13-d4-edge-grasp-rung0-design.md and
-    # docs/superpowers/plans/2026-07-13-d4-edge-grasp-rung0.md's Task 1).
-    # Strictly guarded on choice=="d4" - the else branch below is the
-    # PRE-EXISTING d8/d10/d12/d20 stages 1-4 logic, unchanged (only its
-    # indentation moved one level deeper to live inside this else: - no
-    # line's actual content differs from before this branch was added; see
-    # this task's report for the regression-guard diff check).
-    if choice == "d4":
-        # Pre-registered GT-pose scope decision (spec's Design section):
-        # rung 0 reads BOTH the d4's position AND resting orientation from
-        # sim ground truth (`results`), not the detector - this isolates the
-        # grasp-mechanism variable from perception error (the spec's own
-        # desk-check arithmetic explicitly treats rung 0's error budget as
-        # "IK-only", excluding the detector's 2-8mm error - see this task's
-        # report for why `target_xy`/`grasp_height_m`, both detector/
-        # measured-height-derived, are accepted-but-unused parameters on
-        # this path). A rung-0 PASS therefore demonstrates "the grasp
-        # mechanism works", not "the vision-driven demo picks the d4" (see
-        # spec) - closing that gap is a separate, deferred follow-up.
-        if results is None or "d4" not in results or "quat_wxyz" not in results["d4"]:
-            raise RuntimeError(
-                "run_pick_sequence(choice='d4') requires `results` (spawn_scene_and_settle's GT dict, "
-                "with the 'quat_wxyz' field) - the edge-grasp axis computation needs the die's resting "
-                "orientation, which only sim ground truth provides."
-            )
-        d4_resting_quat_wxyz = np.array(results["d4"]["quat_wxyz"], dtype=float)
-        d4_world_pos = np.array([results["d4"]["x"], results["d4"]["y"], results["d4"]["z"]], dtype=float)
+    # 2026-07-15 rung-1 change: d4 now takes the EXACT SAME common
+    # straight-down path as d8/d10/d12/d20 below (rung 0's separate tilted-
+    # axis branch, previously here, has been REMOVED - see this function's
+    # own docstring and .superpowers/sdd/task-1-report.md for why). Only the
+    # d4-specific closure/post-lift CONTACT INSTRUMENTATION (reading the
+    # notch-fixture-targeted `d4_leftfinger_contact`/`d4_rightfinger_contact`
+    # sensors dice_scene_cfg.py already retargeted for this rung) is still
+    # gated on `choice == "d4"`, appended additively around stage 3/4 below -
+    # not a separate control-flow branch.
 
-        stage_usd = get_current_stage()
-        die_prim_path = f"{scene.env_prim_paths[0]}/Die_d4"
-        local_vertices = read_die_local_vertices(stage_usd, die_prim_path, num_vertices=4)
+    # Stage 1: approach - translate to (target_xy, stage1_hand_z) AND rotate
+    # to the canonical down orientation TOGETHER (orientation is allowed to
+    # move throughout this stage - it only needs to be exact BEFORE
+    # descent). require_rot=True: both position and orientation must
+    # converge before stage 2 begins.
+    stage1_target_pos = _hand_target_xyz(stage1_hand_z)
+    waypoint_status["stage1_approach"] = _go_to_pose(
+        stage1_target_pos, canonical_down_quat_w, open_target, "stage1_approach",
+        max_steps=_MAX_STEPS_APPROACH, require_rot=True,
+    )
+    _print_live_hand_orientation("stage1_approach")
 
-        candidate_axes = edge_pair_grasp_axes(local_vertices, d4_resting_quat_wxyz)
-        # Reachability proxy: smallest wrist-yaw change from 0.0 rad, a
-        # simple, defensible stand-in for a full IK-reachability score
-        # (which would need live robot state) - see
-        # tasks/franka/antipodal_edge_grasp.py's `best_reachable_pair`
-        # docstring; flagged as a judgment call in this task's report.
-        best_axis = best_reachable_pair(candidate_axes, current_wrist_yaw_rad=0.0)
-        print(
-            f"[GATE G] d4 edge-grasp: {len(candidate_axes)} candidate pairs, picked pair_id="
-            f"{best_axis.pair_id} bottom_edge={best_axis.bottom_edge} opposite_edge={best_axis.opposite_edge} "
-            f"span={best_axis.span_m * 1000:.2f}mm tilt={np.degrees(best_axis.tilt_from_horizontal_rad):.2f}deg "
-            f"wrist_yaw={np.degrees(best_axis.wrist_yaw_rad):.2f}deg "
-            f"grasp_quat_wxyz={best_axis.grasp_quat_wxyz.tolist()}"
-        )
-
-        approach_wp, grasp_wp = stage_waypoints_world(
-            best_axis, d4_world_pos, hand_to_fingertip_offset_m=hand_to_fingertip_z, standoff_m=0.05,
-        )
-        grasp_quat_w = torch.tensor(best_axis.grasp_quat_wxyz, device=robot.device, dtype=torch.float32)
-        print(f"[GATE G] d4 staged waypoints: approach_wp={approach_wp} grasp_wp={grasp_wp}")
-
-        # Stage 1: approach - translate+rotate to the standoff waypoint,
-        # tilted grasp orientation (mirrors the non-d4 path's stage 1, but
-        # both xy AND z vary now, and the target orientation is
-        # `best_axis.grasp_quat_wxyz` instead of the canonical straight-down
-        # quat).
-        stage1_target_pos = torch.tensor(approach_wp, device=robot.device, dtype=torch.float32)
-        waypoint_status["stage1_approach"] = _go_to_pose(
-            stage1_target_pos, grasp_quat_w, open_target, "stage1_approach_d4",
-            max_steps=_MAX_STEPS_APPROACH, require_rot=True,
-        )
-        _print_live_hand_orientation("stage1_approach_d4")
-
-        # Stage 2: descend along the tilted axis to the grasp waypoint,
-        # orientation held. No XY-only refine fallback here (unlike the
-        # non-d4 path) - that fallback's "freeze z, refine xy" logic
-        # assumes a vertical approach axis; a stage-2 timeout on this path
-        # is left to propagate as a `_StageTimeoutError`, caught by
-        # run_gate_g/run_gate_v's own existing handler exactly like every
-        # other stage timeout.
-        stage2_target_pos = torch.tensor(grasp_wp, device=robot.device, dtype=torch.float32)
+    # Stage 2: pure vertical descent to grasp height, orientation HELD at
+    # the now-converged canonical down quat (require_rot=True as a
+    # correctness check - should already be satisfied from stage 1 and held
+    # via the same per-step bounded rotation correction the whole way down).
+    # Uses `_GRASP_POS_TOL` (tighter than stage1/4's `_WAYPOINT_TOL`) - see
+    # that constant's comment: a small die's own radius is comparable to the
+    # looser tolerance, so a "converged" waypoint there could still miss the
+    # die entirely (measured: d4/d8 both converged at ~14mm under the old
+    # single global tolerance and z-gain was ~0 - fingers closed beside the
+    # die, not around it).
+    stage2_target_pos = _hand_target_xyz(stage2_hand_z)
+    try:
         waypoint_status["stage2_descend"] = _go_to_pose(
-            stage2_target_pos, grasp_quat_w, open_target, "stage2_descend_d4",
+            stage2_target_pos, canonical_down_quat_w, open_target, "stage2_descend",
             max_steps=_MAX_STEPS_DESCEND, require_rot=True, pos_tol=_GRASP_POS_TOL,
         )
-        _print_live_hand_orientation("stage2_descend_d4 (grasp height, before close)")
+    except _StageTimeoutError as e:
+        # Fallback (Principal's dispatch: "if a tighter tol alone can't
+        # converge (oscillation floor), add a brief XY-only refine
+        # sub-stage at grasp height"). Re-targets using the CURRENT live
+        # hand z (freezing z, which should already be close from the main
+        # descent above) so the SAME bounded relative-step mechanism has
+        # ~nothing left to correct in z and effectively concentrates its
+        # per-step budget on xy - no new control mechanism, just a
+        # differently-shaped target.
+        print(
+            f"[GATE G] stage2_descend did not converge at pos_tol={_GRASP_POS_TOL * 1000:.1f}mm - "
+            f"attempting XY-only refine sub-stage (fallback): {e}"
+        )
+        live_z = float(robot.data.body_pos_w[0, hand_body_id, 2].cpu().numpy())
+        stage2_target_pos = _hand_target_xyz(live_z)
+        waypoint_status["stage2_descend_xy_refine"] = _go_to_pose(
+            stage2_target_pos, canonical_down_quat_w, open_target, "stage2_descend_xy_refine",
+            max_steps=_MAX_STEPS_REFINE, require_rot=True, pos_tol=_GRASP_POS_TOL,
+        )
+    _print_live_hand_orientation("stage2_descend (grasp height, before close)")
 
-        # Stage 3: close gripper, dwell - bracketed with die-position reads
-        # for the spec's "closure-window displacement" instrumentation
-        # (Design section's "Verification instrumentation" bullet): the
-        # LATERAL EJECTION AT CLOSURE metric the primary success criterion
-        # is measured against (<=5mm), distinct from the existing settle-
-        # vs-post-lift verdict-table check.
-        die_pos_before_close = (
+    # Stage 3: close gripper, dwell. d4-only instrumentation bracketing the
+    # hold (die-position before/after, per the spec's "closure-window
+    # displacement" verification requirement) - additive, not a separate
+    # code path; every other die type skips straight to `_hold` below.
+    d4_die_pos_before_close = None
+    if choice == "d4":
+        d4_die_pos_before_close = (
             scene["die_d4"].data.root_pos_w[0].cpu().numpy() - scene.env_origins[0].cpu().numpy()
         )
-        _hold(stage2_target_pos, grasp_quat_w, close_target, "stage3_close_gripper_d4", _GRIPPER_CLOSE_HOLD_STEPS)
+    _hold(stage2_target_pos, canonical_down_quat_w, close_target, "stage3_close_gripper", _GRIPPER_CLOSE_HOLD_STEPS)
+    _print_live_hand_orientation("stage3_after_close")
+
+    if choice == "d4":
+        # Closure-window displacement + contact-force/point instrumentation
+        # (2026-07-13, Task 2; RETAINED across the 2026-07-15 rung-1 branch
+        # removal above - this is verification instrumentation, not part of
+        # the removed tilted-axis control path). scene.update() runs every
+        # sim step inside `_hold` above, so these sensors' buffers already
+        # reflect the just-completed closure hold - no extra step needed.
+        # force_matrix_w shape is (num_envs=1, num_bodies=1, num_filters=1,
+        # 3); contact_pos_w is NaN when no contact is registered
+        # (track_contact_points=True). `d4_leftfinger_contact`/
+        # `d4_rightfinger_contact` now target the NOTCH FIXTURE prims, not
+        # the bare finger bodies (dice_scene_cfg.py, this same rung-1 task) -
+        # see that module's own comment for why.
         die_pos_after_close = (
             scene["die_d4"].data.root_pos_w[0].cpu().numpy() - scene.env_origins[0].cpu().numpy()
         )
-        closure_delta = die_pos_after_close - die_pos_before_close
+        closure_delta = die_pos_after_close - d4_die_pos_before_close
         closure_lateral_ejection_m = float(np.linalg.norm(closure_delta[:2]))
         closure_full_displacement_m = float(np.linalg.norm(closure_delta))
         ee_pos_at_closure = robot.data.body_pos_w[0, hand_body_id].cpu().numpy()
         ee_quat_at_closure = robot.data.body_quat_w[0, hand_body_id].cpu().numpy()
 
-        # Contact-force/point instrumentation (2026-07-13, Task 2 - see
-        # tasks/franka/dice_scene_cfg.py's d4_leftfinger_contact/
-        # d4_rightfinger_contact ContactSensorCfg entries and this task's
-        # report's "table-clearance / phi at a contact-height offset delta"
-        # section). scene.update() runs every sim step inside `_hold` above,
-        # so these sensors' buffers already reflect the just-completed
-        # closure hold - no extra step needed. force_matrix_w shape is
-        # (num_envs=1, num_bodies=1, num_filters=1, 3); contact_pos_w is NaN
-        # when no contact is registered (track_contact_points=True).
         left_contact = scene["d4_leftfinger_contact"]
         right_contact = scene["d4_rightfinger_contact"]
         left_force_vec_n = left_contact.data.force_matrix_w[0, 0, 0].cpu().numpy()
@@ -1472,7 +1520,7 @@ def run_pick_sequence(
         )
         print(
             f"[GATE G] d4 closure-window die displacement: lateral(xy)={closure_lateral_ejection_m * 1000:.2f}mm "
-            f"full3d={closure_full_displacement_m * 1000:.2f}mm (pos before={die_pos_before_close} "
+            f"full3d={closure_full_displacement_m * 1000:.2f}mm (pos before={d4_die_pos_before_close} "
             f"after={die_pos_after_close}) ee_pos_at_closure={ee_pos_at_closure} "
             f"ee_quat_at_closure={ee_quat_at_closure}"
         )
@@ -1485,9 +1533,6 @@ def run_pick_sequence(
         waypoint_status["closure_full_displacement_m"] = closure_full_displacement_m
         waypoint_status["closure_ee_pos_w"] = ee_pos_at_closure.tolist()
         waypoint_status["closure_ee_quat_w"] = ee_quat_at_closure.tolist()
-        waypoint_status["grasp_axis_pair_id"] = best_axis.pair_id
-        waypoint_status["grasp_axis_span_m"] = best_axis.span_m
-        waypoint_status["grasp_axis_tilt_rad"] = best_axis.tilt_from_horizontal_rad
         waypoint_status["closure_left_finger_force_n"] = left_force_n
         waypoint_status["closure_right_finger_force_n"] = right_force_n
         waypoint_status["closure_bilateral_contact"] = bilateral_contact
@@ -1497,24 +1542,16 @@ def run_pick_sequence(
         waypoint_status["closure_right_contact_pt_w"] = (
             None if np.isnan(right_contact_point_w).any() else right_contact_point_w.tolist()
         )
-        _print_live_hand_orientation("stage3_after_close_d4")
 
-        # Stage 4: vertical lift - reuses the same straight-up-in-world-Z
-        # pattern as the non-d4 path (the object is now rigidly held by the
-        # closed gripper; lift direction doesn't need to track the tilted
-        # approach axis once gripped - see report). Orientation HELD at the
-        # tilted grasp quat throughout (not reverted to canonical -
-        # reorienting mid-lift risks perturbing/dropping a freshly-closed
-        # grasp).
-        stage4_target_pos = torch.tensor(
-            [float(grasp_wp[0]), float(grasp_wp[1]), _STAGE4_LIFT_HAND_Z], device=robot.device, dtype=torch.float32
-        )
-        waypoint_status["stage4_lift"] = _go_to_pose(
-            stage4_target_pos, grasp_quat_w, close_target, "stage4_lift_d4",
-            max_steps=_MAX_STEPS_LIFT, require_rot=True,
-        )
-        _print_live_hand_orientation("stage4_lift_d4")
+    # Stage 4: vertical lift.
+    stage4_target_pos = _hand_target_xyz(stage4_hand_z)
+    waypoint_status["stage4_lift"] = _go_to_pose(
+        stage4_target_pos, canonical_down_quat_w, close_target, "stage4_lift",
+        max_steps=_MAX_STEPS_LIFT, require_rot=True,
+    )
+    _print_live_hand_orientation("stage4_lift")
 
+    if choice == "d4":
         # Post-lift contact re-read (sustained-grip evidence, distinct from
         # the closure-window reading above) - same sensors, same threshold.
         post_lift_left_force_n = float(
@@ -1534,67 +1571,6 @@ def run_pick_sequence(
         waypoint_status["post_lift_left_finger_force_n"] = post_lift_left_force_n
         waypoint_status["post_lift_right_finger_force_n"] = post_lift_right_force_n
         waypoint_status["post_lift_bilateral_contact"] = post_lift_bilateral_contact
-    else:
-        # Stage 1: approach - translate to (target_xy, stage1_hand_z) AND rotate
-        # to the canonical down orientation TOGETHER (orientation is allowed to
-        # move throughout this stage - it only needs to be exact BEFORE
-        # descent). require_rot=True: both position and orientation must
-        # converge before stage 2 begins.
-        stage1_target_pos = _hand_target_xyz(stage1_hand_z)
-        waypoint_status["stage1_approach"] = _go_to_pose(
-            stage1_target_pos, canonical_down_quat_w, open_target, "stage1_approach",
-            max_steps=_MAX_STEPS_APPROACH, require_rot=True,
-        )
-        _print_live_hand_orientation("stage1_approach")
-
-        # Stage 2: pure vertical descent to grasp height, orientation HELD at
-        # the now-converged canonical down quat (require_rot=True as a
-        # correctness check - should already be satisfied from stage 1 and held
-        # via the same per-step bounded rotation correction the whole way down).
-        # Uses `_GRASP_POS_TOL` (tighter than stage1/4's `_WAYPOINT_TOL`) - see
-        # that constant's comment: a small die's own radius is comparable to the
-        # looser tolerance, so a "converged" waypoint there could still miss the
-        # die entirely (measured: d4/d8 both converged at ~14mm under the old
-        # single global tolerance and z-gain was ~0 - fingers closed beside the
-        # die, not around it).
-        stage2_target_pos = _hand_target_xyz(stage2_hand_z)
-        try:
-            waypoint_status["stage2_descend"] = _go_to_pose(
-                stage2_target_pos, canonical_down_quat_w, open_target, "stage2_descend",
-                max_steps=_MAX_STEPS_DESCEND, require_rot=True, pos_tol=_GRASP_POS_TOL,
-            )
-        except _StageTimeoutError as e:
-            # Fallback (Principal's dispatch: "if a tighter tol alone can't
-            # converge (oscillation floor), add a brief XY-only refine
-            # sub-stage at grasp height"). Re-targets using the CURRENT live
-            # hand z (freezing z, which should already be close from the main
-            # descent above) so the SAME bounded relative-step mechanism has
-            # ~nothing left to correct in z and effectively concentrates its
-            # per-step budget on xy - no new control mechanism, just a
-            # differently-shaped target.
-            print(
-                f"[GATE G] stage2_descend did not converge at pos_tol={_GRASP_POS_TOL * 1000:.1f}mm - "
-                f"attempting XY-only refine sub-stage (fallback): {e}"
-            )
-            live_z = float(robot.data.body_pos_w[0, hand_body_id, 2].cpu().numpy())
-            stage2_target_pos = _hand_target_xyz(live_z)
-            waypoint_status["stage2_descend_xy_refine"] = _go_to_pose(
-                stage2_target_pos, canonical_down_quat_w, open_target, "stage2_descend_xy_refine",
-                max_steps=_MAX_STEPS_REFINE, require_rot=True, pos_tol=_GRASP_POS_TOL,
-            )
-        _print_live_hand_orientation("stage2_descend (grasp height, before close)")
-
-        # Stage 3: close gripper, dwell.
-        _hold(stage2_target_pos, canonical_down_quat_w, close_target, "stage3_close_gripper", _GRIPPER_CLOSE_HOLD_STEPS)
-        _print_live_hand_orientation("stage3_after_close")
-
-        # Stage 4: vertical lift.
-        stage4_target_pos = _hand_target_xyz(stage4_hand_z)
-        waypoint_status["stage4_lift"] = _go_to_pose(
-            stage4_target_pos, canonical_down_quat_w, close_target, "stage4_lift",
-            max_steps=_MAX_STEPS_LIFT, require_rot=True,
-        )
-        _print_live_hand_orientation("stage4_lift")
 
     return waypoint_status
 
@@ -2013,9 +1989,13 @@ def run_gate_v() -> None:
     if not all_ok:
         # Report loudly but don't raise - same reasoning as Gate G's own
         # (a raised exception here would skip simulation_app.close() and hit
-        # this repo's documented teardown-hang failure mode). d4 is the
-        # brief's own permitted failure case.
-        print(f"[GATE V] *** FAILED for choice={choice} (permitted for d4) - see verdict table above/verdict_{choice}.json ***")
+        # this repo's documented teardown-hang failure mode). d4 was
+        # historically this demo's own documented permitted-failure case
+        # (pre-rung-1); as of the 2026-07-15 V-notch fixture, a d4 FAIL here
+        # is a real result to investigate (Task 2's seeded trials), not an
+        # accepted/expected outcome anymore - still non-raising so the sim
+        # tears down cleanly either way.
+        print(f"[GATE V] *** FAILED for choice={choice} - see verdict table above/verdict_{choice}.json ***")
 
 
 def main() -> None:

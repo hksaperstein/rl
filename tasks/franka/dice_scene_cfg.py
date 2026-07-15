@@ -31,6 +31,17 @@ Lighting: DomeLightCfg alone doesn't adequately illuminate camera sensor
 renders; DistantLightCfg was added to the scene to ensure the perception
 camera captures a properly lit frame for detector inference.
 
+d4 rung-1 V-notch fingertip fixture (2026-07-15, see
+docs/superpowers/specs/2026-07-15-d4-rung1-pad-geometry-design.md): two new
+`notch_fixture_left`/`notch_fixture_right` scene prims, authored offline by
+scripts/build_notch_fixture_asset.py from tasks/franka/notch_fixture.py's
+pure geometry, attached to the Franka's two fingertips via a fixed joint
+created at runtime by scripts/dice_pick_demo.py's `attach_notch_fixtures` -
+UNCONDITIONAL (both fingertips, every die type, not a d4-only branch) per
+the spec's own North Star call. The stock Franka fingertip mesh/collision
+geometry itself is never touched (only new sibling prims + a joint are
+added) - see that spec's "byte-identity" regression-guard requirement.
+
 Import this module only after an Isaac Sim/Isaac Lab AppLauncher has been
 created.
 """
@@ -76,6 +87,20 @@ _DICE_SET_DIR = os.path.join(
 )
 _DICE_SET_NAME = "set_00000"  # every DIE_TYPES manifest for this set has empty mesh_quality_warnings
 
+# d4 rung-1 V-notch fingertip fixture (2026-07-15, see
+# docs/superpowers/specs/2026-07-15-d4-rung1-pad-geometry-design.md and
+# .superpowers/sdd/task-1-brief.md) - authored offline by
+# scripts/build_notch_fixture_asset.py (plain pxr, no sim launch/GPU) via
+# tasks/franka/notch_fixture.py's pure geometry. UNCONDITIONAL per the
+# spec's own "North Star call": attached to BOTH fingertips for every die
+# type, not gated on `choice == "d4"` - see `notch_fixture_left`/
+# `notch_fixture_right` below and scripts/dice_pick_demo.py's
+# `attach_notch_fixtures`.
+_NOTCH_FIXTURE_USD_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "assets", "shapes", "notch_fixture.usd",
+)
+
 # Small-object rigid props: light solver iteration bump (small/light bodies
 # are prone to jitter/tunneling at default iteration counts - same rationale
 # as lift_env_cfg.py's DexCube rigid_props), disable_gravity=False so they
@@ -100,6 +125,35 @@ def _die_usd_path(die_type: str) -> str:
     if not os.path.isfile(path):
         raise FileNotFoundError(f"Die USD not found: {path}")
     return path
+
+
+def _notch_fixture_usd_path() -> str:
+    if not os.path.isfile(_NOTCH_FIXTURE_USD_PATH):
+        raise FileNotFoundError(
+            f"Notch fixture USD not found: {_NOTCH_FIXTURE_USD_PATH} - run "
+            "scripts/build_notch_fixture_asset.py once per machine/checkout first "
+            "(plain pxr, no sim launch/GPU - see that script's own docstring for "
+            "the exact invocation)."
+        )
+    return _NOTCH_FIXTURE_USD_PATH
+
+
+def _notch_fixture_cfg(prim_name: str, init_pos: tuple[float, float, float]) -> AssetBaseCfg:
+    """One notch-fixture instance (left or right) - a plain AssetBaseCfg
+    (matching table/plane/light's own "no data buffers needed" pattern,
+    not RigidObjectCfg - nothing in this demo ever reads
+    `scene["notch_fixture_*"].data`). `init_pos` only needs to be roughly
+    near the default gripper pose for numerical stability at the FIRST
+    physics step - scripts/dice_pick_demo.py's `attach_notch_fixtures`
+    overwrites this with an exactly-measured world position (from the live
+    finger prim's own transform) before `sim.reset()` ever runs, and the
+    fixed joint it creates there is what actually determines the fixture's
+    held pose from then on, not this placeholder."""
+    return AssetBaseCfg(
+        prim_path="{ENV_REGEX_NS}/" + prim_name,
+        init_state=AssetBaseCfg.InitialStateCfg(pos=init_pos),
+        spawn=UsdFileCfg(usd_path=_notch_fixture_usd_path()),
+    )
 
 
 def _die_cfg(die_type: str, init_pos: tuple[float, float, float]) -> RigidObjectCfg:
@@ -219,20 +273,49 @@ class DiceSceneCfg(InteractiveSceneCfg):
     die_d12: RigidObjectCfg = _die_cfg("d12", (0.58, 0.10, 0.10))
     die_d20: RigidObjectCfg = _die_cfg("d20", (0.65, 0.20, 0.10))
 
-    # d4-only contact instrumentation (2026-07-13, Task 2 - see module-level
-    # comment above `_FRANKA_ROBOT_CFG_WITH_CONTACT`). filter_prim_paths_expr
-    # targets ONLY Die_d4, not a wildcard over all 5 dice - these sensors
-    # report zero/empty data for the whole scene unless something specifically
-    # touches Die_d4, and scripts/dice_pick_demo.py's non-d4 code path never
-    # reads `scene["d4_*_contact"]` at all, so this is additive/inert for the
-    # d8/d10/d12/d20 runs (same "spawn universally, read only on the relevant
-    # branch" pattern the die_d4 RigidObjectCfg itself already uses). Two
-    # separate single-body sensors (not one two-body sensor) because PhysX
-    # requires the filter match count to equal the sensor body count - see
-    # tasks/ar4/pickplace_env_cfg.py's gripper_jaw1_contact/
-    # gripper_jaw2_contact, the same pattern already validated in this repo.
+    # d4 rung-1 V-notch fingertip fixture (2026-07-15) - UNCONDITIONAL, both
+    # fingertips, every die type (spec's North Star call; see
+    # `_NOTCH_FIXTURE_USD_PATH`'s comment above). Declared as plain top-level
+    # scene prims (siblings of Die_*/Robot/Table, NOT nested under `Robot`'s
+    # own prim tree) specifically so attaching them never requires authoring
+    # anything on the Franka articulation's own (partly instanceable) prim
+    # hierarchy - Task 0's own finding was that a new child prim under
+    # `panda_leftfinger`/`panda_rightfinger` is not straightforwardly
+    # authorable (instanceable prims), which is why the design is "new
+    # sibling rigid body + fixed joint", not "new child mesh under the
+    # existing finger". Declared BEFORE the ContactSensorCfg fields below -
+    # `InteractiveScene._add_entities_from_cfg` spawns each configclass field
+    # in declaration order, so these prims must exist before the contact
+    # sensors (retargeted below to point AT these fixtures, not the bare
+    # finger prims - see their own comment) are constructed.
+    notch_fixture_left: AssetBaseCfg = _notch_fixture_cfg("NotchFixtureLeft", (0.13, -0.03, 0.85))
+    notch_fixture_right: AssetBaseCfg = _notch_fixture_cfg("NotchFixtureRight", (0.13, 0.03, 0.85))
+
+    # d4-only contact instrumentation (2026-07-13, Task 2; RETARGETED
+    # 2026-07-15 rung-1 Task 1 - see module-level comment above
+    # `_FRANKA_ROBOT_CFG_WITH_CONTACT` for the original rationale).
+    # prim_path now points at the notch fixture prims, NOT the bare
+    # panda_leftfinger/panda_rightfinger body prims: with the fixture
+    # rigidly fixed-jointed on as a SEPARATE PhysX rigid body (Task 0's
+    # finding - a fixed joint constrains two distinct bodies, it does not
+    # merge their collision geometry into one), the die's actual contact
+    # now registers against the FIXTURE's own collision shapes, not the
+    # finger body's - a ContactSensorCfg still targeting
+    # `.../Robot/panda_leftfinger` would see zero force even during a
+    # genuine notch-facet grip. filter_prim_paths_expr targets ONLY Die_d4,
+    # not a wildcard over all 5 dice - these sensors report zero/empty data
+    # for the whole scene unless something specifically touches Die_d4, and
+    # scripts/dice_pick_demo.py's non-d4 code path never reads
+    # `scene["d4_*_contact"]` at all, so this is additive/inert for the
+    # d8/d10/d12/d20 runs (same "spawn universally, read only on the
+    # relevant branch" pattern the die_d4 RigidObjectCfg itself already
+    # uses). Two separate single-body sensors (not one two-body sensor)
+    # because PhysX requires the filter match count to equal the sensor
+    # body count - see tasks/ar4/pickplace_env_cfg.py's
+    # gripper_jaw1_contact/gripper_jaw2_contact, the same pattern already
+    # validated in this repo.
     d4_leftfinger_contact: ContactSensorCfg = ContactSensorCfg(
-        prim_path="{ENV_REGEX_NS}/Robot/panda_leftfinger",
+        prim_path="{ENV_REGEX_NS}/NotchFixtureLeft",
         update_period=0.0,
         history_length=0,
         track_contact_points=True,
@@ -240,7 +323,7 @@ class DiceSceneCfg(InteractiveSceneCfg):
         filter_prim_paths_expr=["{ENV_REGEX_NS}/Die_d4"],
     )
     d4_rightfinger_contact: ContactSensorCfg = ContactSensorCfg(
-        prim_path="{ENV_REGEX_NS}/Robot/panda_rightfinger",
+        prim_path="{ENV_REGEX_NS}/NotchFixtureRight",
         update_period=0.0,
         history_length=0,
         track_contact_points=True,

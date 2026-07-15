@@ -214,6 +214,48 @@ class FrankaCubeBakedLiftJointEnvCfg_PLAY(FrankaCubeBakedLiftJointEnvCfg):
 
 
 @configclass
+class FrankaDieLiftJointStandardEnvCfg(FrankaDieLiftJointHeavyEnvCfg):
+    """Corrected standard-size rung (2026-07-15 ROADMAP entry): a real
+    *standard* commercial d20 measures ~20-22mm, not 30.3mm - 30.3mm is
+    itself a real, commonly-sold "jumbo" d20 size (e.g. Twenty Sided
+    Store's "Jumbo Dice 30mm D20"), not a mistake, but every rung above
+    (Heavy/Big/Mid/Mixed) anneals *toward* 30.3mm as if it were the true
+    target. This class does not correct or reinterpret any of that prior
+    history (the asset-bisect/size-curriculum verdicts at 30.3mm/48.0mm/
+    etc. stand as originally reported) - it only adds the forward-facing
+    22mm target for future d20 grasp work. Mass stays pinned at 0.216kg
+    via the inherited FrankaDieLiftJointHeavyEnvCfg mass_props override
+    (asset-bisect rung 1 finding: light objects cause PhysX depenetration-
+    impulse chaos - not this change's variable); size is the only new
+    variable here.
+
+    Scale derivation: this file's four non-base rungs give scale-per-mm
+    ratios of 0.001585/48.0=3.302083e-5, 0.001440/43.6=3.302752e-5,
+    0.001291/39.1=3.301790e-5, 0.001146/34.7=3.302594e-5 (average
+    3.302305e-5/mm - display sizes are rounded to 1 decimal but the scale
+    constants themselves are precise to 6 decimals, so the ratio is fit
+    from the constants, not the rounded mm labels). 22mm * 3.302305e-5 =
+    7.265071e-4, rounded to this file's 6-decimal convention: 0.000727.
+    Live-verified via scripts/_diag_d20_standard_scale_check.py at this
+    scale (see ROADMAP.md's 2026-07-15 entry for the measured bbox)."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.scene.object.spawn.scale = (0.000727, 0.000727, 0.000727)
+
+
+@configclass
+class FrankaDieLiftJointStandardEnvCfg_PLAY(FrankaDieLiftJointStandardEnvCfg):
+    """Smaller, non-corrupted-observation variant for eval/play."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.scene.num_envs = 50
+        self.scene.env_spacing = 2.5
+        self.observations.policy.enable_corruption = False
+
+
+@configclass
 class FrankaDieLiftJointMixedEnvCfg(FrankaDieLiftJointHeavyEnvCfg):
     """Size-curriculum primary arm (docs/superpowers/specs/2026-07-13-size-
     curriculum-design.md): per-env die size varied across {48.0, 43.6,

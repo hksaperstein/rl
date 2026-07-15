@@ -82,3 +82,14 @@ task report: `.superpowers/sdd/task-staged-anneal-report.md`.
   background child's full stdout into the tool's own output even after
   the call returns (shared pty) — use `> logfile 2>&1 < /dev/null &`
   instead for silent backgrounding.
+
+## Standard-vs-jumbo correction (2026-07-15)
+
+This article's "real target size" of 30.3mm is the baked asset's
+*default* spawn size, not a real-world standard d20 — web research
+confirmed a real standard commercial d20 is ~20-22mm, and 30.3mm is
+itself a real "jumbo" d20 size (commonly sold, e.g. by Twenty Sided
+Store). This does not change any verdict recorded above; see
+`ROADMAP.md`'s 2026-07-15 entry for the corrected 22mm target, the new
+`FrankaDieLiftJointStandardEnvCfg` (`tasks/franka/dice_lift_joint_env_cfg.py`),
+and its live-measured 21.993mm bounding box.

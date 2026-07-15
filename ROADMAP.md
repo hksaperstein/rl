@@ -2875,3 +2875,31 @@ none of the ~$0.33 instance/GPU charge) and this project has no
 BigQuery billing export configured, so duration × published-SKU-rate is
 the only cost-estimation path available. Recipe updated:
 `docs/cloud/franka-cloud-shakedown.md`.
+
+**Standard-vs-jumbo d20 size correction (2026-07-15).** Web research
+(user-confirmed) established that a real *standard* commercial d20 is
+~20-22mm across, not 30.3mm — 30.3mm is itself a real, commonly-sold
+**"jumbo"** d20 size (e.g. Twenty Sided Store's own "Jumbo Dice 30mm
+D20" listing), not a mistake or edge case. Every rung in
+`tasks/franka/dice_lift_joint_env_cfg.py` (Heavy/Big/Mid/Mixed) had
+treated 30.3mm — the baked asset's default spawn size — as "the real
+target size" to anneal a curriculum down toward. **This does not change
+any existing asset-bisect/size-curriculum verdict** — the 30.3mm/48.0mm/
+etc. results stand exactly as originally reported; it only corrects
+what "the real/final target size" means for *future* d20 size-related
+work. Added a new forward-facing class, `FrankaDieLiftJointStandardEnvCfg`
+(+ `_PLAY` variant), inheriting from `FrankaDieLiftJointHeavyEnvCfg` (mass
+pinned 0.216kg, unchanged) with `scale=(0.000727, 0.000727, 0.000727)` —
+derived by fitting this file's own four existing rung constants
+(0.001585/48.0mm, 0.001440/43.6mm, 0.001291/39.1mm, 0.001146/34.7mm) to
+an average scale-per-mm ratio of 3.302305e-5, then 22mm × 3.302305e-5 =
+0.000727. Live-verified via new diagnostic
+`scripts/_diag_d20_standard_scale_check.py` (same no-physics headless-
+SimulationApp bounding-box-read pattern as `_diag_die_scale_check.py`/
+`_diag_dexcube_scale_check.py`): measured bbox at this scale is
+**21.993mm** (delta -0.007mm from the 22.0mm target), well inside the
+0.3mm tolerance — no adjustment needed. This class is not yet used by
+any training run; it's a target for a future d20 grasp-strategy spec
+(shape itself, per the size-curriculum verdict above, is the next thing
+needing a direct attack).
+

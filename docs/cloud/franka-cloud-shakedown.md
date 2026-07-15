@@ -1,4 +1,4 @@
-# Franka cloud training shakedown — recipe (PROVEN end-to-end, 2026-07-13)
+# Franka cloud training shakedown — recipe (PROVEN end-to-end, 2026-07-13; re-verified 2026-07-14/15)
 
 Status as of 2026-07-13 (attempt 3, quota granted): this recipe has been
 **executed end-to-end and proven** on a live GCP L4 SPOT instance —
@@ -21,6 +21,70 @@ became unavailable across every surveyed zone simultaneously.
 Prior blocked attempts (billing-tier flag, then `GPUS_ALL_REGIONS=0`
 quota) are preserved below for history — both are now resolved (billing
 upgraded 2026-07-12; quota granted 2026-07-12T23:09Z).
+
+## Attempt 4 (2026-07-14/15): re-run, zero preemptions, completion verified from raw event data
+
+Second full end-to-end shakedown, independent of attempt 3's own run.
+Confirms the recipe isn't a one-off: instance `rl-franka-shakedown`
+created 2026-07-14T18:38:52-07:00, this time falling back to
+**`us-west1-a`** — `us-central1-a/b/c` **and** `us-east1-b/c/d` were all
+`ZONE_RESOURCE_POOL_EXHAUSTED` simultaneously, a worse stockout than
+attempt 3's. Delete initiated 19:33:39-07:00, completed 19:34:42-07:00 —
+total instance existence **54m47s (~0.913hr)**.
+
+**Zero SPOT preemptions this run** (attempt 3 hit two) — training ran
+~35min uninterrupted after install; the checkpoint-resume path was not
+exercised this time.
+
+**Training verified complete at 1500/1500 iterations directly from the
+raw tfevents data**, not inferred from the `model_1499.pt` checkpoint
+filename existing: the run's `events.out.tfevents...` file was
+downloaded and parsed directly, and `Loss/value_function`,
+`Train/mean_reward`, and every `Episode_Reward/*`/`Episode_Termination/*`
+tag each have exactly 1500 data points spanning step 0-1499. The
+instance's own tee'd stdout log appeared to stop at iteration 1493 —
+cross-checked against the event data and confirmed to be a
+stdout-buffering artifact at process exit, not a real early stop.
+
+Run artifacts:
+`gs://rl-manipulation-hks-runs/cloud-shakedown/ik-cube/seed42/2026-07-15_01-52-15/`
+— 31 checkpoints (`model_0.pt` through `model_1499.pt`, every 50
+iterations), the tfevents file, `manifest.json`, `params/agent.yaml` +
+`params/env.yaml`. Local git SHA at ship time:
+`ab7c8ea6b12c5550d7a62a459f516cdcadd8c618` (repo had untracked
+`outputs/` and `vision/run_render_v2.py` at the time — not part of the
+git-archive-shipped tree). `manifest.json`'s `git_sha` field correctly
+reads `"unknown (...)"` per the git-archive limitation documented above.
+
+## Cost: real per-SKU pricing (2026-07-14/15)
+
+The recipe's earlier cost claims ("total cost <$1", see ROADMAP.md's
+2026-07-13 entry) were duration-based estimates against the
+`g2-standard-4` machine-type price alone. Confirmed via the Cloud
+Billing Catalog API (`cloudbilling.googleapis.com/v1/services/
+6F81-5844-456A/skus`) that **the L4 GPU is a fully separate SKU, not
+bundled into the machine-type price**:
+
+- `Spot Preemptible G2 Instance Core`: $0.01277/vCPU-hr
+- `Spot Preemptible G2 Instance Ram`: $0.001496/GiB-hr
+- `Nvidia L4 GPU attached to Spot Preemptible VMs`: $0.2862/GPU-hr (the
+  dominant cost component)
+- `Balanced PD Capacity` (boot disk): $0.10/GiB-month
+
+For `g2-standard-4` (4 vCPU, 16GB RAM, 1x L4): CPU+RAM = $0.075/hr, GPU
+= $0.2862/hr, combined **$0.361/hr**. Attempt 4's total: ~$0.33 compute
++ ~$0.02 disk (150GB × 0.913hr) ≈ **~$0.35 total**.
+
+**Billing-console gotcha**: mid-run, the GCP Billing console's
+"Compute" category showed only `$0.019` — this closely matches just the
+persistent-disk charge (~$0.019 independently computed), not the
+CPU/RAM/GPU instance charges at all (~$0.33), strongly suggesting the
+actual instance-usage charges (dominated by the GPU SKU) simply hadn't
+posted yet through the billing pipeline. This project has **no BigQuery
+billing export configured** (`bq ls` returns empty) — there is no
+CLI/API path to pull an authoritative billed dollar figure; only
+duration × published-SKU-rate estimates are possible outside the
+Console, which itself lags real usage by hours.
 
 ## Blocker (retry, current): global `GPUS_ALL_REGIONS` quota is 0
 

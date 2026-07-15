@@ -13,12 +13,12 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "wiki/concepts/sim-physics-fidelity.md",
+                "file": "wiki/experiments/experiment-05-potential-based-reward-shaping.md",
                 "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "sim-physics-fidelity"
+              "title": "experiment-05-potential-based-reward-shaping"
             }
           }
         ]
@@ -183,41 +183,41 @@
   },
   "active": "b55acdbfbd5ebf33",
   "lastOpenFiles": [
+    "wiki/concepts/cloud-training.md.tmp.14156.45b6f80fac63",
+    "wiki/concepts/cloud-training.md.tmp.14156.107f18b643b6",
+    "wiki/concepts/cloud-training.md.tmp.14156.9fb6baef37d5",
+    "wiki/index.md.tmp.14156.aa7b4a09a6bf",
+    "wiki/index.md.tmp.14156.c4d07a72424c",
+    "wiki/index.md.tmp.14156.57ed34f9e646",
+    "wiki/index.md.tmp.14156.526c8c5d8aad",
+    "wiki/experiments/experiment-09-antipodal-grasp-bonus.md",
+    "wiki/experiments/experiment-14-reach-skip-curriculum.md",
+    "wiki/experiments/experiment-26-gripper-reintroduction.md",
+    "wiki/concepts/sim-physics-fidelity.md",
+    "wiki/concepts/vision-platform.md",
+    "wiki/concepts/reward-hacking-and-sparse-discoverability.md",
+    "wiki/concepts/citation-verification-practice.md",
     "wiki/concepts/hyperparameter-registry.md",
     "wiki/concepts/staged-reward-co-satisfiability.md",
-    "wiki/experiments/experiment-26-gripper-reintroduction.md",
     "wiki/experiments/experiment-06-mirror-scene-stillness-penalty.md",
     "wiki/experiments/experiment-07-sphere-shrink.md",
     "wiki/experiments/experiment-08-classical-ik-guided-path.md",
-    "wiki/experiments/experiment-09-antipodal-grasp-bonus.md",
     "wiki/experiments/experiment-10-antipodal-threshold-action-scale-solver.md",
     "wiki/experiments/experiment-11-taskspace-ik.md",
     "wiki/experiments/experiment-12-stillness-reward-rate.md",
-    "wiki/experiments/experiment-14-reach-skip-curriculum.md",
     "wiki/experiments/experiment-13-residual-rl.md",
     "wiki/experiments/experiment-05-potential-based-reward-shaping.md",
     "wiki/experiments/experiment-02-curriculum-gated-lift-height.md",
-    "wiki/concepts/reward-hacking-and-sparse-discoverability.md",
     "wiki/concepts/reach-grasp-lift-gap.md",
     "wiki/concepts/ppo-critic-divergence.md",
-    "wiki/concepts/citation-verification-practice.md",
     "wiki/concepts/action-space-design.md",
     "wiki/experiments/experiment-01-contact-sensor-grasp-reward.md",
     "wiki/concepts/grasp-mechanics-antipodal-vs-magnitude.md",
     "wiki/concepts/reward-rate-arithmetic.md",
     "wiki/experiments/experiment-03-always-on-lift-height.md",
-    "wiki/experiments/experiment-04-sa-ppo-lr-bump.md",
     "wiki/experiments/experiment-05-potential-based-reward-shaping.md.tmp.4962.61463fdb6f84",
     "wiki/experiments/experiment-04-sa-ppo-lr-bump.md.tmp.4962.7057c45ca2f2",
     "wiki/experiments/experiment-03-always-on-lift-height.md.tmp.4962.c67299ab8016",
-    "wiki/experiments/experiment-02-curriculum-gated-lift-height.md.tmp.4962.aae051bab9ac",
-    "wiki/experiments/experiment-01-contact-sensor-grasp-reward.md.tmp.4962.e27c4b0df853",
-    "README.md",
-    "wiki/index.md.tmp.4962.f7eff121e71d",
-    "wiki/concepts/citation-verification-practice.md.tmp.4962.53d3b3833623",
-    "wiki/concepts/reward-hacking-and-sparse-discoverability.md.tmp.4962.9b82ed3e1fa6",
-    "wiki/concepts/reach-grasp-lift-gap.md.tmp.4962.3cda23252561",
-    "wiki/concepts/grasp-mechanics-antipodal-vs-magnitude.md.tmp.4962.9908909071a5",
-    "wiki/index.md"
+    "wiki/experiments/experiment-02-curriculum-gated-lift-height.md.tmp.4962.aae051bab9ac"
   ]
 }

@@ -8,6 +8,10 @@
 #     --region us-central1 --allow-unauthenticated \
 #     --service-account tb-viewer@rl-manipulation-hks.iam.gserviceaccount.com \
 #     --memory 1Gi --max-instances 1
+#
+# Status: DEPLOYED and LIVE (confirmed 2026-07-14/15, deployed 2026-07-12) at
+# https://tensorboard-937841495611.us-central1.run.app -- --allow-unauthenticated,
+# i.e. a public URL with no auth gate. Not just "ready to deploy."
 FROM python:3.12-slim
 
 RUN pip install --no-cache-dir tensorboard gcsfs

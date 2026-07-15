@@ -1,16 +1,39 @@
-# AR4 Manipulation Research — Wiki
+# Manipulation Research — Wiki (AR4 → Franka Panda)
 
-This wiki compiles the research history of this repo's AR4 pick-and-place
-project: the effort to get a simulated AR4 arm (Isaac Lab / Isaac Sim) to
-reliably grasp an object and move it to a goal location via RL (PPO). Per
-this repo's [North Star](../../CLAUDE.md), the long-term goal is a general,
-reusable manipulation research platform — multiple tasks, objects, and arms
-sharing the same infrastructure and, ideally, the same methodology — but the
-work indexed here is the current, deliberately narrow phase: one AR4 arm,
-one graspable object (first a sphere, later a cube), pick it up and move it
-to a goal. That narrow phase is still unsolved as of Experiment 14: grasp
-contact is reliably achieved, but a genuine lift-and-carry has not yet been
-observed in evaluation video.
+This wiki compiles the research history of this repo's pick-and-place
+manipulation project: the effort to get a simulated robot arm (Isaac Lab /
+Isaac Sim) to reliably grasp an object and move it to a goal location via RL
+(PPO). Per this repo's [North Star](../../CLAUDE.md), the long-term goal is
+a general, reusable manipulation research platform — multiple tasks,
+objects, and arms sharing the same infrastructure and, ideally, the same
+methodology.
+
+The work indexed here spans two phases. **Phase 1 (completed): the AR4
+arm** — Experiments 1 through 26 below, one AR4 arm, one graspable object
+(first a sphere, later a cube), pick it up and move it to a goal. Real
+progress was made (reach solved, antipodal grasp contact increasingly
+reliable) but a genuine lift-and-carry was never confirmed in evaluation
+video, and mounting evidence (see Experiment 26 and the follow-up
+investigations after it) pointed at AR4-asset-specific defects — an
+unresolved 17-27mm classical-IK positioning miss, an unconfirmed gripper
+jaw-mimic constraint, unverified jaw collision geometry — rather than a
+fundamental RL/reward-design difficulty.
+
+**Phase 2 (current): the Franka Emika Panda**, per the platform-pivot
+decision recorded in [CLAUDE.md](../../CLAUDE.md) — built on a dedicated
+`franka-panda-pivot` branch (2026-07-09 through 2026-07-13), then merged to
+`main` by fast-forward on 2026-07-13. Franka is Isaac Lab's own officially-
+supported reference manipulation platform, removing the custom-asset/
+calibration risk class the AR4 work hit repeatedly. The pivot proved out
+quickly: perception-driven dice picking (4/5 die types via a trained
+detector), the first learned d20 die lift+carry at the real 30.3mm target
+size, a proven GCP cloud training pipeline, and a detector-training win
+(datagen-v2). The AR4-era investigations (IK positioning bug, jaw-mimic
+defect, gripper contact geometry) are not abandoned — they may still matter
+if this project returns to AR4, or as a concrete test of the North Star's
+own "drop in a new arm, training should succeed immediately" bar once
+Franka work matures — but are not the active priority while the Franka
+phase is underway.
 
 ## Contents
 
@@ -95,6 +118,23 @@ see the coverage boundary note below.)*
   pre-declared permitted failure). First perception-in-the-loop pick on
   this platform; scripted controller, not RL — Phase I (detector state
   inside a trained policy) stays open.
+- [[joint-space-die-lift]] (2026-07-12, `franka-panda-pivot`) — swaps
+  Isaac Lab's validated Franka lift recipe from task-space IK to direct
+  joint-position control, on the physics-baked 30.3mm d20 die; falsified
+  on the d20 (0/8 sustained lifts), but proves the joint-space action
+  formulation itself works (DexCube trains decisively under the same
+  recipe) and isolates the failure to the d20 asset, not the action space.
+- [[asset-bisect]] (2026-07-12, `franka-panda-pivot`) — one-variable-at-
+  a-time ladder (mass → size → shape → pipeline provenance) isolates
+  *shape* as the reliability gate for d20 grasp discovery: at identical
+  size/mass/pipeline, a flat-faced cube trains 3/3 seeds vs. the rounded
+  d20's 1/3; mass and this project's own bake pipeline both ruled out.
+- [[size-curriculum]] (2026-07-13, `franka-panda-pivot`) — two pre-
+  authorized size-curriculum arms (mixed-size domain randomization, then
+  a staged 48.0→39.1→30.3mm anneal) both FALSIFIED as a fix for d20 grasp
+  discoverability; the staged-anneal arm does prove the transfer
+  mechanism itself works, yielding the project's first confirmed d20
+  lift+carry at the real 30.3mm target size (seed 123, 8/8).
 
 ### Concepts
 
@@ -137,6 +177,25 @@ see the coverage boundary note below.)*
   other concept articles, meant to be updated per-value as things change,
   not rewritten as narrative (2026-07-09, also post-dates the rest of
   this first pass).
+- [[vision-platform]] (2026-07-10, `vision/` subtree) — the monorepo-
+  merged former standalone Dice-Detection repo: synthetic-data generation,
+  dataset plumbing, YOLO detector training/eval, ONNX export; the
+  apparent-size-as-class-cue confound diagnosed in dice-detector-v1 and
+  fixed by the datagen-v2 close-up slice, plus the d6 glyph-confound
+  regression it exposed in turn.
+- [[cloud-training]] (2026-07-13, re-verified 2026-07-14/15,
+  `franka-panda-pivot`) — the GCP cloud training pipeline: proven
+  end-to-end on a SPOT L4 instance (create → Isaac Sim/Lab pip install →
+  headless training → GCS sync → teardown), install gaps found beyond
+  NVIDIA's own docs, SPOT preemption/checkpoint-resume handling, and
+  real per-SKU GCP pricing (the L4 GPU bills as a SKU separate from the
+  `g2-standard-4` machine type).
+- [[isaac-viewport-freezes]] (2026-07-13) — three distinct causes of an
+  apparently frozen Isaac Sim viewport (only one a real bug: a rare
+  mid-training livelock); the routine per-PPO-iteration UI stall and a
+  demo-script synchronous-subprocess stall are both structural, not
+  bugs. The window is not a training-health signal in either direction —
+  watch the log-mtime heartbeat and TensorBoard instead.
 
 ## Scope of this first pass
 
@@ -179,3 +238,19 @@ article's whole throughline. Silence on
 items 6-8 and Experiments 15-24 here means "not yet compiled," not "nothing
 happened" — see `ROADMAP.md` itself for the full record of those items in
 the meantime.
+
+## Coverage boundary as of 2026-07-15
+
+The Franka-phase (Phase 2) content compiled so far is: [[dice-pick-demo]],
+[[joint-space-die-lift]], [[asset-bisect]], [[size-curriculum]],
+[[cloud-training]], [[vision-platform]], and [[isaac-viewport-freezes]] —
+covering the perception-driven pick demo, the joint-space/asset-bisect/
+size-curriculum experiment line on the d20 die, the GCP cloud training
+pipeline (including its 2026-07-14/15 re-verification and per-SKU pricing
+findings), the `vision/` monorepo subtree, and the viewport-freeze
+diagnosis. **Not yet compiled**: the AR4-era gap already noted above
+(items 6-8, Experiments 15-24) remains open, and no numbered "Experiment
+27+" line has started for the Franka phase yet — its milestones so far are
+unnumbered/scripted or object-property investigations rather than staged
+RL experiments in the Tier-1 spec/plan sense. See `ROADMAP.md` for the full
+Franka-phase record in the meantime.

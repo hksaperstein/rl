@@ -2848,3 +2848,30 @@ swept jaw volume vs the support surface, not just contact friction cones.
 Open ops item: d20-seed42 demo smoke now fails deterministically on clean
 HEAD (detector-side, 8.4mm) despite passing 2026-07-11 — archaeology
 pending. Full trail: spec's Rung-0 closure section.
+
+**Cloud training pipeline re-verified end-to-end, zero preemptions
+(2026-07-14/15).** Second full shakedown run, independent of attempt 3:
+instance `rl-franka-shakedown` fell back to `us-west1-a`
+(`us-central1-a/b/c` AND `us-east1-b/c/d` all
+`ZONE_RESOURCE_POOL_EXHAUSTED` this time — worse stockout than
+2026-07-13). ik-cube 4096-env training ran uninterrupted to 1500/1500
+iterations in ~35min with **zero SPOT preemptions** (attempt 3 hit two)
+— checkpoint-resume path unexercised this run. Total instance lifetime
+54m47s. Completion verified directly from the downloaded tfevents file
+(every scalar tag has exactly 1500 points, steps 0-1499), not from the
+`model_1499.pt` checkpoint filename alone — the instance's tee'd stdout
+log appearing to stop at iteration 1493 is a stdout-buffering artifact
+at process exit, confirmed against the raw event data, not an early
+stop. Artifacts:
+`gs://rl-manipulation-hks-runs/cloud-shakedown/ik-cube/seed42/2026-07-15_01-52-15/`
+(31 checkpoints + tfevents + manifest + params), git SHA `ab7c8ea6` at
+ship time. New for budget-planning: real per-SKU GCP pricing pulled from
+the Cloud Billing Catalog API shows the L4 GPU is a **separate SKU from
+the `g2-standard-4` machine type, not bundled** — CPU+RAM $0.075/hr + L4
+GPU $0.2862/hr (the dominant cost) = $0.361/hr combined, boot disk
+$0.10/GiB-month; this run ≈$0.35 total. The GCP Billing console lags
+real usage by hours (mid-run it showed only the ~$0.019 disk charge,
+none of the ~$0.33 instance/GPU charge) and this project has no
+BigQuery billing export configured, so duration × published-SKU-rate is
+the only cost-estimation path available. Recipe updated:
+`docs/cloud/franka-cloud-shakedown.md`.

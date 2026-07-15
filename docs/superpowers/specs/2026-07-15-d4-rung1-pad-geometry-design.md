@@ -251,6 +251,32 @@ compliant pad would.
   resolved upstream, revisit whether a true compliant pad recovers more
   of Guo et al.'s gap than this rigid proxy.
 
+## Addendum: ground-truth XY-bypass for grasp-mechanism isolation (2026-07-15, post-verdict)
+
+Direct user decision after the verdict below: pursue both open options in
+parallel rather than choosing one — (a) extend this rung's own trials
+with a perception bypass so the notch hypothesis can actually be
+evaluated, and (b) separately investigate the d4 detection weakness
+itself (tracked as its own thread, not part of this spec — see
+`kb/wiki/experiments/dice-pick-demo.md`'s Open follow-ups).
+
+**Scope decision (explicit, not defaulted, matching rung 0's own
+"Pose source" precedent)**: add an opt-in ground-truth XY-bypass to
+`scripts/dice_pick_demo.py`'s Gate G/V, controlled by a new flag
+(default OFF — every other die type's/existing call's behavior stays
+byte-identical), that skips `select_target_detection` and uses
+`results[choice]["x"/"y"]` (already computed as the diagnostic-only `gt_pos`
+in both gates) directly as `target_xy` when enabled. This is the same
+isolation principle rung 0 already used for orientation (**"isolates the
+grasp-mechanism variable... A rung-0 pass therefore claims 'the grasp
+mechanism works,' not 'the vision-driven demo picks the d4'"**), extended
+from orientation to position. A rerun of the 5 d4 seeded trials under
+this bypass claims exactly the same narrower thing: does the V-notch
+survive closure without ejecting the die, independent of whether the
+detector can find it — not "the perception-driven demo can pick a d4."
+The bypass is NOT a fix for the detection weakness and must not be
+represented as one.
+
 ## Verdict (2026-07-15)
 
 **UNTESTED — 0/5 d4 seeded trials reached the grasp mechanism.** Not

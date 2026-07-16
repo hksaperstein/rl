@@ -79,6 +79,7 @@ parser.add_argument(
         "joint-die-d8-std",
         "joint-die-d10-std",
         "joint-die-d12-std",
+        "joint-die-random-size",
     ],
     default="ik-cube",
     help=(
@@ -109,7 +110,25 @@ parser.add_argument(
         "die-specialist-distillation.md); _PLAY probe is the same fixed size, 50 envs. "
         "joint-die-d12-std: multi-die specialist (Task 2) - physics-baked d12 die at its real standard "
         "~18mm face-to-face size, mass pinned at 0.216kg (docs/superpowers/plans/2026-07-16-unified-multi-"
-        "die-specialist-distillation.md); _PLAY probe is the same fixed size, 50 envs."
+        "die-specialist-distillation.md); _PLAY probe is the same fixed size, 50 envs. "
+        "joint-die-random-size: d20 size-DR + geometry-feature retry (Task 3) - per-env d20 size fixed at "
+        "scene-spawn time via MultiAssetSpawnerCfg(random_choice=True) across {22.0,28.5,35.0,41.5,48.0}mm, "
+        "mass pinned at 0.216kg (docs/superpowers/plans/2026-07-16-unified-multi-die-specialist-"
+        "distillation.md); _PLAY probe is a single all-30.3mm-equivalent-scale UsdFileCfg, 50 envs "
+        "(same pattern as joint-die-mixed's own _PLAY probe)."
+    ),
+)
+parser.add_argument(
+    "--eval_scale",
+    type=float,
+    default=None,
+    help=(
+        "Override the resolved env cfg's scene.object.spawn.scale (isotropic, same value on all 3 axes) - "
+        "lets a single-UsdFileCfg _PLAY variant be evaluated at a size other than its own hardcoded default, "
+        "e.g. sweeping joint-die-random-size's 5 training sizes {0.000727,0.000941,0.001156,0.001370,0.001585} "
+        "(22.0/28.5/35.0/41.5/48.0mm) one eval run at a time (Task 3, docs/superpowers/plans/2026-07-16-"
+        "unified-multi-die-specialist-distillation.md). Only valid when scene.object.spawn is a single "
+        "UsdFileCfg (every _PLAY class in this repo uses one); errors loudly otherwise."
     ),
 )
 AppLauncher.add_app_launcher_args(parser)
@@ -160,6 +179,8 @@ elif args_cli.variant == "joint-die-d10-std":
     from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftJointD10StandardEnvCfg_PLAY  # noqa: E402
 elif args_cli.variant == "joint-die-d12-std":
     from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftJointD12StandardEnvCfg_PLAY  # noqa: E402
+elif args_cli.variant == "joint-die-random-size":
+    from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftJointRandomSizeEnvCfg_PLAY  # noqa: E402
 
 VIDEO_DIR = args_cli.output_dir or os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs", "videos", "franka_checkpoint_review"
@@ -208,10 +229,22 @@ def main() -> None:
         env_cfg = FrankaDieLiftJointD10StandardEnvCfg_PLAY()
     elif args_cli.variant == "joint-die-d12-std":
         env_cfg = FrankaDieLiftJointD12StandardEnvCfg_PLAY()
+    elif args_cli.variant == "joint-die-random-size":
+        env_cfg = FrankaDieLiftJointRandomSizeEnvCfg_PLAY()
     else:
         env_cfg = FrankaLiftEnvCfg_PLAY()
     env_cfg.scene.num_envs = args_cli.num_envs
     env_cfg.sim.device = args_cli.device
+
+    if args_cli.eval_scale is not None:
+        spawn_cfg = env_cfg.scene.object.spawn
+        if not hasattr(spawn_cfg, "scale"):
+            sys.exit(
+                f"--eval_scale requires scene.object.spawn to be a single UsdFileCfg with a .scale attribute; "
+                f"got {type(spawn_cfg).__name__} for --variant {args_cli.variant}."
+            )
+        s = args_cli.eval_scale
+        spawn_cfg.scale = (s, s, s)
 
     # FULL-ARM VIDEO FRAMING (standing user instruction): reposition the
     # built-in viewport render camera (the one render_mode="rgb_array"

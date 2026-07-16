@@ -54,6 +54,7 @@ parser.add_argument(
         "joint-die-d8-std",
         "joint-die-d10-std",
         "joint-die-d12-std",
+        "joint-die-random-size",
     ],
     default="ik-cube",
     help=(
@@ -84,7 +85,11 @@ parser.add_argument(
         "die-specialist-distillation.md). "
         "joint-die-d12-std: multi-die specialist (Task 2) - physics-baked d12 die at its real standard "
         "~18mm face-to-face size, mass pinned at 0.216kg (docs/superpowers/plans/2026-07-16-unified-multi-"
-        "die-specialist-distillation.md)."
+        "die-specialist-distillation.md). "
+        "joint-die-random-size: d20 size-DR + geometry-feature retry (Task 3) - per-env d20 size fixed at "
+        "scene-spawn time via MultiAssetSpawnerCfg(random_choice=True) across {22.0,28.5,35.0,41.5,48.0}mm, "
+        "mass pinned at 0.216kg; NOT per-episode resampling - see FrankaDieLiftJointRandomSizeEnvCfg's own "
+        "docstring (docs/superpowers/plans/2026-07-16-unified-multi-die-specialist-distillation.md)."
     ),
 )
 parser.add_argument(
@@ -168,6 +173,10 @@ def main() -> None:
         from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftJointD12StandardEnvCfg
 
         env_cfg = FrankaDieLiftJointD12StandardEnvCfg()
+    elif args_cli.variant == "joint-die-random-size":
+        from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftJointRandomSizeEnvCfg
+
+        env_cfg = FrankaDieLiftJointRandomSizeEnvCfg()
     else:
         env_cfg = FrankaLiftEnvCfg()
     env_cfg.scene.num_envs = args_cli.num_envs
@@ -195,6 +204,7 @@ def main() -> None:
         "joint-die-d8-std": "_jointdied8std",
         "joint-die-d10-std": "_jointdied10std",
         "joint-die-d12-std": "_jointdied12std",
+        "joint-die-random-size": "_jointdierandomsize",
     }[args_cli.variant]
     log_dir = os.path.join(
         LOG_ROOT + _log_suffix,

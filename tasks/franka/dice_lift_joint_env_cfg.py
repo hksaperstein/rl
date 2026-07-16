@@ -379,6 +379,100 @@ class FrankaDieLiftJointMidEnvCfg_PLAY(FrankaDieLiftJointMidEnvCfg):
 
 
 @configclass
+class FrankaDieLiftJointRandomSizeEnvCfg(FrankaDieLiftJointHeavyEnvCfg):
+    """d20 size-domain-randomization + geometry-feature retry (Task 3,
+    docs/superpowers/plans/2026-07-16-unified-multi-die-specialist-
+    distillation.md): retries the already-falsified
+    FrankaDieLiftJointMixedEnvCfg's 0/3 size-curriculum result
+    (docs/superpowers/specs/2026-07-13-size-curriculum-design.md verdict,
+    ROADMAP.md 2026-07-13) with exactly one new ingredient - Task 1's
+    object_shape_class_onehot/object_geometry_descriptor observation terms,
+    already present on every FrankaLiftEnvCfg subclass via die_shape_class
+    (here "d20", inherited unchanged from FrankaDieLiftJointEnvCfg, nothing
+    reimplemented) - to test whether geometry-descriptor conditioning lets
+    the same per-env size-population-dilution mechanism that failed without
+    it succeed instead.
+
+    MECHANISM CORRECTION (task-3-brief.md Step 1, confirmed by direct read
+    of isaaclab/sim/spawners/wrappers/wrappers.py::spawn_multi_asset,
+    task-3-report.md): random_choice=True does NOT resample per-episode-
+    reset. Exactly like FrankaDieLiftJointMixedEnvCfg's own
+    random_choice=False, spawn_multi_asset assigns each environment ONE
+    size, ONCE, at scene-spawn time - random_choice=True only changes the
+    *assignment pattern* from deterministic round-robin
+    (proto_prim_paths[index % len(proto_prim_paths)]) to per-env-index
+    random.choice(proto_prim_paths), not from "fixed" to "resampled". Every
+    env keeps the SAME assigned size for the entire training run under
+    either setting. Mechanically this class is IDENTICAL to
+    FrankaDieLiftJointMixedEnvCfg except for (a) random vs. round-robin
+    per-env assignment pattern (chosen here per the brief's explicit
+    instruction, to also diversify which size lands on which env index
+    across the 3 training seeds, unlike Mixed's seed-invariant round-robin)
+    and (b) the geometry-descriptor observation conditioning, which is the
+    actual new variable under test. The class name ("RandomSize") names the
+    random_choice=True *assignment pattern*, not a resampling claim - it
+    must not be read as implying per-episode size variation, which
+    spawn_multi_asset does not support in either mode.
+
+    Size range: 22.0mm (FrankaDieLiftJointStandardEnvCfg's already-verified
+    0.000727 scale - this repo's forward-facing real-standard-d20-size
+    target) to 48.0mm (FrankaDieLiftJointBigEnvCfg's already-verified
+    0.001585 scale - the asset-bisect anchor where d20 achieved its known
+    1/3 discovery baseline) - both endpoints' scale constants reused
+    directly from those two classes, not re-derived. 5 discrete sizes
+    (matching FrankaDieLiftJointMixedEnvCfg's own 5-point precedent), evenly
+    spaced in mm using FrankaDieLiftJointStandardEnvCfg's own fitted
+    scale-per-mm ratio for the d20 mesh (3.302305e-5/mm): 22.0mm (0.000727),
+    28.5mm (0.000941), 35.0mm (0.001156), 41.5mm (0.001370), 48.0mm
+    (0.001585). Mass pinned at 0.216kg on every size (the same placeholder
+    used across every rung in this file, not a new variable here).
+
+    scene.replicate_physics = False (same reason as
+    FrankaDieLiftJointMixedEnvCfg: InteractiveSceneCfg's default True clones
+    every env from env_0's own content AFTER spawn_multi_asset has already
+    authored heterogeneous per-env assets, silently discarding the per-env
+    size variation before it reaches the live PhysX stage)."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.scene.replicate_physics = False
+        _scales = (0.001585, 0.001370, 0.001156, 0.000941, 0.000727)
+        self.scene.object.spawn = MultiAssetSpawnerCfg(
+            assets_cfg=[
+                UsdFileCfg(
+                    usd_path=_D20_USD,
+                    scale=(s, s, s),
+                    rigid_props=_D20_RIGID_PROPS,
+                    mass_props=MassPropertiesCfg(mass=0.216),
+                )
+                for s in _scales
+            ],
+            random_choice=True,
+        )
+
+
+@configclass
+class FrankaDieLiftJointRandomSizeEnvCfg_PLAY(FrankaDieLiftJointRandomSizeEnvCfg):
+    """All-30.3mm-equivalent-scale eval probe - a single UsdFileCfg (not a
+    MultiAssetSpawnerCfg), matching FrankaDieLiftJointEnvCfg's original
+    size/mass, same pattern as FrankaDieLiftJointMixedEnvCfg_PLAY. Instrumented
+    eval (Step 4) additionally sweeps the full size range via separate
+    ad hoc scale overrides on top of this class - see task-3-report.md."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.scene.object.spawn = UsdFileCfg(
+            usd_path=_D20_USD,
+            scale=(0.001, 0.001, 0.001),
+            rigid_props=_D20_RIGID_PROPS,
+            mass_props=MassPropertiesCfg(mass=0.216),
+        )
+        self.scene.num_envs = 50
+        self.scene.env_spacing = 2.5
+        self.observations.policy.enable_corruption = False
+
+
+@configclass
 class FrankaDieLiftJointD8StandardEnvCfg(FrankaDieLiftJointHeavyEnvCfg):
     """d8 specialist env cfg (Task 0, docs/superpowers/plans/2026-07-16-
     unified-multi-die-specialist-distillation.md): physics-baked d8 die

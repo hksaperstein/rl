@@ -47,6 +47,31 @@ _CUBE48_USD = os.path.join(
     "cube48_physics.usd",
 )
 
+# Task 0 of docs/superpowers/plans/2026-07-16-unified-multi-die-specialist-
+# distillation.md: d8/d10/d12 physics assets baked via scripts/bake_die_asset.py
+# --die {d8,d10,d12} (no code changes to that script - it already supports
+# all 5 die choices).
+_D8_USD = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "assets",
+    "dice",
+    "d8_physics.usd",
+)
+
+_D10_USD = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "assets",
+    "dice",
+    "d10_physics.usd",
+)
+
+_D12_USD = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "assets",
+    "dice",
+    "d12_physics.usd",
+)
+
 # Extracted from FrankaDieLiftJointEnvCfg's original inline RigidBodyPropertiesCfg literal
 # (single source of truth for both the base class and FrankaDieLiftJointMixedEnvCfg's
 # per-asset entries, task-1-brief.md Step 2 note) - value-identical to the prior inline block.
@@ -338,6 +363,155 @@ class FrankaDieLiftJointMidEnvCfg(FrankaDieLiftJointHeavyEnvCfg):
 
 @configclass
 class FrankaDieLiftJointMidEnvCfg_PLAY(FrankaDieLiftJointMidEnvCfg):
+    """Smaller, non-corrupted-observation variant for eval/play."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.scene.num_envs = 50
+        self.scene.env_spacing = 2.5
+        self.observations.policy.enable_corruption = False
+
+
+@configclass
+class FrankaDieLiftJointD8StandardEnvCfg(FrankaDieLiftJointHeavyEnvCfg):
+    """d8 specialist env cfg (Task 0, docs/superpowers/plans/2026-07-16-
+    unified-multi-die-specialist-distillation.md): physics-baked d8 die
+    (assets/dice/d8_physics.usd) at its real standard commercial size,
+    ~16mm (Task 0 Step 1 web research - convergent consensus of multiple
+    independent tabletop-gaming retailer/blog size guides, not one single
+    clean citation the way d20's "Twenty Sided Store Jumbo 30mm D20"
+    listing was; see .superpowers/sdd/task-0-report.md for exact sources).
+    Mass stays pinned at 0.216kg via the inherited
+    FrankaDieLiftJointHeavyEnvCfg mass_props override - this is DexCube's
+    own measured live PhysX mass (see that class's own docstring), NOT a
+    real d8-density estimate. No established method exists yet to derive a
+    real per-shape mass for d8/d10/d12 analogously to d20 (d20's own
+    0.216kg was never itself a real-world-density derivation - see
+    task-0-report.md's concern section for the full explanation); this is
+    a carried-over placeholder pending real per-shape mass research, not a
+    considered value for this shape specifically.
+
+    Scale derivation: unlike FrankaDieLiftJointStandardEnvCfg (which reused
+    this file's existing d20-rung scale constants' fitted scale-per-mm
+    ratio, valid only for the d20 mesh), d8's own native (unscaled) baked
+    mesh bbox is a different size than d20's, so this scale is freshly fit
+    from a direct measurement of d8_physics.usd
+    (scripts/_diag_d8d10d12_standard_scale_check.py): native_max_dim =
+    15.1544 stage units (isotropic - d8's bbox measures 15.1544 on all
+    three axes), target 16.0mm -> scale = 16.0 / (15.1544 * 1000) =
+    1.055799e-3, rounded to this file's 6-decimal convention: 0.001056.
+    Live-verified: measured effective max dim at this scale is 16.003mm
+    (delta +0.003mm), within the 0.3mm tolerance used throughout this
+    file."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if not os.path.isfile(_D8_USD):
+            raise FileNotFoundError(f"baked die asset missing - run scripts/bake_die_asset.py --die d8: {_D8_USD}")
+        self.scene.object.spawn.usd_path = _D8_USD
+        self.scene.object.spawn.scale = (0.001056, 0.001056, 0.001056)
+
+
+@configclass
+class FrankaDieLiftJointD8StandardEnvCfg_PLAY(FrankaDieLiftJointD8StandardEnvCfg):
+    """Smaller, non-corrupted-observation variant for eval/play."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.scene.num_envs = 50
+        self.scene.env_spacing = 2.5
+        self.observations.policy.enable_corruption = False
+
+
+@configclass
+class FrankaDieLiftJointD10StandardEnvCfg(FrankaDieLiftJointHeavyEnvCfg):
+    """d10 specialist env cfg (Task 0, docs/superpowers/plans/2026-07-16-
+    unified-multi-die-specialist-distillation.md): physics-baked d10 die
+    (assets/dice/d10_physics.usd) at its real standard commercial size,
+    ~16mm face-to-face (Task 0 Step 1 web research; see
+    .superpowers/sdd/task-0-report.md for exact sources - one source
+    explicitly states the face-to-face convention, others report a
+    convergent ~16mm figure without stating their measurement axis; a
+    ~23mm point-to-point figure for the same 16mm-class d10 could not be
+    pinned to a citable source and was not used). Mass stays pinned at
+    0.216kg via the inherited FrankaDieLiftJointHeavyEnvCfg mass_props
+    override - the same DexCube-measured carried-over placeholder value
+    used across every shape in this file, not a real d10-density estimate
+    (see FrankaDieLiftJointD8StandardEnvCfg's docstring and
+    task-0-report.md's concern section for why no real per-shape mass
+    derivation exists yet).
+
+    Scale derivation: d10's native (unscaled) baked mesh bbox is
+    ANISOTROPIC (a pentagonal trapezohedron is not a shape with equal
+    extent on all three axes, unlike d8/d12's near-regular measured boxes)
+    - measured directly via scripts/_diag_d8d10d12_standard_scale_check.py:
+    native bbox = 16.3931 x 15.7156 x 14.9345 stage units, native_max_dim =
+    16.3931 (the longest axis). scale = 16.0 / (16.3931 * 1000) =
+    9.760209e-4, rounded to this file's 6-decimal convention: 0.000976.
+    Live-verified: measured effective dims at this scale are 16.000 x
+    15.338 x 14.576mm - the longest axis lands at 16.000mm (delta
+    -0.000mm), within the 0.3mm tolerance. The other two axes are smaller
+    by construction (uniform scale applied to an anisotropic native bbox);
+    this matches the file's existing convention of fitting scale against
+    the single longest/max dimension (see FrankaDieLiftJointStandardEnvCfg
+    and _diag_d20_standard_scale_check.py, which both use "max dim" as the
+    controlling measurement)."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if not os.path.isfile(_D10_USD):
+            raise FileNotFoundError(f"baked die asset missing - run scripts/bake_die_asset.py --die d10: {_D10_USD}")
+        self.scene.object.spawn.usd_path = _D10_USD
+        self.scene.object.spawn.scale = (0.000976, 0.000976, 0.000976)
+
+
+@configclass
+class FrankaDieLiftJointD10StandardEnvCfg_PLAY(FrankaDieLiftJointD10StandardEnvCfg):
+    """Smaller, non-corrupted-observation variant for eval/play."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.scene.num_envs = 50
+        self.scene.env_spacing = 2.5
+        self.observations.policy.enable_corruption = False
+
+
+@configclass
+class FrankaDieLiftJointD12StandardEnvCfg(FrankaDieLiftJointHeavyEnvCfg):
+    """d12 specialist env cfg (Task 0, docs/superpowers/plans/2026-07-16-
+    unified-multi-die-specialist-distillation.md): physics-baked d12 die
+    (assets/dice/d12_physics.usd) at its real standard commercial size,
+    ~18mm face-to-face (Task 0 Step 1 web research: multiple independent
+    retailer/blog size guides converge on ~18mm, cross-checked against a
+    real Chessex product listing itself named "Planets Blue/white 18mm
+    d12" - Chessex's own face-to-face-labeled product naming convention;
+    see .superpowers/sdd/task-0-report.md for exact sources). Mass stays
+    pinned at 0.216kg via the inherited FrankaDieLiftJointHeavyEnvCfg
+    mass_props override - the same DexCube-measured carried-over
+    placeholder value used across every shape in this file, not a real
+    d12-density estimate (see FrankaDieLiftJointD8StandardEnvCfg's
+    docstring and task-0-report.md's concern section for why no real
+    per-shape mass derivation exists yet).
+
+    Scale derivation: d12's native (unscaled) baked mesh bbox measured
+    directly via scripts/_diag_d8d10d12_standard_scale_check.py:
+    native_max_dim = 32.5160 stage units (isotropic - d12's bbox measures
+    32.5160 on all three axes). scale = 18.0 / (32.5160 * 1000) =
+    5.535732e-4, rounded to this file's 6-decimal convention: 0.000554.
+    Live-verified: measured effective max dim at this scale is 18.014mm
+    (delta +0.014mm), within the 0.3mm tolerance used throughout this
+    file."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if not os.path.isfile(_D12_USD):
+            raise FileNotFoundError(f"baked die asset missing - run scripts/bake_die_asset.py --die d12: {_D12_USD}")
+        self.scene.object.spawn.usd_path = _D12_USD
+        self.scene.object.spawn.scale = (0.000554, 0.000554, 0.000554)
+
+
+@configclass
+class FrankaDieLiftJointD12StandardEnvCfg_PLAY(FrankaDieLiftJointD12StandardEnvCfg):
     """Smaller, non-corrupted-observation variant for eval/play."""
 
     def __post_init__(self) -> None:

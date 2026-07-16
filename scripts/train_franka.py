@@ -51,6 +51,9 @@ parser.add_argument(
         "joint-cube-baked",
         "joint-die-mixed",
         "joint-die-mid",
+        "joint-die-d8-std",
+        "joint-die-d10-std",
+        "joint-die-d12-std",
     ],
     default="ik-cube",
     help=(
@@ -72,7 +75,16 @@ parser.add_argument(
         "joint-die-mid: size-curriculum staged-anneal fallback, stage 2 - the d20 scaled to 39.1mm, "
         "mass pinned at 0.216kg, meant to be --checkpoint-resumed from a joint-die-big run and itself "
         "resumed onward into joint-die-heavy (docs/superpowers/specs/2026-07-13-size-curriculum-design.md "
-        "Verdict section)."
+        "Verdict section). "
+        "joint-die-d8-std: multi-die specialist (Task 2) - physics-baked d8 die at its real standard "
+        "~16mm size, mass pinned at 0.216kg (docs/superpowers/plans/2026-07-16-unified-multi-die-"
+        "specialist-distillation.md). "
+        "joint-die-d10-std: multi-die specialist (Task 2) - physics-baked d10 die at its real standard "
+        "~16mm face-to-face size, mass pinned at 0.216kg (docs/superpowers/plans/2026-07-16-unified-multi-"
+        "die-specialist-distillation.md). "
+        "joint-die-d12-std: multi-die specialist (Task 2) - physics-baked d12 die at its real standard "
+        "~18mm face-to-face size, mass pinned at 0.216kg (docs/superpowers/plans/2026-07-16-unified-multi-"
+        "die-specialist-distillation.md)."
     ),
 )
 parser.add_argument(
@@ -144,6 +156,18 @@ def main() -> None:
         from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftJointMidEnvCfg
 
         env_cfg = FrankaDieLiftJointMidEnvCfg()
+    elif args_cli.variant == "joint-die-d8-std":
+        from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftJointD8StandardEnvCfg
+
+        env_cfg = FrankaDieLiftJointD8StandardEnvCfg()
+    elif args_cli.variant == "joint-die-d10-std":
+        from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftJointD10StandardEnvCfg
+
+        env_cfg = FrankaDieLiftJointD10StandardEnvCfg()
+    elif args_cli.variant == "joint-die-d12-std":
+        from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftJointD12StandardEnvCfg
+
+        env_cfg = FrankaDieLiftJointD12StandardEnvCfg()
     else:
         env_cfg = FrankaLiftEnvCfg()
     env_cfg.scene.num_envs = args_cli.num_envs
@@ -168,6 +192,9 @@ def main() -> None:
         "joint-cube-baked": "_jointcubebaked",
         "joint-die-mixed": "_jointdiemixed",
         "joint-die-mid": "_jointdiemid",
+        "joint-die-d8-std": "_jointdied8std",
+        "joint-die-d10-std": "_jointdied10std",
+        "joint-die-d12-std": "_jointdied12std",
     }[args_cli.variant]
     log_dir = os.path.join(
         LOG_ROOT + _log_suffix,

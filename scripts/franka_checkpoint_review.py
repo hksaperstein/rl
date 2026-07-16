@@ -76,6 +76,9 @@ parser.add_argument(
         "joint-cube-baked",
         "joint-die-mixed",
         "joint-die-mid",
+        "joint-die-d8-std",
+        "joint-die-d10-std",
+        "joint-die-d12-std",
     ],
     default="ik-cube",
     help=(
@@ -97,7 +100,16 @@ parser.add_argument(
         "(docs/superpowers/specs/2026-07-13-size-curriculum-design.md); _PLAY probe is a single "
         "all-30.3mm size. "
         "joint-die-mid: size-curriculum staged-anneal fallback, stage 2 - the d20 at 39.1mm, mass "
-        "pinned at 0.216kg (docs/superpowers/specs/2026-07-13-size-curriculum-design.md Verdict section)."
+        "pinned at 0.216kg (docs/superpowers/specs/2026-07-13-size-curriculum-design.md Verdict section). "
+        "joint-die-d8-std: multi-die specialist (Task 2) - physics-baked d8 die at its real standard "
+        "~16mm size, mass pinned at 0.216kg (docs/superpowers/plans/2026-07-16-unified-multi-die-"
+        "specialist-distillation.md); _PLAY probe is the same fixed size, 50 envs. "
+        "joint-die-d10-std: multi-die specialist (Task 2) - physics-baked d10 die at its real standard "
+        "~16mm face-to-face size, mass pinned at 0.216kg (docs/superpowers/plans/2026-07-16-unified-multi-"
+        "die-specialist-distillation.md); _PLAY probe is the same fixed size, 50 envs. "
+        "joint-die-d12-std: multi-die specialist (Task 2) - physics-baked d12 die at its real standard "
+        "~18mm face-to-face size, mass pinned at 0.216kg (docs/superpowers/plans/2026-07-16-unified-multi-"
+        "die-specialist-distillation.md); _PLAY probe is the same fixed size, 50 envs."
     ),
 )
 AppLauncher.add_app_launcher_args(parser)
@@ -142,6 +154,12 @@ elif args_cli.variant == "joint-die-mixed":
     from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftJointMixedEnvCfg_PLAY  # noqa: E402
 elif args_cli.variant == "joint-die-mid":
     from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftJointMidEnvCfg_PLAY  # noqa: E402
+elif args_cli.variant == "joint-die-d8-std":
+    from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftJointD8StandardEnvCfg_PLAY  # noqa: E402
+elif args_cli.variant == "joint-die-d10-std":
+    from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftJointD10StandardEnvCfg_PLAY  # noqa: E402
+elif args_cli.variant == "joint-die-d12-std":
+    from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftJointD12StandardEnvCfg_PLAY  # noqa: E402
 
 VIDEO_DIR = args_cli.output_dir or os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs", "videos", "franka_checkpoint_review"
@@ -184,6 +202,12 @@ def main() -> None:
         env_cfg = FrankaDieLiftJointMixedEnvCfg_PLAY()
     elif args_cli.variant == "joint-die-mid":
         env_cfg = FrankaDieLiftJointMidEnvCfg_PLAY()
+    elif args_cli.variant == "joint-die-d8-std":
+        env_cfg = FrankaDieLiftJointD8StandardEnvCfg_PLAY()
+    elif args_cli.variant == "joint-die-d10-std":
+        env_cfg = FrankaDieLiftJointD10StandardEnvCfg_PLAY()
+    elif args_cli.variant == "joint-die-d12-std":
+        env_cfg = FrankaDieLiftJointD12StandardEnvCfg_PLAY()
     else:
         env_cfg = FrankaLiftEnvCfg_PLAY()
     env_cfg.scene.num_envs = args_cli.num_envs

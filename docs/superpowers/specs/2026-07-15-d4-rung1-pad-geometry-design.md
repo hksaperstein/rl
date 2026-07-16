@@ -277,7 +277,81 @@ detector can find it — not "the perception-driven demo can pick a d4."
 The bypass is NOT a fix for the detection weakness and must not be
 represented as one.
 
-## Verdict (2026-07-15)
+**Implementation note (2026-07-15, post-first-attempt)**: the first bypass
+build (`e14072d`) had a real bug — `select_target_detection` was still
+called unconditionally before the bypass branch, so it raised on a TOTAL
+detection miss (d4's actual failure mode) before the bypass ever ran. It
+only ever protected against an inaccurate detection, never a missing one.
+Fixed in `9bc8820` (wraps the call in try/except, re-raises when the
+bypass is off, continues with GT-only `target_xy` when it's on; every
+downstream use of the possibly-`None` detection result is null-guarded).
+Independently re-reviewed with an explicit end-to-end trace of the
+zero-detection case before the retry shipped.
+
+## Verdict on the ground-truth-bypass rerun (2026-07-15) — FALSIFIED
+
+**The V-notch mechanism, as built, does not work.** 3 of 5 seeded trials
+(42, 7, 1000) genuinely reached the grasp mechanism this time — bypass
+confirmed active, full 4-stage pick sequence completed — and **0/3 met
+the primary criterion**. Full per-trial data: `.superpowers/sdd/task-2-report.md`.
+
+- **Closure-window lateral ejection: 172.0mm / 18.8mm / 57.7mm** (spec
+  threshold ≤5mm) — even the best of the three trials is nearly 4x over
+  threshold.
+- **z-gain: effectively zero in all 3** (7.4e-9m / 6.2e-7m / 1.3e-7m).
+- **Contact sensors**: zero force in all 3 trials; `closure_bilateral_contact:
+  false` in all 3; contact points entirely null in 2/3 (seed 42, 1000 —
+  no contact recorded at all), non-null but zero-force in the third
+  (seed 7 — fingers touched something, no grip force registered).
+- **Visual confirmation** (frame extraction from seed 42's video,
+  reviewed directly, not inferred from metrics alone): at the closure
+  frame, the gripper is fully closed at the die's original position, but
+  the d4 sits several centimeters away on the table, undisturbed. This
+  is not a subtle grasp-then-eject — the notch swept the die aside
+  during closure without ever capturing it.
+
+This satisfies the spec's falsification bar in spirit though not its
+exact letter — the pre-registered condition required failure "despite
+confirmed flush notch-facet contact," and no trial achieved confirmed
+flush contact (zero force throughout). Read plainly: the notch isn't
+failing to *hold* the die after good contact, it's failing to *achieve*
+good contact at all. **Falsified as a fix for the d4, at the symmetric
+110° design's current dimensions/placement** — not yet enough evidence
+to indict the whole V-notch strategy (see Open questions below).
+
+**2/5 seeds (123, 2026) never reached the mechanism at all** — both hit
+an identical, reproducible CUDA `device-side assert` crash. Root cause
+identified for seed 2026: a hardcoded contact-sensor buffer
+(`maxContactDataCount=4`, added in the rung-0 task) overflows when a
+grasp attempt produces more simultaneous contact points than that limit,
+corrupting a downstream PyTorch indexing op. This is a real, separate
+bug in the contact-sensor instrumentation, not a notch-geometry finding
+— flagged, not fixed (out of the rerun's scope). Notably fires right at
+`stage3_after_close`, the exact phase this rung cares about most —
+possibly correlated with denser contact than the 3 completed trials,
+possibly coincidental; not established either way.
+
+## Open questions (not resolved by this pass)
+
+- **Why does closure knock the die away instead of engaging the notch?**
+  Two live candidates, neither confirmed: (a) the `xformOp`/`SetTranslate`
+  warning flagged (and dismissed as non-fatal) during the first cloud
+  run only checked the fixture's *static* printed position against the
+  fingertip's live transform — it never checked whether the fixture's
+  actual *collision* geometry is correctly positioned under real dynamic
+  loading, which this failure signature is at least consistent with; (b)
+  a PhysX depenetration-impulse event on closure (the same mechanism
+  class the asset-bisect ladder already diagnosed for underweighted
+  objects, though d4's mass/rigid-body props here are unchanged from
+  that fix) — not tested against either hypothesis directly.
+- **Does the contact-buffer crash correlate with genuine grasp
+  engagement**, or is it an unrelated geometry coincidence for those two
+  seeds? Would need the buffer fixed and those seeds rerun to know.
+- **Is 110°/~10mm grip depth/~4mm notch depth the wrong parameterization,
+  or is symmetric-notch-on-flat-jaws the wrong strategy entirely?** This
+  data doesn't distinguish a tuning problem from a strategy problem.
+
+## Verdict (2026-07-15, original — perception-blocked, superseded above for the mechanism question)
 
 **UNTESTED — 0/5 d4 seeded trials reached the grasp mechanism.** Not
 falsified: every trial failed at the perception step (`select_target_detection`

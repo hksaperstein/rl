@@ -2947,3 +2947,48 @@ Principal: scope a ground-truth XY-bypass path to test the grasp
 mechanism in isolation from perception (extending rung 0's own
 GT-for-orientation isolation precedent to position), or treat the d4
 detection weakness as its own prerequisite research question.
+
+**d4 rung 1 (V-notch fixture): both parallel follow-ups complete —
+mechanism FALSIFIED, detector weakness diagnosed (2026-07-15).** User
+directed both open threads pursued in parallel.
+
+*Detector investigation* (`.superpowers/sdd/research-d4-detector-weakness.md`):
+d4 is NOT a weak class for this checkpoint (0.992-1.000 mAP50, among the
+best), not meaningfully underrepresented in training data, not the
+smallest die in this exact scene (larger than d8/d10, which detect fine
+in the same frames), and confirmed fully visible/unoccluded in all 5
+failing renders via direct 3D-to-pixel reprojection. Leading hypothesis
+(explicitly flagged as untested extrapolation): under this scene's
+degraded, near-textureless rendering, the detector may fall back on
+residual 3D shape cues (facet edges, apex highlights, shading gradients)
+to classify the other 4 dice, and d4's flat-face rest pose is the one
+silhouette with none of those cues — a shape/silhouette-flatness
+confound, sharper than but related to the kb's existing apparent-size
+confound. Needs a controlled ablation to confirm, not attempted here.
+
+*Ground-truth XY-bypass* (`docs/superpowers/specs/2026-07-15-d4-rung1-pad-geometry-design.md`'s
+addendum): first bypass build had a real bug (`select_target_detection`
+still raised on a total detection miss before the bypass branch ran, so
+it never actually routed around d4's failure mode) - found live on a
+cloud run, fixed (`9bc8820`, independently re-reviewed with an explicit
+end-to-end trace), reran. **3/5 seeds genuinely reached the grasp
+mechanism this time - 0/3 met the primary criterion.** Closure-window
+lateral ejection 172.0mm/18.8mm/57.7mm (threshold ≤5mm), z-gain ~zero
+in all 3, zero contact force in all 3, confirmed visually (frame
+extraction from seed 42: gripper fully closed at the die's original
+position, die sitting undisturbed several cm away - not a subtle
+grasp-then-eject, the notch swept the die aside without ever engaging
+it). **FALSIFIED as a fix for the d4 at the symmetric 110°
+design's current dimensions/placement.** 2/5 seeds (123, 2026) hit an
+unrelated, reproducible CUDA crash - root-caused to a hardcoded
+contact-sensor buffer (`maxContactDataCount=4`, added in the rung-0
+task) overflowing under denser real contact, corrupting a downstream
+indexing op; flagged, not fixed. Cumulative rung-1 cloud spend across
+all attempts: ~$2.3-3.3, well under the $15 cap. Open questions
+(not resolved): whether the `xformOp` warning flagged earlier actually
+indicates a real dynamic-collision-placement defect (only the fixture's
+static position was ever verified, not its behavior under real
+closure load); whether the contact-buffer crash correlates with denser
+genuine engagement; whether 110°/~10mm/~4mm is a tuning problem or the
+symmetric-notch-on-flat-jaws strategy itself is wrong. Full data:
+`.superpowers/sdd/task-2-report.md`.

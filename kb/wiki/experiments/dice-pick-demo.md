@@ -163,6 +163,40 @@ detector/pick pipeline survive them? (`--colored-dice` +
   blocks any future grasp-mechanism test that depends on this demo's
   perception step to find the d4 at all — not just rung 1's own V-notch
   hypothesis.
+  **Diagnosed 2026-07-15** (`.superpowers/sdd/research-d4-detector-weakness.md`):
+  d4 is NOT weak in training/eval (0.992-1.000 mAP50, among the best
+  classes), not meaningfully underrepresented, not the smallest die in
+  this exact scene (larger than d8/d10, which detect fine in the same
+  frames), and confirmed fully visible/unoccluded in all 5 failing
+  renders (direct 3D-to-pixel reprojection). Leading hypothesis, not yet
+  tested: under this scene's degraded, near-textureless rendering, the
+  detector may fall back on residual 3D shape cues (facet edges, apex
+  highlights, shading gradients) to classify the other 4 dice, and d4's
+  flat-face rest pose is the one silhouette with none of those cues — a
+  shape/silhouette-flatness confound, sharper than but related to this
+  page's own apparent-size-as-class-cue precedent
+  ([[vision-platform]]). Needs a controlled ablation to confirm.
+
+- **d4 rung 1 (V-notch fixture): FALSIFIED via ground-truth bypass
+  (2026-07-15).** Once the perception blocker above was routed around
+  (`--gt-xy-bypass`, `docs/superpowers/specs/2026-07-15-d4-rung1-pad-geometry-design.md`'s
+  addendum — first build had a real bug, only protected against an
+  inaccurate detection not a total miss, fixed and re-verified before
+  the retry), 3/5 seeds genuinely reached the grasp mechanism and 0/3
+  met the primary criterion: closure-window lateral ejection
+  172.0mm/18.8mm/57.7mm (threshold ≤5mm), z-gain ~zero, zero contact
+  force in all 3. Confirmed visually (frame extraction, not metrics
+  alone): at closure the gripper is fully closed at the die's original
+  position while the d4 sits undisturbed several cm away — the notch
+  swept the die aside without ever engaging it, not a subtle
+  grasp-then-eject. 2/5 seeds hit an unrelated, reproducible CUDA crash
+  (hardcoded contact-sensor buffer `maxContactDataCount=4` overflowing
+  under denser contact — flagged, not fixed). Open questions: whether
+  the notch fixture's collision geometry is actually correctly placed
+  under real dynamic closure load (only its static position was ever
+  verified); whether 110°/~10mm/~4mm is a tuning problem or the
+  symmetric-notch-on-flat-jaws strategy itself is wrong. Full data:
+  `.superpowers/sdd/task-2-report.md`.
 
 ## Fragility attribution closed (2026-07-13 archaeology)
 

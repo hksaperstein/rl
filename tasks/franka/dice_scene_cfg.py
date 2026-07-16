@@ -258,8 +258,28 @@ DICE_CAMERA_QUAT_WORLD = (0.64085638, -0.29883624, 0.29883624, 0.64085638)
 # down, local +Y - the image "right" axis - checked to point predominantly
 # along world +Y so the fingers' Y-axis closing motion reads as
 # horizontal, not toward/away from camera).
-ARM_CAMERA_POS = (-0.2, -0.15, 0.30)
-ARM_CAMERA_QUAT_WORLD = (0.98617192, -0.007231, 0.15940998, 0.04473376)
+#
+# MIRRORED 2026-07-15 (second same-day follow-up): the tightened pose above
+# was on the wrong side of the robot - direct user observation confirmed by
+# re-inspecting the actual rendered frames: the dark disc visible on the
+# wrist is the Franka hand's rear status/motor housing, meaning that pose
+# was looking at the BACK of the arm, not the front. Mirrored to the
+# opposite side of the target point (X flipped from -0.2 to 1.12, same
+# distance/Y/Z offsets, same aim point) so the camera now looks back
+# toward the robot's base from beyond the grasp region instead of from
+# behind it. Same verification method as both poses above.
+#
+# USER-PLACED 2026-07-15 (final pass): captured directly from the Isaac Sim
+# GUI viewport via scripts/interactive_camera_light_setup.py - the user
+# navigated the viewport by hand (arm held in the real "just closed the
+# gripper" joint configuration from an actual successful d8 pick) and the
+# tool read back the live viewport camera's world transform, converting
+# from raw USD camera convention (local -Z forward) to this file's own
+# established CameraCfg convention (local +X forward) - see that script's
+# _capture_viewport_camera_as_arm_camera_cfg for the conversion math. Not
+# derived from coordinate math/guessing, unlike the two poses above.
+ARM_CAMERA_POS = (1.679813, -0.021287, 0.378762)
+ARM_CAMERA_QUAT_WORLD = (-0.00653374, -0.09212562, -0.00060451, 0.99572577)
 
 
 @configclass
@@ -284,19 +304,22 @@ class DiceSceneCfg(InteractiveSceneCfg):
     )
 
     # Isaac Sim's ACTUAL default-stage light rig (2026-07-13, direct user
-    # directive "use default light rig for all work"), values transcribed
-    # verbatim from the installed omni.kit.stage_templates default_stage.py
-    # template: an HDR "Sky" dome (CarLight HDR, intensity 1 x exposure 9,
-    # 6250K) + a soft "sun" DistantLight (angle 2.5, intensity 1 x
-    # exposure 10, 7250K). The HDR is vendored into tasks/franka/assets/
-    # (the extscache path is Isaac-version-fragile). Replaces the earlier
-    # flat grey DomeLight(3000) which rendered dark, and the removed
-    # DistantLight(3000) stage light which blew the scene out.
+    # directive "use default light rig for all work"; reaffirmed 2026-07-15
+    # during the camera-angle work - reverted the +1-stop tweak below back
+    # to the literal template values, per direct instruction to use default
+    # stage lighting as-is), values transcribed verbatim from the installed
+    # omni.kit.stage_templates default_stage.py template: an HDR "Sky" dome
+    # (CarLight HDR, intensity 1 x exposure 9, 6250K) + a soft "sun"
+    # DistantLight (angle 2.5, intensity 1 x exposure 10, 7250K). The HDR is
+    # vendored into tasks/franka/assets/ (the extscache path is
+    # Isaac-version-fragile). Replaces the earlier flat grey DomeLight(3000)
+    # which rendered dark, and the removed DistantLight(3000) stage light
+    # which blew the scene out.
     light = AssetBaseCfg(
         prim_path="/World/light",
         spawn=sim_utils.DomeLightCfg(
             intensity=1.0,
-            exposure=10.0,  # +1 stop over the Kit template (its rig targets the default light-grey ground; our table albedo is dark - measured 63 vs target ~130 mean)
+            exposure=9.0,
             enable_color_temperature=True,
             color_temperature=6250.0,
             texture_file=os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "CarLight_512x256.hdr"),
@@ -308,7 +331,7 @@ class DiceSceneCfg(InteractiveSceneCfg):
         spawn=sim_utils.DistantLightCfg(
             angle=2.5,
             intensity=1.0,
-            exposure=11.0,  # +1 stop over template, same rationale as the dome
+            exposure=10.0,
             enable_color_temperature=True,
             color_temperature=7250.0,
         ),

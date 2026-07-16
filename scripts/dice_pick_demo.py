@@ -689,13 +689,13 @@ def spawn_scene_and_settle(
 
     if light_scale != 1.0:
         orig_dome = scene_cfg.light.spawn.intensity
-        orig_distant = scene_cfg.distant_light.spawn.intensity
+        orig_distant = scene_cfg.sun.spawn.intensity
         scene_cfg.light.spawn.intensity = orig_dome * light_scale
-        scene_cfg.distant_light.spawn.intensity = orig_distant * light_scale
+        scene_cfg.sun.spawn.intensity = orig_distant * light_scale
         print(
             f"[SPAWN] --light-scale={light_scale}: DomeLight intensity {orig_dome} -> "
             f"{scene_cfg.light.spawn.intensity}, DistantLight intensity {orig_distant} -> "
-            f"{scene_cfg.distant_light.spawn.intensity} (scene default NOT permanently changed, "
+            f"{scene_cfg.sun.spawn.intensity} (scene default NOT permanently changed, "
             "this is a per-run override only)"
         )
 

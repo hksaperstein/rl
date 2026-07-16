@@ -1967,7 +1967,16 @@ def run_gate_v() -> None:
         )
 
     # --- Video capture setup ---
-    camera = scene["camera"]
+    # 2026-07-15: uses arm_camera (dedicated video/diagnostic camera), NOT
+    # scene["camera"] (DiceCamera) - DiceCamera's pose is pinned to the
+    # perception detector's training distribution and must stay untouched;
+    # the video-capture role only ever needed a camera aimed for human
+    # viewing. See tasks/franka/dice_scene_cfg.py's ARM_CAMERA_POS/QUAT_WORLD
+    # comment for the re-aim rationale (fixing the fingers'-closing-motion
+    # side-profile-occlusion complaint). scene["camera"] itself is untouched
+    # and still used above for perception (run_detector_subprocess reads its
+    # own saved rgb.png from spawn_scene_and_settle, not this local var).
+    camera = scene["arm_camera"]
     sim_dt = sim.get_physics_dt()
     video_frames: list[np.ndarray] = []
     step_counter = [0]

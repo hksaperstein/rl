@@ -200,19 +200,66 @@ DICE_CAMERA_POS = (0.5, -0.35353319, 0.45132444)
 DICE_CAMERA_QUAT_WORLD = (0.64085638, -0.29883624, 0.29883624, 0.64085638)
 
 # Second, separate camera (2026-07-11 colored-dice repeat task's Franka
-# material check) dedicated to a whole-arm 3/4 view - DiceCamera's own
-# framing is pinned to the detector's training distribution (tight on the
+# material check) dedicated to a whole-arm view - DiceCamera's own framing
+# is pinned to the detector's training distribution (tight on the
 # dice-spread region) and must NOT be reframed for this purpose (existing
 # gates depend on it staying exactly as calibrated). Position/quat solved
 # and verified the same way as DICE_CAMERA_POS/QUAT above (rotate local +X
 # by the quat, confirm it matches the analytic camera->target unit vector;
 # also checked local +Z has a strongly positive world-z component, i.e. not
 # upside down) - not hand-derived on paper only, per this repo's own history
-# of camera-convention bugs. Aimed from behind/beside the robot at roughly
-# mid-arm height so the full kinematic chain (base to gripper) is in frame
-# alongside the table for context.
-ARM_CAMERA_POS = (-0.7, -1.1, 1.1)
-ARM_CAMERA_QUAT_WORLD = (0.89534719, -0.08933933, 0.20878525, 0.38311958)
+# of camera-convention bugs.
+#
+# RE-AIMED 2026-07-15 (Gate V video-camera task): the original pose sat at
+# roughly equal -X/-Y offset from the robot, i.e. its camera->target view
+# direction had nearly equal X and Y world components. That mattered because
+# the Franka's gripper fingers (panda_finger_joint1/2) are prismatic joints
+# with LOCAL axis (0,1,0) on panda_hand (see the URDF,
+# franka_description/robots/panda_arm_hand.urdf); this demo's canonical
+# straight-down grasp quat (0,1,0,0 wxyz, used for every die type - see
+# scripts/dice_pick_demo.py's canonical_down_quat_w) rotates panda_hand 180
+# degrees about world X, which maps local Y to world -Y unchanged in axis -
+# so the fingers ALWAYS open/close along the world Y axis, for every grasp
+# in this demo regardless of target xy. A camera whose view direction has a
+# large Y component is therefore looking nearly down the pinch axis itself:
+# the two fingers (and the die between them) project onto nearly the same
+# image pixels and occlude each other - exactly the "side profile" video
+# complaint this re-aim fixes. The fix is to make the view direction
+# X-dominant / Y-minimal instead: with Y close to constant across the shot,
+# the fingers separate along the image's horizontal axis and their closing
+# motion (and the die between them) reads clearly. New pose sits behind the
+# robot base along -X (opposite side from the dice spread, out of the arm's
+# own reach path) with only a small Y offset, elevated and aimed down at a
+# point centered over the dice-spread/grasp region (x=0.5, y=0.0, z=0.15 -
+# roughly waist height, between the table surface where the pinch happens
+# and the arm's own elevated resting height) so the full kinematic chain
+# (base to gripper) and the table are both still in frame alongside the
+# clearer pinch angle. Verified analytically (rotate local +X by the quat,
+# confirm it matches the numeric camera->target unit vector computed at
+# pose-selection time; confirmed local +Z has a strongly positive world-z
+# component) AND empirically (rendered a still frame from this exact pose
+# via `--gate a`, inspected the PNG directly - see
+# outputs/dice_demo/gate_a/arm_camera_rgb.png from that verification run).
+#
+# TIGHTENED 2026-07-15 (same-day follow-up): the first re-aim above fixed
+# the occlusion problem (pinch axis no longer points at the camera) but was
+# too far/high (1.8m out, 0.75m up, aimed at z=0.15) - correct in direction
+# but the grasp region ended up a small corner of frame, dominated by the
+# arm's own tall vertical reach (confirmed by inspecting the actual
+# rendered Gate V video frame-by-frame, not just the earlier still: at
+# closure the die+fingers occupied only a few percent of frame width).
+# Moved much closer (~0.7m, was ~1.8m) and lower (0.30m, was 0.75m) with
+# the aim point dropped to table/grasp height (z=0.08, was 0.15) so the
+# grip fills a legible fraction of the frame - this trades away some of
+# the full kinematic chain's upper links for what the video is actually
+# for (seeing the grip occur), per direct user instruction. Same
+# analytical derivation method as above (local +X -> normalized
+# camera->target vector, local +Z stays strongly positive/not upside
+# down, local +Y - the image "right" axis - checked to point predominantly
+# along world +Y so the fingers' Y-axis closing motion reads as
+# horizontal, not toward/away from camera).
+ARM_CAMERA_POS = (-0.2, -0.15, 0.30)
+ARM_CAMERA_QUAT_WORLD = (0.98617192, -0.007231, 0.15940998, 0.04473376)
 
 
 @configclass

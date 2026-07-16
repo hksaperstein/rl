@@ -110,6 +110,12 @@ class FrankaDieLiftJointEnvCfg(FrankaLiftEnvCfg):
                 rigid_props=_D20_RIGID_PROPS,
             ),
         )
+        # Task 1 (docs/superpowers/plans/2026-07-16-unified-multi-die-
+        # specialist-distillation.md): explicit even though "d20" is also
+        # FrankaLiftEnvCfg's own inherited default - every die-bearing env
+        # cfg in this file sets this explicitly rather than relying on the
+        # base class's cube-recipe fallback value.
+        self.die_shape_class = "d20"
 
 
 @configclass
@@ -410,6 +416,10 @@ class FrankaDieLiftJointD8StandardEnvCfg(FrankaDieLiftJointHeavyEnvCfg):
             raise FileNotFoundError(f"baked die asset missing - run scripts/bake_die_asset.py --die d8: {_D8_USD}")
         self.scene.object.spawn.usd_path = _D8_USD
         self.scene.object.spawn.scale = (0.001056, 0.001056, 0.001056)
+        # Task 1: this env cfg's shape-class constant (mdp.object_shape_class_onehot/
+        # object_geometry_descriptor) - overrides the d20 inherited from
+        # FrankaDieLiftJointHeavyEnvCfg.
+        self.die_shape_class = "d8"
 
 
 @configclass
@@ -463,6 +473,10 @@ class FrankaDieLiftJointD10StandardEnvCfg(FrankaDieLiftJointHeavyEnvCfg):
             raise FileNotFoundError(f"baked die asset missing - run scripts/bake_die_asset.py --die d10: {_D10_USD}")
         self.scene.object.spawn.usd_path = _D10_USD
         self.scene.object.spawn.scale = (0.000976, 0.000976, 0.000976)
+        # Task 1: this env cfg's shape-class constant (mdp.object_shape_class_onehot/
+        # object_geometry_descriptor) - overrides the d20 inherited from
+        # FrankaDieLiftJointHeavyEnvCfg.
+        self.die_shape_class = "d10"
 
 
 @configclass
@@ -508,6 +522,10 @@ class FrankaDieLiftJointD12StandardEnvCfg(FrankaDieLiftJointHeavyEnvCfg):
             raise FileNotFoundError(f"baked die asset missing - run scripts/bake_die_asset.py --die d12: {_D12_USD}")
         self.scene.object.spawn.usd_path = _D12_USD
         self.scene.object.spawn.scale = (0.000554, 0.000554, 0.000554)
+        # Task 1: this env cfg's shape-class constant (mdp.object_shape_class_onehot/
+        # object_geometry_descriptor) - overrides the d20 inherited from
+        # FrankaDieLiftJointHeavyEnvCfg.
+        self.die_shape_class = "d12"
 
 
 @configclass

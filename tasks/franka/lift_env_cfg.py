@@ -207,6 +207,15 @@ class ObservationsCfg:
         object_position = ObsTerm(func=mdp.object_position_in_robot_root_frame)
         target_object_position = ObsTerm(func=mdp.generated_commands, params={"command_name": "object_pose"})
         actions = ObsTerm(func=mdp.last_action)
+        # Task 1 of docs/superpowers/plans/2026-07-16-unified-multi-die-
+        # specialist-distillation.md: shape-class one-hot (4 dims) +
+        # geometry-descriptor (1 dim, Wadell sphericity) - both per-env-cfg
+        # broadcast constants driven by self.die_shape_class below (see
+        # mdp.object_shape_class_onehot/object_geometry_descriptor and
+        # tasks/franka/shape_observations.py for the pure math). Grows the
+        # observation space by exactly 4 + 1 = 5 dims.
+        shape_class = ObsTerm(func=mdp.object_shape_class_onehot)
+        geometry_descriptor = ObsTerm(func=mdp.object_geometry_descriptor)
 
         def __post_init__(self) -> None:
             self.enable_corruption = True
@@ -297,6 +306,19 @@ class FrankaLiftEnvCfg(ManagerBasedRLEnvCfg):
     terminations: TerminationsCfg = TerminationsCfg()
     events: EventCfg = EventCfg()
     curriculum: CurriculumCfg = CurriculumCfg()
+
+    # Per-env-cfg constant (Task 1, docs/superpowers/plans/2026-07-16-
+    # unified-multi-die-specialist-distillation.md): which of {d8, d10, d12,
+    # d20} this training run's object is, read by
+    # mdp.object_shape_class_onehot/object_geometry_descriptor and broadcast
+    # identically to every parallel env - NOT a per-environment-varying
+    # value (see tasks/franka/shape_observations.py's module docstring for
+    # the scope rationale). This base class's own object is the stock
+    # DexCube, not a die at all, so this default is an arbitrary but
+    # historically-dominant fallback (d20 was this project's first/primary
+    # die shape); die-specialist subclasses in dice_lift_joint_env_cfg.py
+    # override this in their own __post_init__.
+    die_shape_class: str = "d20"
 
     def __post_init__(self) -> None:
         self.decimation = 2

@@ -43,9 +43,22 @@ from isaaclab.utils.math import combine_frame_transforms, subtract_frame_transfo
 from isaaclab.envs.mdp import *  # noqa: F401, F403
 
 from .lift_reward import lifting_object_reward, object_goal_distance_reward, reaching_object_reward
+from .shape_observations import geometry_descriptor_broadcast, shape_class_onehot
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
+
+# Default shape class for env cfgs that never set `die_shape_class` (the
+# plain DexCube recipe, FrankaLiftEnvCfg itself, has no shape in
+# {d8,d10,d12,d20} at all - this observation term is only meaningful for
+# the die-specialist subclasses; d20 is used as an arbitrary but
+# historically-dominant fallback so the base class still produces a
+# well-formed (num_envs, 4) one-hot rather than erroring). Task 1 of
+# docs/superpowers/plans/2026-07-16-unified-multi-die-specialist-
+# distillation.md - see tasks/franka/shape_observations.py for the pure
+# math and docs/superpowers/specs/2026-07-16-unified-multi-die-specialist-
+# distillation-design.md for the spec.
+_DEFAULT_SHAPE_CLASS = "d20"
 
 
 def object_position_in_robot_root_frame(
@@ -101,3 +114,33 @@ def object_goal_distance(
     return object_goal_distance_reward(
         object.data.root_pos_w, des_pos_w, object.data.root_pos_w[:, 2], minimal_height, std
     )
+
+
+def object_shape_class_onehot(
+    env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("object")
+) -> torch.Tensor:
+    """Observation term: one-hot (num_envs, 4) over {d8, d10, d12, d20}.
+
+    This is a per-env-cfg static property (which shape THIS training run's
+    object is - a config-time choice, e.g. FrankaDieLiftJointD8StandardEnvCfg
+    sets `self.die_shape_class = "d8"` in its own __post_init__), broadcast
+    identically to every parallel env - NOT read off live simulated object
+    state (the live sim only has raw mesh/pose, no semantic shape label).
+    See tasks/franka/shape_observations.py's module docstring for the full
+    scope rationale (every consumer of this task is single-shape-per-env-cfg;
+    per-env-varying shape is explicitly out of scope here).
+    """
+    shape_class = getattr(env.cfg, "die_shape_class", _DEFAULT_SHAPE_CLASS)
+    return shape_class_onehot(shape_class, env.num_envs, device=env.device)
+
+
+def object_geometry_descriptor(
+    env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("object")
+) -> torch.Tensor:
+    """Observation term: (num_envs, K) continuous geometry-descriptor
+    feature (K=1, Wadell sphericity - see tasks/franka/shape_observations.py's
+    module docstring for the exact formula/derivation), same per-env-cfg
+    static-property/broadcast treatment as object_shape_class_onehot above.
+    """
+    shape_class = getattr(env.cfg, "die_shape_class", _DEFAULT_SHAPE_CLASS)
+    return geometry_descriptor_broadcast(shape_class, env.num_envs, device=env.device)

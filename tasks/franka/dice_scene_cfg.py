@@ -85,7 +85,8 @@ _DICE_SET_DIR = os.path.join(
     "raw",
     "dice_sets_v1",
 )
-_DICE_SET_NAME = "set_00000"  # every DIE_TYPES manifest for this set has empty mesh_quality_warnings
+_DICE_SET_NAME = "set_00013"  # Arabic-numeral glyphs, user request 2026-07-15 (was set_00000, greek_numerals);
+# every DIE_TYPES manifest for this set also has empty mesh_quality_warnings, same quality bar as set_00000
 
 # d4 rung-1 V-notch fingertip fixture (2026-07-15, see
 # docs/superpowers/specs/2026-07-15-d4-rung1-pad-geometry-design.md and

@@ -1839,24 +1839,33 @@ def _load_overlay_font() -> "ImageFont.ImageFont":
 
 
 def _draw_video_overlay_frame(
-    frame: np.ndarray, bbox_xyxy: list[float], choice: str, det_class: str, confidence: float, font: "ImageFont.ImageFont"
+    frame: np.ndarray, choice: str, det_class: str, confidence: float, font: "ImageFont.ImageFont"
 ) -> np.ndarray:
-    """Draws the commanded die's detector bbox + a "commanded vs detected"
-    class/confidence label onto one already-captured video frame - Gate V's
-    post-hoc overlay (see run_gate_v). Style mirrors
-    vision/scripts/detect_for_sim.py's own `_draw_overlay` (rectangle +
-    text label) for visual consistency with Gate P's overlay.png, but uses a
-    brighter/thicker box + a filled text background since this needs to read
-    clearly on a compressed video frame, not just a static PNG."""
+    """Draws a "commanded vs detected" class/confidence text label onto one
+    already-captured video frame - Gate V's post-hoc overlay (see
+    run_gate_v). Style mirrors vision/scripts/detect_for_sim.py's own
+    `_draw_overlay` text label, but uses a filled text background since this
+    needs to read clearly on a compressed video frame, not just a static
+    PNG.
+
+    2026-07-15: this used to also draw `bbox_xyxy` as a rectangle - dropped
+    (user-reported "detection box is not oriented correctly"). The bbox is
+    computed against the perception detector's own camera (DiceCamera) but
+    this video's frames come from the separate ArmCamera (different pose/
+    FOV, switched earlier this session so the grip is actually visible) -
+    drawing one camera's pixel-space box onto the other camera's frame is
+    meaningless, not just imprecise. A geometrically correct fix would
+    reproject the detection's known 3D world_pos into ArmCamera's own image
+    plane; not done here - the text label alone (class/confidence, no
+    spatial claim) stays accurate regardless of which camera captured the
+    frame, which is the safe/quick fix for now."""
     img = Image.fromarray(frame)
     draw = ImageDraw.Draw(img)
-    x0, y0, x1, y1 = bbox_xyxy
-    draw.rectangle([x0, y0, x1, y1], outline=(0, 255, 0), width=3)
     label = f"COMMANDED: {choice}  ->  detected: {det_class} ({confidence:.2f})"
     text_bbox = draw.textbbox((0, 0), label, font=font)
     text_w, text_h = text_bbox[2] - text_bbox[0], text_bbox[3] - text_bbox[1]
-    text_x = max(0, min(x0, _IMAGE_WIDTH - text_w - 4))
-    text_y = max(0, y0 - text_h - 6)
+    text_x = 8
+    text_y = 8
     draw.rectangle([text_x - 2, text_y - 2, text_x + text_w + 2, text_y + text_h + 2], fill=(0, 0, 0))
     draw.text((text_x, text_y), label, fill=(0, 255, 0), font=font)
     return np.array(img)
@@ -2055,25 +2064,27 @@ def run_gate_v() -> None:
         )
     print(f"[GATE V] {choice}: {'PASS' if all_ok else 'FAIL'} (waypoints={waypoint_status})")
 
-    # --- Overlay: draw the commanded die's detection bbox+label on the
-    # pre-pick segment's frames (post-hoc, after capture, before encode).
-    # Skipped when the bypass caught a total detection miss (target_det is
-    # None) - there is no real bbox to draw, and drawing a fake one would
-    # misrepresent a bypassed run as a working perception result. ---
+    # --- Overlay: draw the commanded die's detection class/confidence label
+    # (text only, no spatial bbox - see _draw_video_overlay_frame's own
+    # docstring for why the bbox was dropped) on the pre-pick segment's
+    # frames (post-hoc, after capture, before encode). Skipped when the
+    # bypass caught a total detection miss (target_det is None) - there is
+    # no real detection to label, and labeling one would misrepresent a
+    # bypassed run as a working perception result. ---
     if target_det is not None:
         overlay_font = _load_overlay_font()
         for i in range(pre_pick_frame_count):
             video_frames[i] = _draw_video_overlay_frame(
-                video_frames[i], target_det["bbox_xyxy"], choice, target_det["class"], target_det["confidence"], overlay_font
+                video_frames[i], choice, target_det["class"], target_det["confidence"], overlay_font
             )
         print(
-            f"[GATE V] drew detection overlay on {pre_pick_frame_count} opening frames "
-            f"(bbox={target_det['bbox_xyxy']}, class={target_det['class']}, conf={target_det['confidence']:.3f})"
+            f"[GATE V] drew detection label on {pre_pick_frame_count} opening frames "
+            f"(class={target_det['class']}, conf={target_det['confidence']:.3f})"
         )
     else:
         print(
             f"[GATE V] no detection overlay drawn for '{choice}' - bypass active, no real "
-            f"detection exists to draw a bbox from."
+            f"detection exists to label."
         )
 
     # --- Encode video (imageio, writer pattern from

@@ -93,3 +93,19 @@ Store). This does not change any verdict recorded above; see
 `ROADMAP.md`'s 2026-07-15 entry for the corrected 22mm target, the new
 `FrankaDieLiftJointStandardEnvCfg` (`tasks/franka/dice_lift_joint_env_cfg.py`),
 and its live-measured 21.993mm bounding box.
+
+## Follow-on: unified multi-die specialist-distillation (started 2026-07-16)
+
+This article's own closing verdict ("shape itself needs a new spec/
+research pass rather than further object-scale curriculum variants") is
+directly picked up by
+`docs/superpowers/specs/2026-07-16-unified-multi-die-specialist-distillation-design.md`
+— training per-shape specialists (d8/d10/d12/d20) toward one distilled
+policy. Its first result (0/9 discovery for d8/d10/d12 at their real
+~16-18mm sizes) reopens a version of this article's own scale-vs-shape
+question: those three shapes were never tested at this article's own
+48mm cube-parity anchor, so the result can't yet be attributed to shape
+vs. absolute object scale. See `ROADMAP.md`'s 2026-07-16 entry for the
+full finding, including a measurement artifact in
+`franka_checkpoint_review.py`'s height computation that Principal caught
+by inspecting raw trajectories directly.

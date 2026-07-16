@@ -2992,3 +2992,45 @@ closure load); whether the contact-buffer crash correlates with denser
 genuine engagement; whether 110°/~10mm/~4mm is a tuning problem or the
 symmetric-notch-on-flat-jaws strategy itself is wrong. Full data:
 `.superpowers/sdd/task-2-report.md`.
+
+**Unified multi-die specialist-distillation experiment: underway (started
+2026-07-16).** Spec
+`docs/superpowers/specs/2026-07-16-unified-multi-die-specialist-distillation-design.md`,
+research `.superpowers/sdd/research-multi-die-unified-policy.md`, plan
+`docs/superpowers/plans/2026-07-16-unified-multi-die-specialist-distillation.md`.
+Goal: a single RL policy that grasps a commanded die among {d8, d10, d12,
+d20} (d4 deferred), via per-shape specialists distilled into one policy
+(UniDexGrasp++'s GiGSL pattern), gated on the research's own finding that
+uncurriculated multi-object clutter can collapse RL discovery
+(DexSinGrasp, arXiv:2504.04516) — distractors/target-selection explicitly
+deferred to a follow-on experiment. Tasks 0-1 (bake d8/d10/d12 physics
+assets at real researched standard sizes — d8/d10=16.0mm, d12=18.0mm face-
+to-face, weaker sourcing tier than d20's own single-citation correction;
+add shape-class one-hot + Wadell-sphericity geometry-descriptor
+observation terms) both complete, reviewed clean.
+
+**Task 2 (train d8/d10/d12 specialists) result: 0/9 discovery (2026-07-16),
+worse than d20's own 1/3-at-48mm asset-bisect baseline.** Cloud run
+(~$1.97, 5.15hr across 1 manual-stop + 1 genuine SPOT-preemption
+interruption, both recovered via checkpoint-resume with zero real
+progress lost). Principal independently re-derived the raw per-step
+height trajectories (not just the summary JSON) and found the reported
+"~0.05m max height gain" figures are a measurement artifact — the eval
+script's `max()` over a multi-episode recording window catches a spurious
+height spike at an episode-reset boundary, not any policy-driven lift.
+After correcting for this, the object is completely motionless
+(byte-identical across all 8 parallel envs, at every checked timestep) for
+the entire evaluation in every seed inspected — a *stronger* null result
+than the raw report suggested (zero engagement, not "attempted but
+unsustained"), though `franka_checkpoint_review.py`'s max-height-over-
+window computation itself should be fixed before trusting its numbers on
+a variant whose video spans a reset boundary. **Open, unresolved
+confound (explicit user decision: proceed to Task 3 first, revisit
+rather than block on this now):** d8/d10/d12 were trained directly at
+their real ~16-18mm sizes, never at the 48mm cube-parity anchor
+asset-bisect used to isolate shape from scale — so this 0/9 result
+cannot yet be attributed to shape difficulty vs. these three objects
+simply being too small at this Franka gripper's absolute scale,
+independent of shape. A controlled 48mm-parity rerun for d8/d10/d12
+(mirroring asset-bisect's own methodology) would resolve this and is the
+natural next step if Task 3/4 don't resolve it first.

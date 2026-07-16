@@ -1,5 +1,21 @@
 # Action-space design: joint-space vs. task-space/IK vs. residual
 
+```mermaid
+flowchart TD
+    Start["Joint-space action, Experiments 1-10"]
+    A["Joint-space control continues"]
+    AOut["Exp 10: antipodal grasp regresses to zero"]
+    B["Exp 11: task-space/Cartesian IK action"]
+    BOut["First genuine sustained antipodal grasp: strongest result in the arc"]
+    BNorth["Matches North Star: task-space generalizes across arm morphology"]
+    C["Exp 13: residual RL on top of task-space"]
+    COut["Sharp regression: attributed to missing warm-start, not disproof"]
+
+    Start --> A --> AOut
+    Start --> B --> BOut --> BNorth
+    B --> C --> COut
+```
+
 ## The question
 
 For the entire sphere-era and early cube-era of this project (Experiments 1

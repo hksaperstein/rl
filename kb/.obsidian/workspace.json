@@ -13,12 +13,12 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "wiki/experiments/experiment-05-potential-based-reward-shaping.md",
+                "file": "wiki/experiments/asset-bisect.md",
                 "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "experiment-05-potential-based-reward-shaping"
+              "title": "asset-bisect"
             }
           }
         ]
@@ -183,6 +183,10 @@
   },
   "active": "b55acdbfbd5ebf33",
   "lastOpenFiles": [
+    "wiki/concepts/sim-physics-fidelity.md",
+    "wiki/concepts/staged-reward-co-satisfiability.md",
+    "wiki/concepts/vision-platform.md",
+    "wiki/experiments/experiment-05-potential-based-reward-shaping.md",
     "wiki/concepts/cloud-training.md.tmp.14156.45b6f80fac63",
     "wiki/concepts/cloud-training.md.tmp.14156.107f18b643b6",
     "wiki/concepts/cloud-training.md.tmp.14156.9fb6baef37d5",
@@ -193,12 +197,9 @@
     "wiki/experiments/experiment-09-antipodal-grasp-bonus.md",
     "wiki/experiments/experiment-14-reach-skip-curriculum.md",
     "wiki/experiments/experiment-26-gripper-reintroduction.md",
-    "wiki/concepts/sim-physics-fidelity.md",
-    "wiki/concepts/vision-platform.md",
     "wiki/concepts/reward-hacking-and-sparse-discoverability.md",
     "wiki/concepts/citation-verification-practice.md",
     "wiki/concepts/hyperparameter-registry.md",
-    "wiki/concepts/staged-reward-co-satisfiability.md",
     "wiki/experiments/experiment-06-mirror-scene-stillness-penalty.md",
     "wiki/experiments/experiment-07-sphere-shrink.md",
     "wiki/experiments/experiment-08-classical-ik-guided-path.md",
@@ -206,7 +207,6 @@
     "wiki/experiments/experiment-11-taskspace-ik.md",
     "wiki/experiments/experiment-12-stillness-reward-rate.md",
     "wiki/experiments/experiment-13-residual-rl.md",
-    "wiki/experiments/experiment-05-potential-based-reward-shaping.md",
     "wiki/experiments/experiment-02-curriculum-gated-lift-height.md",
     "wiki/concepts/reach-grasp-lift-gap.md",
     "wiki/concepts/ppo-critic-divergence.md",
@@ -217,7 +217,6 @@
     "wiki/experiments/experiment-03-always-on-lift-height.md",
     "wiki/experiments/experiment-05-potential-based-reward-shaping.md.tmp.4962.61463fdb6f84",
     "wiki/experiments/experiment-04-sa-ppo-lr-bump.md.tmp.4962.7057c45ca2f2",
-    "wiki/experiments/experiment-03-always-on-lift-height.md.tmp.4962.c67299ab8016",
-    "wiki/experiments/experiment-02-curriculum-gated-lift-height.md.tmp.4962.aae051bab9ac"
+    "wiki/experiments/experiment-03-always-on-lift-height.md.tmp.4962.c67299ab8016"
   ]
 }

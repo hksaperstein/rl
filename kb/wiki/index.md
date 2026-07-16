@@ -35,6 +35,25 @@ own "drop in a new arm, training should succeed immediately" bar once
 Franka work matures — but are not the active priority while the Franka
 phase is underway.
 
+```mermaid
+flowchart TD
+    P1["Phase 1: AR4, Experiments 1-26"]
+    Reach["Reach solved early"]
+    Grasp["Antipodal grasp achieved, Exp 11"]
+    NoLift["Lift never confirmed through Exp 26"]
+    Pivot["Platform pivot decision"]
+    P2["Phase 2: Franka Panda, current"]
+    Dice["Dice pick demo"]
+    JointLift["Joint-space die lift"]
+    Bisect["Asset bisect"]
+    SizeCurr["Size curriculum: d20 lift+carry"]
+    Cloud["Cloud training proven"]
+
+    P1 --> Reach --> Grasp --> NoLift --> Pivot --> P2
+    P2 --> Dice --> JointLift --> Bisect --> SizeCurr
+    P2 --> Cloud
+```
+
 ## Contents
 
 - **Experiments** (`experiments/`) — one article per numbered experiment

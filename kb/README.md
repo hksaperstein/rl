@@ -40,6 +40,38 @@ overwritten/reused across plans (see this repo's own established
 convention). The wiki should only ever cite the durable, committed sources
 above.
 
+## Diagrams
+
+Started 2026-07-15: wiki articles may include Mermaid diagrams (fenced
+` ```mermaid ` code blocks) — Obsidian renders these natively, so no extra
+plugin/tooling is needed to view them.
+
+Not every article needs one. Add a diagram only where it clarifies
+structure that's genuinely hard to follow from prose alone:
+
+- **Chronological arcs** (an experiment sequence, a research phase) —
+  `flowchart TD`/`graph TD`, or Mermaid's `timeline` type for a pure
+  milestone list with no branching.
+- **Branch points / forks** (a hypothesis that split into two follow-up
+  attempts, a structural pivot away from a prior approach) — `flowchart
+  TD` with the fork as a decision node.
+- **Pipelines with ordered steps** (the cloud-training recipe, a data
+  pipeline) — `flowchart LR` for a linear pipeline, `sequenceDiagram` if
+  distinct actors/systems hand off to each other.
+- **Side-by-side comparisons** (competing designs tried for the same
+  problem, e.g. action-space variants) — `flowchart TD` with parallel
+  branches, one per variant, each ending in its own outcome.
+
+Keep node labels to a few words each — the diagram is a navigation aid
+that shows shape and flow, not a replacement for the prose next to it,
+which still carries the actual numbers/citations/verdicts. Place an
+article-level overview diagram right after the title/intro; a
+section-local diagram goes inline at the section it illustrates.
+
+Like the rest of the wiki, this is iterative — most existing articles
+don't have one yet. Add them opportunistically (when writing/updating an
+article anyway) rather than retrofitting the whole wiki in one pass.
+
 ## How the wiki gets compiled/maintained
 
 There's no separate tooling yet — an LLM (Claude, dispatched the same way

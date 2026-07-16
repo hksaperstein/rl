@@ -6,6 +6,21 @@ independent re-run). Recipe of record:
 `docs/cloud/franka-cloud-shakedown.md`; attempt-by-attempt history:
 `.superpowers/sdd/task-cloud-shakedown-report.md` (untracked).
 
+```mermaid
+flowchart LR
+    Create["Create SPOT g2-standard-4 + L4"]
+    Ship["Ship repo via git archive to ssh tar"]
+    Install["Install Isaac Sim/Lab via pip"]
+    Train["Headless training: rsl_rl, checkpoint every 50 iters"]
+    Sync["Sync results to GCS: sync_run_to_gcs.py"]
+    Teardown["Teardown: verify instances/disks/snapshots empty"]
+    Preempt["SPOT preemption"]
+    Resume["Resume from last checkpoint"]
+
+    Create --> Ship --> Install --> Train --> Sync --> Teardown
+    Train --> Preempt --> Resume --> Train
+```
+
 ## What exists
 
 - Project `rl-manipulation-hks`, billing upgraded from free tier

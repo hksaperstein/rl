@@ -1,5 +1,24 @@
 # The reach → grasp → lift staged-progress gap
 
+```mermaid
+flowchart TD
+    Start["Sphere era: reach converges, gripper never closes"]
+    Reach["Reach solved early, stays solved throughout"]
+    E1["Exp 1: contact-sensor grasp reward"]
+    E910["Exp 9-10: antipodal grasp fix"]
+    E11["Exp 11: task-space IK, sustained antipodal grasp"]
+    NoLift["No confirmed lift through Exp 14"]
+    Fork{"Keep chasing lift, or change scope?"}
+    E25["Exp 25: drop grasp/lift, scope to touch-goal reach"]
+    E26["Exp 26: reintroduce gripper"]
+    Oscillate["Reach converts to neither hold nor grasp: oscillates"]
+
+    Start --> Reach
+    Reach --> E1 --> E910 --> E11 --> NoLift --> Fork
+    Fork --> E25
+    Fork --> E26 --> Oscillate
+```
+
 ## Why this is the through-line of the whole research arc
 
 Every numbered experiment in this project's history (1 through 14, and the

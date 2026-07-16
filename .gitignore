@@ -1,5 +1,6 @@
 assets/
 logs/
+outputs/
 .superpowers/sdd/
 .vscode/
 __pycache__/

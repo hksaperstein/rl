@@ -77,6 +77,15 @@ Reading those instructions together, not narrowly:
   a natural stopping point, the ROADMAP's own open questions are. A
   session's job doesn't end when an experiment does; it ends when
   there's a genuine external blocker (see below) or the user says stop
+- **Fixing a found bug immediately and re-verifying it, in the same
+  pass** (2026-07-17: *"when u run into bugs, fix them and reexecute.
+  do not move on from them"*) — a bug found during implementation or
+  verification is not a `BACKLOG.md` item and not something to work
+  around a second time once already diagnosed once; fix it, re-run
+  whatever it affected to confirm the fix holds, then continue. This
+  cost real waste once already: a measurement bug found in one task got
+  deferred instead of fixed, and two later tasks each independently
+  re-derived the same diagnosis from scratch.
 
 - **2026-07-16** — mid-session on the unified multi-die specialist-
   distillation experiment, after a run of `AskUserQuestion` calls

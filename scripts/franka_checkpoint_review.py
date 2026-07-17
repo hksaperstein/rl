@@ -80,6 +80,9 @@ parser.add_argument(
         "joint-die-d10-std",
         "joint-die-d12-std",
         "joint-die-random-size",
+        "joint-die-d8-big",
+        "joint-die-d10-big",
+        "joint-die-d12-big",
     ],
     default="ik-cube",
     help=(
@@ -115,7 +118,13 @@ parser.add_argument(
         "scene-spawn time via MultiAssetSpawnerCfg(random_choice=True) across {22.0,28.5,35.0,41.5,48.0}mm, "
         "mass pinned at 0.216kg (docs/superpowers/plans/2026-07-16-unified-multi-die-specialist-"
         "distillation.md); _PLAY probe is a single all-30.3mm-equivalent-scale UsdFileCfg, 50 envs "
-        "(same pattern as joint-die-mixed's own _PLAY probe)."
+        "(same pattern as joint-die-mixed's own _PLAY probe). "
+        "joint-die-d8-big/d10-big/d12-big: 48mm-parity gate (Task 3.5) - physics-baked d8/d10/d12 die each "
+        "scaled to its OWN freshly-derived 48.0mm-targeting scale (NOT the d20 Big rung's 0.001585 constant, "
+        "which does not transfer across shapes), single undiluted 48mm population per shape/seed, mass pinned "
+        "at 0.216kg - directly comparable to the asset-bisect's own cube (3/3) and d20 (1/3) 48mm baselines "
+        "(docs/superpowers/plans/2026-07-16-unified-multi-die-specialist-distillation.md, "
+        ".superpowers/sdd/task-3.5-brief.md); _PLAY probe is the same fixed size, 50 envs."
     ),
 )
 parser.add_argument(
@@ -181,6 +190,12 @@ elif args_cli.variant == "joint-die-d12-std":
     from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftJointD12StandardEnvCfg_PLAY  # noqa: E402
 elif args_cli.variant == "joint-die-random-size":
     from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftJointRandomSizeEnvCfg_PLAY  # noqa: E402
+elif args_cli.variant == "joint-die-d8-big":
+    from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftJointD8BigEnvCfg_PLAY  # noqa: E402
+elif args_cli.variant == "joint-die-d10-big":
+    from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftJointD10BigEnvCfg_PLAY  # noqa: E402
+elif args_cli.variant == "joint-die-d12-big":
+    from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftJointD12BigEnvCfg_PLAY  # noqa: E402
 
 VIDEO_DIR = args_cli.output_dir or os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs", "videos", "franka_checkpoint_review"
@@ -231,6 +246,12 @@ def main() -> None:
         env_cfg = FrankaDieLiftJointD12StandardEnvCfg_PLAY()
     elif args_cli.variant == "joint-die-random-size":
         env_cfg = FrankaDieLiftJointRandomSizeEnvCfg_PLAY()
+    elif args_cli.variant == "joint-die-d8-big":
+        env_cfg = FrankaDieLiftJointD8BigEnvCfg_PLAY()
+    elif args_cli.variant == "joint-die-d10-big":
+        env_cfg = FrankaDieLiftJointD10BigEnvCfg_PLAY()
+    elif args_cli.variant == "joint-die-d12-big":
+        env_cfg = FrankaDieLiftJointD12BigEnvCfg_PLAY()
     else:
         env_cfg = FrankaLiftEnvCfg_PLAY()
     env_cfg.scene.num_envs = args_cli.num_envs
@@ -302,17 +323,51 @@ def main() -> None:
     env.close()
     print(f"Checkpoint review video written to: {VIDEO_DIR}")
 
+    # MEASUREMENT-ARTIFACT FIX (Task 3.5, docs/superpowers/plans/2026-07-16-
+    # unified-multi-die-specialist-distillation.md): Tasks 2 and 3 both
+    # independently traced the SAME artifact in this script's derived stats
+    # (task-2-report.md; task-3-report.md Section 7, which pinned the exact
+    # mechanism) - a naive max()/argmax over the full multi-episode
+    # video_length window picks up a one-step reset-teleport spike whenever
+    # video_length spans more than one episode (this script's own default,
+    # 500 steps, is exactly 2 episodes at this env's 250-step episode
+    # length): at every episode-length boundary the object is
+    # reset-teleported back to its RigidObjectCfg.InitialStateCfg spawn z
+    # for one step, then free-falls and resettles identically to steps 0-4
+    # of the recording - not a policy-driven event. Fixed here (3rd
+    # occurrence, per this task's own dispatch instruction to stop working
+    # around it) by restricting every derived stat (resting_z, gain, max_z,
+    # lifted_mask, sustained_lift) to the FIRST episode only
+    # (env.unwrapped.max_episode_length steps, read generically rather than
+    # hardcoded, so this is correct for any variant/episode-length
+    # combination, not just this env's own 250-step episode). The full raw
+    # per-step array is still saved to the .npy completely unchanged -
+    # nothing is lost, only the derived-stats window is narrowed. This only
+    # changes this script's FORWARD behavior from this commit onward - it
+    # does not touch or retroactively alter any already-synced GCS artifact
+    # or already-written report from Task 2 or Task 3.
+    episode_length_steps = int(env.unwrapped.max_episode_length)
+    analysis_end = min(episode_length_steps, args_cli.video_length)
+    if analysis_end < args_cli.video_length:
+        print(
+            f"[analysis window] restricting derived stats to the first episode only: steps "
+            f"0-{analysis_end - 1} (episode_length={episode_length_steps} steps, "
+            f"recording={args_cli.video_length} steps) to avoid the known episode-reset-boundary "
+            f"artifact (see .superpowers/sdd/task-2-report.md, task-3-report.md Section 7)."
+        )
+    analysis_history = height_history[:analysis_end]
+
     # Per-env settled/resting z: min over the first SETTLE_WINDOW_STEPS steps
     # (the object is spawned already resting on the table per
     # reset_object_position, so this window just absorbs any initial
     # micro-settling rather than measuring a real drop).
-    settle_end = min(SETTLE_WINDOW_STEPS, args_cli.video_length)
-    resting_z = height_history[:settle_end].min(dim=0).values
-    gain = height_history - resting_z.unsqueeze(0)
+    settle_end = min(SETTLE_WINDOW_STEPS, analysis_end)
+    resting_z = analysis_history[:settle_end].min(dim=0).values
+    gain = analysis_history - resting_z.unsqueeze(0)
     max_gain = gain.max(dim=0).values
-    max_z = height_history.max(dim=0).values
+    max_z = analysis_history.max(dim=0).values
 
-    lifted_mask = gain >= LIFT_HEIGHT_THRESHOLD_M  # (T, num_envs) bool
+    lifted_mask = gain >= LIFT_HEIGHT_THRESHOLD_M  # (analysis_end, num_envs) bool
 
     summary = {}
     print("\n=== Instrumented height readout (per env) ===")
@@ -344,6 +399,8 @@ def main() -> None:
                 "checkpoint": args_cli.checkpoint,
                 "num_envs": num_envs,
                 "video_length_steps": args_cli.video_length,
+                "episode_length_steps": episode_length_steps,
+                "analysis_window_steps": analysis_end,
                 "lift_height_threshold_m": LIFT_HEIGHT_THRESHOLD_M,
                 "sustained_lift_steps": SUSTAINED_LIFT_STEPS,
                 "settle_window_steps": settle_end,

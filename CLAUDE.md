@@ -192,6 +192,14 @@ call something done off exit codes or type-checks alone.
 
 ## Environment conventions
 
+**Dispatching a cloud or Isaac-Sim-touching subagent task? Copy the
+relevant blocks from `docs/cloud/dispatch-checklist.md` verbatim into
+the dispatch prompt** — written 2026-07-17 after the same blocking/cost-
+cap/teardown instructions got reconstructed from memory (and dropped)
+across multiple dispatches in one session. `scripts/check_cloud_state.sh`
+gives a one-command check of live instances/disks/snapshots/local
+processes/lock state.
+
 Always invoke via `/home/saps/IsaacLab/isaaclab.sh -p scripts/<script>.py`
 from this repo's root — never plain `python` for anything that touches Isaac
 Sim/Lab. GPU is an RTX 5070 Ti; keep that in mind for `num_envs` sizing

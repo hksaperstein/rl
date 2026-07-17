@@ -319,6 +319,93 @@ git commit -m "feat: d20 size-DR + geometry-feature specialist retry env cfg"
 
 ---
 
+## Task 3.5 — 48mm-parity check for d8/d10/d12 (cloud) — inserted 2026-07-16, GATE before Task 4
+
+**Why this task exists (not in the original plan):** Task 2 (d8/d10/d12 at
+real small sizes, ~16-18mm) and Task 3 (d20 with size-DR across 22-48mm +
+geometry conditioning) both returned 0 discovery — 0/9 and 0/120
+respectively, independently confirmed as genuine zero-engagement results
+(not measurement noise) by tracing raw per-step height data in both cases.
+Task 3's own sweep included 48.0mm exactly (the one size where the
+asset-bisect ladder got real discovery, 1/3, for a *single-size, undiluted*
+d20 population) and still got 0/3 there — pointing at population dilution
+across multiple sizes, not shape itself, as the dominant confound. Neither
+Task 2 nor Task 3 ever tested d8/d10/d12 at a single, undiluted, 48mm
+population the way the original asset-bisect did for the cube (3/3) and
+d20 (1/3). This task closes that gap before any decision on Task 4's
+distillation premise (currently unsatisfiable — zero working specialists
+exist).
+
+**Files:**
+- Modify: `tasks/franka/dice_lift_joint_env_cfg.py` — three new classes
+  (+ `_PLAY` variants), `FrankaDieLiftJointD8BigEnvCfg` /
+  `FrankaDieLiftJointD10BigEnvCfg` / `FrankaDieLiftJointD12BigEnvCfg`,
+  mirroring `FrankaCubeBakedLiftJointEnvCfg`'s/`FrankaDieLiftJointBigEnvCfg`'s
+  own pattern exactly: reuse Task 0's baked `d8_physics.usd`/
+  `d10_physics.usd`/`d12_physics.usd`, override `scale` to
+  `FrankaDieLiftJointBigEnvCfg`'s own already-verified 48.0mm constant
+  (0.001585 — reuse directly, do not re-derive; d8/d10/d12's own native
+  mesh bbox ratios differ from d20's per Task 0's own finding, but the
+  *target* mm size — 48.0mm — is shape-independent by construction, so
+  the scale constant that hits 48.0mm for d20 will NOT be correct for
+  d8/d10/d12's own different native bboxes — **compute each shape's own
+  48.0mm-targeting scale using Task 0's own per-shape native-bbox
+  measurements** (`scripts/_diag_d8d10d12_standard_scale_check.py`'s
+  already-measured native bboxes: d8 15.1544, d10 16.3931 max dim, d12
+  32.5160 stage units — do not assume 0.001585 transfers across shapes,
+  it doesn't), mass pinned 0.216kg (matching every other Big-rung class).
+- Modify: `scripts/train_franka.py`, `scripts/franka_checkpoint_review.py`,
+  `scripts/sync_run_to_gcs.py` — wire 3 new `--variant` choices
+  (`joint-die-d8-big`/`d10-big`/`d12-big`), same pattern as Task 2/3.
+
+**Interfaces:**
+- Consumes: Task 0's baked assets + native-bbox measurements, Task 1's
+  observation terms.
+- Produces: 3 more specialist checkpoints (48mm, single-size, undiluted)
+  + discovery-rate numbers, directly comparable to asset-bisect's own
+  cube (3/3) and d20 (1/3) 48mm baselines.
+
+- [ ] **Step 1**: Compute each shape's own 48.0mm-targeting scale from
+  Task 0's already-measured native bboxes (no new Isaac Sim launch
+  needed for this arithmetic — reuse the measured numbers directly:
+  `scale = 48.0 / (native_max_dim_stage_units * 1000.0)`).
+- [ ] **Step 2**: Add the three new env cfg classes + wire the three
+  scripts, following Task 2's exact wiring pattern. Commit before any
+  cloud provisioning.
+- [ ] **Step 3**: Cloud (GCP SPOT g2-standard-4 + L4), one instance,
+  3 seeds × 3 shapes = 9 runs, 1500 iterations each, headless.
+- [ ] **Step 4**: Instrumented eval + video per seed/shape. Given Tasks 2
+  and 3 both found a measurement artifact in
+  `franka_checkpoint_review.py`'s `max_height_gain` (a spurious spike at
+  an episode-reset boundary contaminating the naive `max()` over a
+  multi-episode recording window) — independently re-derive the raw
+  per-step trajectory for at least one seed per shape rather than
+  trusting the summary JSON's `max_height_gain`/`sustained_lift` fields
+  alone, per both prior tasks' own established practice. Consider
+  whether this is worth actually fixing in `franka_checkpoint_review.py`
+  itself now that it's recurred 2/2 times on every variant tested at a
+  small-enough size/short-enough episode — your call, flag if you think
+  it should be fixed rather than worked around a third time.
+- [ ] **Step 5**: Report per-shape, per-seed discovery rate (not
+  averaged), explicitly compared against asset-bisect's own cube
+  (3/3-at-48mm) and d20 (1/3-at-48mm) baselines.
+- [ ] **Step 6**: Full teardown; report cost against the cumulative
+  $15 cap (Tasks 2+3 already spent ≈$2.96 — ≈$12.04 remains for this
+  task plus Tasks 5/6).
+- [ ] **Step 7**: **Do not decide** whether/how Task 4 proceeds — report
+  the clear numeric result (does population dilution explain the prior
+  nulls, or does shape remain a barrier even at matched, undiluted 48mm
+  conditions) and stop for the controller's call, same discipline as
+  Task 3.
+
+```bash
+git add tasks/franka/dice_lift_joint_env_cfg.py scripts/train_franka.py \
+        scripts/franka_checkpoint_review.py scripts/sync_run_to_gcs.py
+git commit -m "feat: d8/d10/d12 48mm-parity specialist check (Task 3.5)"
+```
+
+---
+
 ## Task 4 — Distillation pipeline (local, no GPU training yet)
 
 **Files:**

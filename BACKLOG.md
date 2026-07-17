@@ -23,4 +23,23 @@ picked, and where the decision happened (for context).
   whose eval video spans a reset boundary. Deferred rather than fixed
   immediately because it wasn't blocking any decision — Task 3.5's own
   brief asks the implementer to use judgment on whether to fix it now
-  that it's recurred a third time.
+  that it's recurred a third time. **Correction (2026-07-17): this
+  deferral was a mistake, not a considered call** — it cost 3 separate
+  tasks independently re-deriving the same diagnosis. Fix directly next
+  time this comes up, don't defer again.
+
+## Cloud infrastructure reliability (2026-07-17)
+
+Session hit repeated cloud friction: SPOT preemptions on 3/3 cloud tasks,
+a pip-wheel-cache corruption from a preempted mid-install, and a systemd
+`Linger=no` default killing detached tmux installs — both infra bugs
+found during Task 3.5, neither yet folded into
+`docs/cloud/franka-cloud-shakedown.md`. Highest-leverage fix not yet
+built: **a pre-baked GCP VM image with Isaac Sim/Isaac Lab already
+installed**, so cloud tasks skip the fragile ~15-20min from-scratch
+install window entirely — this is also where both new infra bugs hit,
+so shrinking that window reduces exposure to future variants of the
+same class of failure, not just these two specific ones. Not built this
+session because the user said stop; next cloud-heavy task should either
+build this image first or explicitly accept the from-scratch-install
+risk knowingly rather than by default.

@@ -78,6 +78,23 @@ Reading those instructions together, not narrowly:
   session's job doesn't end when an experiment does; it ends when
   there's a genuine external blocker (see below) or the user says stop
 
+- **2026-07-16** — mid-session on the unified multi-die specialist-
+  distillation experiment, after a run of `AskUserQuestion` calls
+  presenting a recommended option alongside alternatives at each design
+  fork: *"always make the recommended choice and add the other choices
+  to backlog."* Established the concrete mechanic for what "decide,
+  don't ask" means in practice when a real menu of options exists with
+  a stated recommendation: take the recommendation, don't pause for a
+  pick, and record the alternatives in `BACKLOG.md` (not silently drop
+  them) so they're revisitable later. This is not a new principle —
+  it's the same mandate as every entry above — but it's a fifth
+  reinforcement of a memory ([[feedback_work-autonomously-explore-and-decide]])
+  that had already been stated four times, meaning the pattern of
+  pausing to ask when a recommendation exists is a recurring failure
+  mode, not a one-off. When presenting a design/technical fork where I
+  have a clear recommendation, state it and proceed — don't render it
+  as a choice for the user to make.
+
 ## What still gets stopped on and flagged
 
 None of the instructions above were about money, other people's

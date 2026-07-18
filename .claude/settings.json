@@ -5,13 +5,13 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash -c '\nPIDFILE=/tmp/claude-rl-tensorboard.pid\nLOGFILE=/tmp/claude-rl-tensorboard.log\nif [ -f \"$PIDFILE\" ] && kill -0 \"$(cat \"$PIDFILE\")\" 2>/dev/null; then\n  exit 0\nfi\ncd /home/saps/projects/rl\nsetsid nohup scripts/tensorboard_gcs.sh > \"$LOGFILE\" 2>&1 < /dev/null &\necho $! > \"$PIDFILE\"\n' 2>/dev/null || true",
+            "command": "bash -c '\nPIDFILE=/tmp/claude-rl-tensorboard.pid\nLOGFILE=/tmp/claude-rl-tensorboard.log\nif [ -f \"$PIDFILE\" ] && kill -0 \"$(cat \"$PIDFILE\")\" 2>/dev/null; then\n  exit 0\nfi\ncd \"$CLAUDE_PROJECT_DIR\" || exit 1\nsetsid nohup scripts/tensorboard_gcs.sh > \"$LOGFILE\" 2>&1 < /dev/null &\necho $! > \"$PIDFILE\"\n' 2>&1 || echo \"WARNING: tensorboard mirror hook failed\" >&2",
             "timeout": 15,
             "statusMessage": "Starting local TensorBoard mirror..."
           },
           {
             "type": "command",
-            "command": "bash -c 'cd /home/saps/projects/rl && git fetch --quiet && git pull --ff-only --quiet' 2>&1 || true",
+            "command": "bash -c 'cd \"$CLAUDE_PROJECT_DIR\" && git fetch --quiet && git pull --ff-only --quiet' 2>&1 || echo \"WARNING: git fetch/pull hook failed (see output above)\" >&2",
             "timeout": 30,
             "statusMessage": "Fetching latest from origin/main..."
           }
@@ -24,7 +24,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash -c 'cd /home/saps/projects/rl && git push' 2>&1 || true",
+            "command": "bash -c 'cd \"$CLAUDE_PROJECT_DIR\" && git push' 2>&1 || echo \"WARNING: auto git push hook failed -- commit is local-only, push manually\" >&2",
             "if": "Bash(git commit*)",
             "timeout": 30,
             "statusMessage": "Pushing to origin..."

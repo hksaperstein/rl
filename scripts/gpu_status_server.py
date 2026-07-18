@@ -3,8 +3,11 @@
 availability check (replaces 2 SSH round-trips with one local read).
 See docs/superpowers/specs/2026-07-18-gpu-status-server-design.md.
 """
+import atexit
 import json
+import signal
 import subprocess
+import sys
 import threading
 import time
 from datetime import datetime, timezone
@@ -137,6 +140,17 @@ class GpuStatusHandler(BaseHTTPRequestHandler):
 def main():
     watchdog = InhibitWatchdog(POLL_INTERVAL_SECONDS)
     threading.Thread(target=watchdog.run_forever, daemon=True).start()
+
+    # Release the held shutdown-inhibit lock on normal termination (SIGTERM
+    # from systemctl stop/restart or a plain `kill`, SIGINT from Ctrl-C) so
+    # a server crash/restart can't orphan the systemd-inhibit/sleep-infinity
+    # child and permanently block shutdown. This cannot cover SIGKILL
+    # (kill -9) -- that signal is uncatchable by any process, an inherent
+    # limit, not something fixable here.
+    atexit.register(watchdog._release)
+    signal.signal(signal.SIGTERM, lambda signum, frame: sys.exit(0))
+    signal.signal(signal.SIGINT, lambda signum, frame: sys.exit(0))
+
     server = ThreadingHTTPServer(("0.0.0.0", PORT), GpuStatusHandler)
     server.serve_forever()
 

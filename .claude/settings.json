@@ -8,6 +8,26 @@
             "command": "bash -c '\nPIDFILE=/tmp/claude-rl-tensorboard.pid\nLOGFILE=/tmp/claude-rl-tensorboard.log\nif [ -f \"$PIDFILE\" ] && kill -0 \"$(cat \"$PIDFILE\")\" 2>/dev/null; then\n  exit 0\nfi\ncd /home/saps/projects/rl\nsetsid nohup scripts/tensorboard_gcs.sh > \"$LOGFILE\" 2>&1 < /dev/null &\necho $! > \"$PIDFILE\"\n' 2>/dev/null || true",
             "timeout": 15,
             "statusMessage": "Starting local TensorBoard mirror..."
+          },
+          {
+            "type": "command",
+            "command": "bash -c 'cd /home/saps/projects/rl && git fetch --quiet && git pull --ff-only --quiet' 2>&1 || true",
+            "timeout": 30,
+            "statusMessage": "Fetching latest from origin/main..."
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'cd /home/saps/projects/rl && git push' 2>&1 || true",
+            "if": "Bash(git commit*)",
+            "timeout": 30,
+            "statusMessage": "Pushing to origin..."
           }
         ]
       }

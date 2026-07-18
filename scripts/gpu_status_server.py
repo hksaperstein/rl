@@ -5,6 +5,8 @@ See docs/superpowers/specs/2026-07-18-gpu-status-server-design.md.
 """
 import json
 import subprocess
+import threading
+import time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -60,6 +62,46 @@ def query_guard_count():
     return sum(1 for line in out.splitlines() if "rl-gpu-job" in line)
 
 
+class InhibitWatchdog:
+    """Holds a systemd-inhibit shutdown:sleep lock while the GPU has any
+    active compute app, independent of the Pi-dispatch `rl-gpu-job` guard
+    that run_on_desktop_gpu.sh already acquires for its own jobs."""
+
+    def __init__(self, poll_interval):
+        self.poll_interval = poll_interval
+        self._proc = None
+
+    def _acquire(self):
+        self._proc = subprocess.Popen([
+            "systemd-inhibit", "--what=shutdown:sleep",
+            f"--who={GUARD_WHO}",
+            "--why=GPU actively in use (auto-detected)",
+            "--", "sleep", "infinity",
+        ])
+
+    def _release(self):
+        if self._proc is not None:
+            self._proc.terminate()
+            try:
+                self._proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self._proc.kill()
+            self._proc = None
+
+    def run_forever(self):
+        while True:
+            try:
+                busy = len(query_compute_apps()) > 0
+            except Exception:
+                busy = False  # nvidia-smi hiccup: don't hold a stale lock on bad data
+            holding = self._proc is not None and self._proc.poll() is None
+            if busy and not holding:
+                self._acquire()
+            elif not busy and holding:
+                self._release()
+            time.sleep(self.poll_interval)
+
+
 def build_status():
     apps = query_compute_apps()
     status = query_gpu_telemetry()
@@ -93,6 +135,8 @@ class GpuStatusHandler(BaseHTTPRequestHandler):
 
 
 def main():
+    watchdog = InhibitWatchdog(POLL_INTERVAL_SECONDS)
+    threading.Thread(target=watchdog.run_forever, daemon=True).start()
     server = ThreadingHTTPServer(("0.0.0.0", PORT), GpuStatusHandler)
     server.serve_forever()
 

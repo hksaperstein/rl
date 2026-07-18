@@ -190,6 +190,104 @@ Real evidence over proxies: run scripts via `isaaclab.sh`, watch output videos
 `perception/tests/` via pytest for the sim-independent perception math. Don't
 call something done off exit codes or type-checks alone.
 
+## Pi-as-primary-agent GPU dispatch (2026-07-18)
+
+The Raspberry Pi is the primary agent host; it has no GPU of its own.
+GPU-heavy work (Isaac Sim training/eval, vision jobs) must be dispatched
+elsewhere. Routing priority: **desktop first, cloud fallback** — the
+desktop (`saps@home.local`, SSH alias `desktop`, passwordless via
+`~/.ssh/id_ed25519_desktop`) is free GPU time already on the LAN; only
+fall back to the existing GCP cloud path (`docs/cloud/dispatch-checklist.md`,
+`docs/cloud/franka-cloud-shakedown.md`) when the desktop isn't available.
+
+**Never treat "can't tell" as a green light.** The whole point of this
+routing layer is to distinguish a genuinely idle desktop from one that's
+busy *or unreachable* — an agent that can't determine desktop state must
+fall back to cloud (or stop), not assume availability.
+
+Three scripts implement this, in the order a dispatch should use them:
+
+1. **`scripts/check_desktop_gpu.sh`** — low-level availability probe.
+   SSHes to the desktop and checks both `nvidia-smi
+   --query-compute-apps` AND `systemd-inhibit --list` for a lock named
+   `rl-gpu-job` (see below — this catches a job that's still in Isaac
+   Sim's 5-8 minute GPU-allocation startup window, before `nvidia-smi`
+   would show anything). Exit 0 = AVAILABLE, 1 = BUSY, 2 = UNKNOWN
+   (unreachable or the check itself failed — not the same as available).
+2. **`scripts/check_gpu_availability.sh`** — routing decision. Calls
+   (1) and prints `TARGET=desktop` (exit 0) or `TARGET=cloud` (exit 1 if
+   BUSY, exit 2 if UNKNOWN) plus a human-readable reason. Does not
+   provision cloud infrastructure itself — on `TARGET=cloud`, follow the
+   existing `docs/cloud/dispatch-checklist.md` recipe.
+3. **`scripts/run_on_desktop_gpu.sh [--detach] <command...>`** — the
+   actual dispatch wrapper. Pre-checks via (1) and refuses to proceed on
+   BUSY/UNKNOWN. On AVAILABLE, ships the command to the desktop and runs
+   it inside a detached `tmux` session (survives a Pi-side SSH
+   disconnect — not just backgrounded over the SSH pipe) wrapped in a
+   `systemd-inhibit --who=rl-gpu-job` guard (prevents the desktop
+   suspending/shutting down mid-job — the concern this whole design
+   exists for). Default mode blocks and streams the job's output live
+   via a separate log-tailing SSH call, per this repo's blocking-over-
+   check-in-early convention (see the cloud dispatch checklist); `--detach`
+   dispatches and returns immediately, printing how to check on it later
+   (`tmux attach`, `tail -f` the remote log, or `check_desktop_gpu.sh`).
+   Exit codes: 0 = success, 1 = BUSY, 2 = UNKNOWN, 3 = usage error, 4 =
+   dispatch mechanism itself failed (SSH/tmux/inhibitor setup — distinct
+   from the job's own failure), 5 = the remote command ran and exited
+   non-zero (exact code printed, not preserved as the wrapper's own exit
+   code since arbitrary integers don't round-trip through shell exit
+   status).
+
+**Known gaps on the desktop side, as of 2026-07-18 (both root causes:
+no passwordless sudo on the desktop, so neither is fixable from an
+unattended SSH session — flagging here rather than working around
+silently):**
+
+- **tmux isn't apt-installed.** Installed userspace-only instead:
+  `apt-get download tmux libutempter0` (works without root) then
+  `dpkg -x <deb> ~/.local/opt/tmux-extracted` (extraction, no root
+  needed either) on the desktop, with a wrapper at
+  `~/.local/bin/tmux` that sets `LD_LIBRARY_PATH` for
+  `libutempter.so.0` before exec'ing the real binary. Non-interactive
+  SSH commands don't source `~/.bashrc`, so `~/.local/bin` is never on
+  `PATH` for these sessions — `run_on_desktop_gpu.sh` always invokes
+  tmux by its full remote path, never bare `tmux`. If tmux is ever
+  properly apt-installed by someone with root later, update
+  `REMOTE_TMUX` in `run_on_desktop_gpu.sh` (or symlink `/usr/bin/tmux`
+  into `~/.local/bin`).
+- **`systemd-inhibit --what=shutdown:sleep:idle` is denied by polkit for
+  SSH sessions.** Polkit's default rules only implicitly grant
+  `org.freedesktop.login1.inhibit-*` actions to seated/active-local
+  sessions; an SSH session has no seat and there's no polkit auth agent
+  to prompt interactively, so the desktop-side job script's dispatch
+  currently **degrades to `--what=idle` only** (probed and detected
+  automatically, with a loud warning printed into the job's own log) —
+  meaning **shutdown/sleep are NOT actually blocked** during a
+  dispatched job right now, only idle-suspend is. `--who=rl-gpu-job`
+  still shows up correctly in `systemd-inhibit --list` either way, so
+  `check_desktop_gpu.sh`'s BUSY detection is unaffected by this
+  degradation. The real fix needs a one-time root action on the
+  desktop: create a polkit rule file, e.g.
+  `/etc/polkit-1/rules.d/49-rl-gpu-job-inhibit.rules`, containing:
+  ```js
+  polkit.addRule(function(action, subject) {
+      if (action.id.indexOf("org.freedesktop.login1.inhibit-") == 0 &&
+          subject.user == "saps") {
+          return polkit.Result.YES;
+      }
+  });
+  ```
+  (numbered below `50-default.rules` so it's evaluated first; no
+  restart needed, polkit picks up rule file changes automatically).
+  Until that's applied by whoever has desktop root, treat shutdown/sleep
+  as unprotected during dispatched jobs.
+
+All three scripts were tested live against the real desktop (not just
+exit codes): a genuine `sleep`-based job was dispatched, and mid-run,
+both `check_desktop_gpu.sh`/`check_gpu_availability.sh` and a raw
+`systemd-inhibit --list` on the desktop were confirmed to show the
+`rl-gpu-job` guard actually held.
+
 ## Environment conventions
 
 **Dispatching a cloud or Isaac-Sim-touching subagent task? Copy the

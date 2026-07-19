@@ -354,7 +354,26 @@ def main() -> None:
     env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
 
     runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
-    runner.load(args_cli.checkpoint)
+    # load_optimizer=False: this is an eval-only entry point (no training
+    # resumption ever happens here), and as of Task 5 of the unified-multi-
+    # die-specialist-distillation plan this script is also used to load
+    # `scripts/distill_specialists.py`'s own distilled-student checkpoints
+    # (`tasks/franka/distillation.py`'s `save_student_checkpoint`), which
+    # intentionally write an EMPTY `optimizer_state_dict` (Task 6's PPO
+    # fine-tune builds its own fresh optimizer state rather than resuming
+    # this module's BC optimizer's Adam moments - see that function's own
+    # docstring). rsl_rl's `OnPolicyRunner.load()` defaults to
+    # `load_optimizer=True` and unconditionally calls
+    # `self.alg.optimizer.load_state_dict(loaded_dict["optimizer_state_dict"])`
+    # whenever the model's own `load_state_dict` call returns (PyTorch's
+    # `_IncompatibleKeys` return value is always truthy, a 2-tuple, even when
+    # both lists are empty) - crashes on a `{}` optimizer_state_dict with a
+    # `KeyError: 'state'`. Confirmed by reading rsl_rl 5.4.2's own
+    # `OnPolicyRunner.load` source directly (2026-07-19) before making this
+    # change. Passing False here is safe and correct for every existing
+    # PPO-trained checkpoint too, since this script never needs the
+    # optimizer state for inference.
+    runner.load(args_cli.checkpoint, load_optimizer=False)
     policy = runner.get_inference_policy(device=env.unwrapped.device)
 
     # INSTRUMENTED HEIGHT READOUT (Experiment 16 precedent - video alone can

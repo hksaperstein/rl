@@ -162,7 +162,10 @@ see the coverage boundary note below.)*
   fully recovered a real BC/DAgger distillation regression (4/8 d20, 1/8
   d12) to an exact 8/8 match with each frozen specialist, both shapes —
   a working unified 2-shape policy, checkpointed. ≈$5.87 of the $15 cloud
-  cap spent.
+  cap spent. Distractors/target-selection follow-on (every env here spawns
+  exactly one die) has its research grounding done, no spec yet:
+  `docs/superpowers/specs/research/2026-07-19-target-selection-clutter-literature.md`
+  (see the article's "Open, not yet decided" section).
 
 ### Concepts
 

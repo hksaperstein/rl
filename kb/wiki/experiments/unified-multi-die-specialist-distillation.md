@@ -247,6 +247,24 @@ Full grid, mechanism, raw-trajectory numbers, and cost (~$0.91):
 
 ## Open, not yet decided
 
+**Distractors/target-selection follow-on: research grounding done, no spec
+yet (2026-07-19).** This experiment's own spec deferred the multi-object
+case (every env here spawns exactly one die) to a follow-on experiment,
+gated on one citation (DexSinGrasp, arXiv:2504.04516) that was never
+independently re-verified until now. That grounding is done:
+`docs/superpowers/specs/research/2026-07-19-target-selection-clutter-literature.md`
+— confirms the DexSinGrasp citation is real but was previously stated too
+broadly (no-curriculum clutter collapses to 0% success only in its harder,
+randomly-arranged 8-distractor condition, not its dense-arrangement one
+at the same distractor count), surveys real curriculum/observation-space/
+architecture precedent for target selection in clutter, and proposes a
+falsifiable hypothesis (a dedicated commanded-die observation slot + a
+fixed-size padded distractor-distance feature, DexSinGrasp's own
+mechanism, plus a distractor-count curriculum starting from this
+experiment's own finished single-object checkpoint) for whoever writes
+that follow-on spec next. No spec has been written and no follow-on
+experiment has been scoped or run yet — this is research only.
+
 Task 4 (distillation) status per this experiment's own gate discipline:
 d8 and d10 remain fully null at 48mm parity (2/4 candidate shapes,
 deferred per BACKLOG.md's "Task 4 scope decision", not blocking), d12

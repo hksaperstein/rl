@@ -65,3 +65,43 @@ the plan's literal cloud-only instruction, or building the pre-baked
 Isaac Lab VM image first per the entry above (still worth doing
 eventually for whenever cloud genuinely is the only option, but not a
 blocker for this specific task now that desktop dispatch exists).
+
+## Task 3.5 cloud completion (d10-big/d12-big + d8-big re-eval, 2026-07-19)
+
+- **`franka_checkpoint_review.py`'s `_detect_settle_step` tolerance
+  (5e-5m range over a 15-step window) is tuned for a motionless
+  table-rested object and never matches a *held* object's natural
+  grasp-contact jitter.** Found on d12-big seed123's 4 genuinely-lifted
+  envs — all 4 report `settle_step: -1` (no stable window ever found in
+  249 steps) despite holding a stable plateau (±3-13mm) for 100+ steps,
+  falling back to the pre-fix free-fall-window-min baseline instead of a
+  directly-detected resting_z. Did not change this run's verdict (the
+  fallback happened to be numerically close to the true table-rest
+  height, cross-checked against the other envs' own directly-detected
+  resting_z), so not fixed now — but not guaranteed harmless in general
+  (a held object whose true grasp height is *itself* within the fallback
+  window, or whose pre-grasp free-fall min differs meaningfully from the
+  true table-rest height, could get a wrong baseline). Widening the
+  tolerance (or adding a second, looser pass specifically for
+  "held-and-jittering" detection distinct from "resting-and-still")
+  would remove the need to reason about this by hand next time a run has
+  envs with `settle_step: -1` that also show real gain.
+- **Cloud infra gap, folded into `docs/cloud/dispatch-checklist.md`'s
+  known-gaps list directly (not just here): a SPOT preemption can
+  truncate a checkpoint file mid-write to 0 bytes**, and a naive
+  "resume from highest iteration number" strategy will pick and fail to
+  load it. Fixed in this task's own one-off orchestration script (skip
+  any `model_*.pt` under 100KB when scanning for a resume candidate) but
+  that script wasn't a committed, reusable one — worth promoting into a
+  shared resume-helper if cloud SPOT training recurs often enough to
+  justify it, rather than re-deriving this fix from scratch again.
+- **Not chosen: staying on SPOT for the full 6-job batch after the 3rd
+  preemption in ~3 hours** (a much higher preemption rate than this
+  project's prior single/double-preemption cloud-shakedown history).
+  Switched the last 2 jobs to on-demand provisioning instead — same
+  instance-type/zone-search logic, ~2x the hourly rate, but eliminates
+  further snapshot-recover-resume wall-clock loss for a small remaining
+  job count. Not a general policy change (SPOT is still the plan's
+  documented default and remains the right choice for larger batches
+  where the cost multiplier matters more); a per-task judgment call
+  worth reconsidering fresh each time preemption rate is unusually high.

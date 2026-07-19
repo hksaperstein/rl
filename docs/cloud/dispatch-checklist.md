@@ -85,3 +85,26 @@ or assume it's implied by other context.)
   installed, which would eliminate the fragile ~15-20min from-scratch
   install window entirely (see `BACKLOG.md`'s "Cloud infrastructure
   reliability" entry — this is the highest-leverage fix still open).
+- **A SPOT preemption can truncate a checkpoint file mid-write, leaving
+  a 0-byte `.pt` on disk** (found 2026-07-19, Task 3.5 cloud completion —
+  `rsl_rl`'s `save_interval` checkpoint write landed exactly at the
+  preemption instant). A naive "resume from the highest iteration number
+  present" strategy will pick this corrupt file and fail with
+  `EOFError: Ran out of input` on `torch.load`. Any resume logic must
+  validate the candidate checkpoint (at minimum a file-size sanity check
+  — a real checkpoint for this project's PPO configs is ~1.27MB, so
+  anything under ~100KB is certainly corrupt — or a real `torch.load`
+  try/except) before trusting it, and fall back to the next-most-recent
+  checkpoint if the top one is corrupt.
+- **Repeated SPOT preemptions can occur in clusters far above this
+  project's earlier "1-2 per multi-hour run" experience** — hit 3
+  preemptions in ~3 hours during Task 3.5's cloud completion (2026-07-19),
+  each independently confirmed via `gcloud compute operations list` as a
+  genuine `compute.instances.preempted` system event, not a stockout or
+  manual stop. When this recurs, switching the remaining jobs to
+  on-demand provisioning (drop `--provisioning-model=SPOT`/
+  `--instance-termination-action=STOP`) is a reasonable judgment call to
+  stop losing wall-clock to snapshot-recover-resume cycles, provided the
+  remaining job count is small enough that on-demand's ~2x hourly rate
+  stays well within the task's cost cap — not a general policy change,
+  reconsider fresh each time.

@@ -3116,3 +3116,137 @@ Task 3 Step 5 instruction, this is reported as a clean numeric result
 only — whether/how Task 4 (distillation) proceeds given zero working
 specialists across d8/d10/d12/d20 to date is a controller decision, not
 made here.
+
+**Task 3.5 (48mm-parity check for d8/d10/d12) result: full 3x3 grid
+complete (2026-07-19), one genuine partial positive found — d12 at
+seed123.** d8-big's 3 seeds were trained/evaluated by a prior
+desktop-dispatch agent in this same batch; d10-big and d12-big's 6 seeds
+(42/123/7 each) were trained/evaluated by this task on GCP cloud (SPOT
+g2-standard-4+L4, `docs/cloud/franka-cloud-shakedown.md` recipe), all at
+1500 iterations, single-size undiluted 48mm populations, mass pinned
+0.216kg, per-shape freshly-derived 48mm-targeting scale (not d20's
+0.001585 constant, confirmed shape-specific per Task 0's own native-bbox
+measurements). Full per-shape, per-seed discovery rate (envs with
+sustained lift / 8 envs per seed):
+
+| shape (48mm) | seed 42 | seed 123 | seed 7 | seeds-with-discovery |
+|--------------|---------|----------|--------|----------------------|
+| d8-big       | 0/8     | 0/8      | 0/8    | 0/3                  |
+| d10-big      | 0/8     | 0/8      | 0/8    | 0/3                  |
+| d12-big      | 0/8     | **4/8**  | 0/8    | 1/3                  |
+
+Compared against the asset-bisect ladder's own undiluted-48mm baselines
+(`docs/superpowers/plans/2026-07-12-asset-bisect-report.md`): cube 3/3
+seeds (full 8/8 each), d20 1/3 seeds (seed 123, full 8/8). d8/d10 remain
+completely null at 48mm parity — shape itself (not population dilution,
+not absolute scale) is confirmed as a real barrier for these two shapes,
+consistent with Task 2's original ~16-18mm finding. d12 shows a genuine
+partial recovery: one seed (123, the same seed that discovered grasp in
+the original d20 bisect) with 4 of 8 envs achieving sustained lift — a
+real but *weaker* echo of d20's own 1/3-seed pattern (d20's lucky seed
+got full 8/8 within-seed discovery; d12's lucky seed got half).
+
+**d12-big seed123's 4 lifted envs (indices 1,5,6,7), reported height
+gains (post-fix measurement): env1 +0.192m (max_z 0.213m), env5 +0.183m
+(max_z 0.204m), env6 +0.188m (max_z 0.209m), env7 +0.065m (max_z
+0.086m), each sustained for the full post-settle window observed (53/53
+steps ≥ the 25-step/0.04m threshold).** Independently verified this is a
+real result, not a third occurrence of the reset-boundary/settle-window
+artifacts already fixed twice in this experiment (commit 977a748):
+re-implemented the settle-detection and gain logic from scratch against
+the raw `.npy` (not reusing `franka_checkpoint_review.py`'s own code) and
+found the *shape* of the trajectory is a smooth, continuous rise starting
+~step 40, reaching a stable plateau by ~step 90-115 and holding there
+(±3-13mm jitter, no violent single-step jumps — max single-step delta
+0.010m, inconsistent with a contact-explosion/launch artifact) through
+the rest of the 249-step analysis window. The plateau height (env1-6:
+~0.20-0.23m absolute) sits almost exactly inside `lift_env_cfg.py`'s own
+goal-command z-range (`pos_z=(0.25, 0.5)`, `ObservationsCfg`/`CommandsCfg`
+in `tasks/franka/lift_env_cfg.py:194`) — physically consistent with a
+genuine grasp-lift-carry-toward-goal, not a glitch. One measurement
+caveat found and NOT yet fixed (flagged to `BACKLOG.md`, did not block
+this verdict): `_detect_settle_step`'s 5e-5m/15-step tolerance is tuned
+for a motionless table-rested object and is too tight to ever match a
+*held* object's natural grasp-contact jitter, so all 4 lifted envs report
+`settle_step: -1` and fall back to the pre-fix free-fall-window-min
+baseline (~0.021m) — this fallback happened to be numerically close to
+the true table-rest height here (confirmed against the other 4 envs'
+own directly-detected resting_z, 0.0175-0.0209m), so it did not change
+the conclusion, but is not guaranteed to be harmless in general. Also
+notable: the other 4 envs (0,2,3,4) are NOT simple table-rest nulls —
+env0 is genuinely motionless at the table (0.0175m), but envs 2/3/4 sit
+statically at unusually elevated, non-table heights (0.109m, 0.112m,
+0.242m) with zero further gain — consistent with the die becoming
+wedged/stuck (on the gripper or robot geometry) rather than either
+resting on the table or being actively lifted; not investigated further
+since it doesn't change the seed's own qualifying discovery count.
+**Video-verification limitation, disclosed rather than papered over:**
+`franka_checkpoint_review.py`'s camera is fixed on env_0 (the one
+`FrankaLiftEnvCfg`/`ViewerCfg` docstring-documented framing, "so env_0's
+whole arm...is in frame"); in this specific run env_0 was one of the
+*non*-lifting envs, so the lifted envs (1,5,6,7) could not be directly
+visually confirmed via video this time — the positive verdict rests on
+the raw physics `root_pos_w` trajectory shape/timescale reasoning above,
+not a video observation. Watched both this video (confirms env_0's own
+null result: arm stays folded near the table the whole episode, matching
+its 0/8-contributing data) and `joint-die-d10-big` seed42's video
+(confirms genuine non-engagement: arm never descends toward the die,
+same "folded/elevated over table" pattern as Task 3's own d20 seed42
+null).
+
+**Bug found and fixed during this task (both re-run to confirm, per this
+repo's bug-handling discipline):**
+1. **d8-big seed42/seed123's synced eval artifacts predated the
+   episode-boundary/settle-window fix (commit 977a748), contradicting
+   this task's own dispatch brief.** Verified directly via GCS object
+   creation timestamps (seed42 json: 2026-07-19T02:27:47Z, seed123:
+   02:40:52Z) vs. the fix commit's authored time (02:46:03Z, `-0400` ->
+   UTC) — both predate the fix; only seed7's json (03:01:42Z) postdated
+   it. Re-ran eval only (no retraining needed — checkpoints already
+   existed in GCS) against the current fixed script for both seeds and
+   re-synced; both reconfirmed 0/8 under the corrected measurement (no
+   verdict changed, but the artifacts now match the schema/rigor of the
+   rest of the grid).
+2. **A genuine new cloud-infra bug: a SPOT preemption can truncate a
+   checkpoint file mid-write, leaving a 0-byte `.pt` on disk that a naive
+   "resume from highest iteration number" strategy would pick and fail
+   to load (`EOFError: Ran out of input`).** Hit once (d10-big seed42's
+   `model_1100.pt` truncated to 0 bytes by a preemption that landed
+   exactly at a `save_interval=50` checkpoint write). Fixed the resume
+   orchestration to skip any checkpoint under 100KB (a real checkpoint is
+   ~1.27MB) before selecting a resume candidate, falling back to the next
+   most-recent valid one (`model_1050.pt`); re-ran and confirmed the fix
+   resumes correctly. Not yet folded into a shared/reusable script (this
+   task's own one-off orchestration shell script) — worth carrying
+   forward into `docs/cloud/dispatch-checklist.md`'s known-infra-gaps
+   list if cloud SPOT training recurs (done, see that doc's own update).
+3. **Operational, not a bug: 3 genuine SPOT preemptions in ~3 hours**
+   (independently confirmed via `gcloud compute operations list`
+   `compute.instances.preempted` system events each time, not
+   manual/controller stops), a much higher rate than this project's
+   prior cloud-shakedown history (2 preemptions per run at most). After
+   the 3rd, switched the remaining 2 jobs (d12-big seed123/seed7) to
+   **on-demand** provisioning (still the same instance type/zone-search
+   logic, just `--provisioning-model` omitted) to stop losing wall-clock
+   to repeated snapshot-recover-resume cycles — a pragmatic operational
+   call, not a change to the plan's own methodology, well within the
+   cost cap given on-demand's ~2x SPOT rate on a small remaining job
+   count.
+
+**Cost: ~$1.9-2.0 total for this task** (6 training runs + 8 eval runs +
+1 re-eval pair), verified via real Cloud Billing Catalog API SKU rates
+(not the doc's older estimate) — SPOT $0.361216/hr, on-demand
+$0.706832/hr for g2-standard-4+1x L4 in `us-central1`/`us-east1`.
+Instance-hours: 3 SPOT segments (task35 0.64hr, task35b 1.75hr, task35c
+0.37hr = 2.76hr SPOT) + 1 on-demand segment (task35d 1.11hr) = compute
+≈$1.78, plus small boot-disk/snapshot storage overhead (≈$0.1-0.2,
+conservative upper bound). Well under the $12.04 remaining allotment for
+this task plus Tasks 5/6 (cumulative across Tasks 2/3/3.5 now
+≈$2.96+$2.0≈$4.96 of the original $15 cap). Full teardown verified via
+`scripts/check_cloud_state.sh`: zero instances/disks/snapshots remain.
+
+**Per this task's own Task 3.5 Step 7 instruction, this is reported as a
+clean numeric result only — whether/how Task 4 (distillation) proceeds
+given this grid (2 of 4 candidate shapes still fully null at 48mm parity,
+1 partial, d20 itself still gated on Task 3's own open ambiguity) is a
+controller decision, not made here.**

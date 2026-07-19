@@ -156,12 +156,12 @@ see the coverage boundary note below.)*
   lift+carry at the real 30.3mm target size (seed 123, 8/8).
 - [[unified-multi-die-specialist-distillation]] (started 2026-07-16) —
   per-shape specialist + distillation approach to a single policy that
-  grasps a commanded die among {d8, d10, d12, d20}. Zero working
-  specialists so far: d8/d10/d12 at real size 0/9, d20 size-DR retry
-  0/120 (ambiguous — its 48mm arm was itself a diluted sub-population).
-  Task 3.5 (48mm-parity check for d8/d10/d12, the task that resolves that
-  ambiguity) is in progress. Task 4 (distillation) is gated on this
-  task's result.
+  grasps a commanded die among {d8, d10, d12, d20}. Task 3.5's 48mm-parity
+  grid (complete 2026-07-19): d8/d10 fully null even at 48mm parity
+  (shape itself is the barrier), d12 shows one genuine partial positive
+  (1/3 seeds, 4/8 envs, same lucky seed as d20's own bisect discovery).
+  Task 4 (distillation) status is a controller decision, not yet made,
+  given this mixed grid plus d20's own still-open dilution ambiguity.
 
 ### Concepts
 

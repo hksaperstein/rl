@@ -125,6 +125,30 @@ grasp while d12/d20 partially succeed has no obvious a priori answer yet
 succeeds most decisively) and would need its own dedicated investigation
 if picked up later.
 
+**Correction (2026-07-19), after dedicated research:**
+`docs/superpowers/specs/research/2026-07-19-d8-d10-grasp-discoverability-literature.md`
+found two things this entry got wrong. (1) The "3+ failed fixes on the same
+mechanism" precedent cited above does not actually apply — direct source
+read of every d8/d10 env cfg class plus the shared PPO/reward config
+confirms only ONE recipe (unmodified reward function, unmodified PPO
+hyperparameters, no curriculum/demonstration/exploration-tuning) was ever
+tried against d8/d10, at two size regimes; that precedent's own origin is a
+different task/mechanism (AR4-era sphere-lift) and citing it here to justify
+deferral was a category error. (2) "No clean roundness/face-count story"
+was itself wrong: this project's own already-computed Wadell sphericity
+values (`tasks/franka/shape_observations.py`) are monotonic with discovery
+rate across all four shapes at the 48mm-parity anchor (d8 0.8896/0-of-3,
+d10 0.8959/0-of-3, d12 0.9286/1-of-3, d20 0.9524/2-of-3) — a real,
+previously-unnoticed correlation in this project's own data (n=4, not proof
+of a threshold, but a genuinely clean pattern, not "no story"). The research
+doc proposes a ranked, falsifiable next step (demonstration-augmented
+warm-start from this project's own already-proven scripted d8/d10 grasp in
+`scripts/dice_pick_demo.py`, ranked above a geometry-ordered checkpoint
+warm-start, ranked above exploration-noise retuning) — not yet spec'd or
+executed; this entry's own scope narrowing to d12/d20 for Task 4 stands
+unchanged, this is a correction to the *reasoning*, not a reversal of the
+Task 4 decision itself.
+
 **Before Task 4 itself: one gap-closing task, not in the original plan.**
 Task 3's own d20 size-DR retry (0/120) is confounded by population
 dilution (`random_choice=True` still assigns one size per env once,

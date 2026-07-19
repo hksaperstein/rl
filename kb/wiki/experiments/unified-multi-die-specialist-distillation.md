@@ -276,6 +276,21 @@ reported 4/8) and d20 (seed123 or seed7, both 8/8) as its two frozen
 specialists, per BACKLOG.md's "Task 4 scope decision" entry — an explicit
 controller-level decision already made there, not re-litigated here.
 
+**Why d8/d10 fail — dedicated research complete (2026-07-19):**
+`docs/superpowers/specs/research/2026-07-19-d8-d10-grasp-discoverability-literature.md`
+found the "no clean roundness/face-count story" framing above was wrong —
+this project's own already-computed Wadell sphericity values
+(`tasks/franka/shape_observations.py`) are monotonic with discovery rate
+across all four shapes at 48mm parity (d8 0.8896/0-of-3, d10 0.8959/0-of-3,
+d12 0.9286/1-of-3, d20 0.9524/2-of-3), and confirmed only one training
+recipe was ever tried against d8/d10 (the "3+ failed fixes" precedent cited
+in BACKLOG.md's deferral entry does not actually apply). Proposes a ranked,
+falsifiable next step — demonstration-augmented warm-start from this
+project's own already-proven scripted d8/d10 grasp
+(`scripts/dice_pick_demo.py`, [[dice-pick-demo]]) first, a geometry-ordered
+checkpoint warm-start second, exploration-noise retuning last — not yet
+spec'd or executed.
+
 ## Task 4: distillation pipeline built (2026-07-19) — pipeline only, no real training yet
 
 Built `scripts/distill_specialists.py` (thin CLI entry point) +

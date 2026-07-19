@@ -509,3 +509,20 @@ the from-scratch 0/8 as the real Stage SO verdict (would conflate two
 different questions and potentially block D1/D2 on a false negative), or
 redesigning Stage SO to skip the gate entirely (the gate's intent is
 sound, only the from-scratch execution of it was confounded).
+
+**Implemented and run, 2026-07-19 — see
+`kb/wiki/experiments/target-selection-clutter.md`'s "Task 4 corrected"
+entry for the full result:** the new script
+(`scripts/extend_checkpoint_observation_dims.py`) extends the checkpoint
+exactly as predicted, and a `--verify` forward-pass check (run twice
+against the real `model_2998.pt` — once locally on the Pi before any
+cloud spend, once again on the cloud instance right before training)
+confirmed byte-for-bit-identical (0.0 max abs diff) output at Stage SO's
+zero condition, with a negative control confirming the check isn't
+vacuous. Retrained 300 iterations (bounded budget, absolute target 3298 =
+2998 preserved + 300 new) — Stage SO's gate now PASSES: d12 8/8, d20 7/8.
+Confirms this entry's own predicted explanation was correct: the
+scene/observation-schema wiring was never broken, only the original
+from-scratch attempt's pre-existing cold-start difficulty made it look
+that way. Cost ~$0.39 (cloud), full teardown verified. Stage D1/D2 (plan
+Tasks 5/6) are unblocked.

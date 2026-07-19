@@ -1,10 +1,13 @@
 # Target-selection-among-distractor-dice experiment (2026-07-19 -> in progress)
 
-**Status: Stage SO internal sanity gate FAILED (0/8 both shapes) — plan
-execution STOPPED per its own pre-registered gate discipline, Stage
-D1/D2 not started.** This is an interim entry (Task 4 of the plan only);
-the closing verdict lands at the plan's Task 7 once the controller
-decides how to proceed.
+**Status: Stage SO internal sanity gate PASSED (2026-07-19, corrected
+result) — d12 8/8, d20 7/8, both clearing the ≥7/8 gate.** The
+originally-reported 0/8-both-shapes from-scratch result below was
+confounded (see "Task 4 corrected" section) and has been superseded by a
+partial-weight warm-started retrain that isolates the question the gate
+was actually meant to answer. Stage D1/D2 (plan Tasks 5/6) can now
+proceed on this corrected result. This is still an interim entry (Task 4
+of the plan only); the closing verdict lands at the plan's Task 7.
 
 **Goal:** extend [[unified-multi-die-specialist-distillation]]'s finished
 single-object d12/d20 policy (`model_2998.pt`, 8/8 both shapes with
@@ -33,7 +36,7 @@ USD scale, and no cross-entity overlap (min pairwise separation 95mm vs a
 60mm safety floor) — no bug found in the scene/observation code itself.
 Commits `82a44b8`, `a08335a`, `9ce3a6d`.
 
-## Task 4: Stage SO trained fresh — sanity gate FAILED, 0/8 both shapes (2026-07-19)
+## Task 4 (original, CONFOUNDED — superseded below): Stage SO trained fresh, 0/8 both shapes (2026-07-19)
 
 Trained `FrankaDieLiftJointD12D20TargetSelectionSOEnvCfg` (0 active
 distractors — both distractor slots present but PARKED off-workspace at
@@ -103,18 +106,115 @@ architectural response (e.g. a partial/best-effort weight-transfer warm
 start into the 43-dim network from `model_2998.pt`'s 41-dim weights) has
 been decided or implemented.
 
+## Task 4 corrected: partial-weight warm start from `model_2998.pt` — sanity gate PASSED, d12 8/8 / d20 7/8 (2026-07-19)
+
+Resolves the "Open, not yet decided" question below in favor of option
+(a). Per `BACKLOG.md`'s "Clutter experiment Stage SO gate: confounded, fix
+is a partial-weight warm start" entry: `distractor_distance_summary` (the
+2 new obs dims) is a hard-zeroed *constant* at Stage SO
+(`active_distractor_count=0`), so a network whose first-layer weight
+matrix is extended from 41->43 input columns by copying the 41 existing
+columns unchanged and randomly initializing only the 2 new ones is
+mathematically guaranteed to produce IDENTICAL output to `model_2998.pt`
+at Stage SO specifically — a lossless, verifiable warm start that
+isolates the schema-extension question from the separate from-scratch
+cold-start difficulty the original Task 4 attempt (above) got confounded
+with.
+
+**Mechanism, new script:** `scripts/extend_checkpoint_observation_dims.py`
+(pure `torch`, no Isaac Sim/rsl_rl dependency required for the surgery
+itself — only needs a real interpreter with `torch` installed, ran fine
+on the Pi host itself with a throwaway CPU-only venv). Finds the real
+`actor.0`/`critic.0` first-Linear-layer keys by pattern (confirmed live
+against a real `model_2998.pt`: `actor.0.weight`/`critic.0.weight` are
+both `(256, 41)`, matching `tasks/franka/agents/rsl_rl_ppo_cfg.py`'s
+`[256,128,64]` hidden dims), extends each to `(256, 43)` by appending 2
+columns freshly initialized via a throwaway `nn.Linear(43, 256)`'s own
+default `kaiming_uniform_` init (so the new columns' scale matches what a
+real from-scratch layer of the new width would get), and writes the
+output in `distillation.py:save_student_checkpoint`'s own
+`{"model_state_dict", "optimizer_state_dict": {}, "iter", "infos"}`
+format (the pre-existing "policy-only checkpoint" convention
+`--policy_only_checkpoint` was built for) — `iter` defaults to preserving
+the source's real `2998`, so `train_franka.py --max_iterations` must be
+set as an ABSOLUTE target (`2998 + budget`), per that script's own
+convention.
+
+**Verification BEFORE any training spend (per this task's own
+requirement):** `--verify` builds the original 41-dim and extended 43-dim
+networks as plain hand-rolled `nn.Sequential` MLPs (matching rsl_rl's own
+Linear/ELU layout, no rsl_rl import needed), feeds the extended network a
+batch of random 43-dim observations with the last 2 columns zeroed (the
+real Stage-SO condition) and the original network the same batch's first
+41 columns, and asserts the outputs match. Run twice against the REAL
+`model_2998.pt` (once locally on the Pi with a throwaway CPU venv before
+any cloud spend, once again on the cloud instance immediately before
+training) — **both passed at exactly 0.0 max abs diff for both actor and
+critic branches**, i.e. bit-for-bit identical, not just "within
+tolerance." A negative-control check (feeding nonzero values into the new
+columns instead of zero) produced a large 0.53 diff, confirming the
+verify check is a real discriminating test, not a vacuous pass — the
+"always-zero, so it's inert" reasoning holds exactly as predicted, no
+hidden bias/normalization-layer wrinkle.
+
+**Retrain:** `train_franka.py --variant joint-die-target-selection-so
+--checkpoint <extended checkpoint> --policy_only_checkpoint
+--max_iterations 3298` (2998 preserved + 300 new iterations — a small
+bounded budget, not the original 1500, since the policy is warm-started
+from already-8/8 behavior and needs no exploration/discovery, only to
+confirm the new wiring doesn't perturb it once the 2 new dims start
+carrying real distractor-distance signal in later stages). Cloud
+(`g2-standard-4`+L4 SPOT, desktop busy with a concurrent d8/d10
+workstream at dispatch time — confirmed live via
+`scripts/check_cloud_state.sh` showing an active `extract_demo_trajectory.py`
+process before dispatch). `Episode_Reward/lifting_object` was already
+0.40 at the very first logged iteration (vs. the original attempt's
+~0.12 permanent plateau) and reached 12.37 by the run's end — confirming
+the theoretical prediction directly, not just via the final eval gate.
+
+Instrumented eval (`franka_checkpoint_review.py --eval_target_shape
+{d12,d20}`, num_envs=8, full 3-die topology, both distractors parked,
+checkpoint `model_3297.pt`):
+
+| shape | envs_with_sustained_lift | gate (>=7/8) | max_height_gain (typical) |
+|-------|---------------------------|--------------|----------------------------|
+| d12   | **8/8**                   | PASS         | ~376-439mm |
+| d20   | **7/8**                   | PASS         | ~363-401mm (1 env: 85mm, below sustained threshold) |
+
+Video + per-step height data both confirm real sustained lifts (213-217
+consecutive post-settle steps above the 40mm threshold out of ~239
+analysis-window steps, i.e. lifted for the large majority of each
+episode) — not a brief height blip of the kind Experiment 16 warned
+about.
+
+Checkpoint (extended, pre-training):
+`gs://rl-manipulation-hks-runs/target-selection-clutter/joint-die-target-selection-so-warmstart-checkpoint/model_2998_43dim.pt`.
+Trained run:
+`gs://rl-manipulation-hks-runs/target-selection-clutter-stageso-warmstart/joint-die-target-selection-so/seed42/2026-07-19_22-52-41/`
+(final checkpoint `model_3297.pt`). Eval artifacts:
+`gs://rl-manipulation-hks-runs/target-selection-clutter/eval-artifacts/joint-die-target-selection-so-warmstart/`.
+Cost: ~$0.39 (cloud, ~60min instance existence — cheaper than the
+original $0.44/~70min attempt despite the extra weight-surgery step, since
+300 iterations trains much faster than 1500), full teardown verified
+(`scripts/check_cloud_state.sh` clean, zero instances/disks/snapshots).
+Combined Task 4 total (both attempts): ~$0.83 of the plan's $5 cap for
+Tasks 4-6 — ~$4.17 remains for Tasks 5/6.
+
+**Verdict: Stage SO's gate now PASSES for both shapes.** This confirms
+the "confounded by pre-existing from-scratch cold-start difficulty"
+explanation from the original Task 4 attempt (above) was correct — the
+scene/observation-schema wiring itself was never broken, exactly as the
+"no code bug found on investigation" note above already suspected. Stage
+D1/D2 (plan Tasks 5/6) are unblocked to proceed from this corrected
+checkpoint.
+
 ## Open, not yet decided
 
-Whether to: (a) re-run Stage SO with some form of warm start from
-`model_2998.pt` despite the dimensionality mismatch (e.g. partial weight
-transfer for the shared 41 input dims, random-init the 2 new dims) to
-separate the "from-scratch difficulty" confound from the "schema
-extension" question the gate was meant to isolate; (b) accept the
-from-scratch difficulty as the explanation and treat this as a
-non-finding about clutter/target-selection specifically; or (c) some
-other structurally different approach. Not decided in this task — see
-the plan's Task 4 Step 4 instruction ("STOP and report to the
-controller").
+Was: whether to warm-start Stage SO from `model_2998.pt` despite the
+dimensionality mismatch, accept the from-scratch difficulty as the
+explanation, or find some other approach. **Decided and executed above
+(option (a), partial-weight warm start) — nothing open on this question
+anymore.**
 
 ## Gripper actuator low-pass-filtering check (2026-07-19) — ruled out
 

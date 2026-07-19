@@ -124,6 +124,21 @@ Reading those instructions together, not narrowly:
   message), since asking is especially pointless when nobody is present
   to answer (see that script's own comments for the applied change).
 
+- **2026-07-19** — after reporting Task 3.5's mixed 4-shape grid (d8/d10
+  fully null, d12 a partial positive, d20 still ambiguous) and ending the
+  summary by asking whether to dig into the null shapes myself or let the
+  user weigh in on direction first: *"do not under deliver engineers
+  figure it out."* Seventh reinforcement of the same mandate, sharpest
+  yet — extends "decide, don't ask" explicitly to research-direction
+  calls after an ambiguous result, not just implementation forks. A
+  finished experiment's report ending in a question is the same failure
+  mode as pausing between experiments (see the 2026-07-07 entry above),
+  just dressed up as collaborative. Applied in the moment: narrowed
+  Task 4's specialist set to the two shapes with real signal, logged
+  the deferred shapes as an open-not-blocking question, identified and
+  dispatched the one gap-closing task standing before the next step —
+  all in the same turn, not proposed and held for approval.
+
 ## What still gets stopped on and flagged
 
 None of the instructions above were about money, other people's

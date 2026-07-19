@@ -13,6 +13,12 @@ action space.
     # absolute --max_iterations target (not +max_iterations more iterations on top of it):
     /home/saps/IsaacLab/isaaclab.sh -p scripts/train_franka.py --num_envs 4096 --max_iterations 5000 \
         --checkpoint logs/train_franka/2026-07-09_22-05-51/model_800.pt
+    # RL-fine-tune a distilled (BC) checkpoint with no meaningful optimizer state - --policy_only_checkpoint
+    # skips restoring PPO optimizer state (Task 6, docs/superpowers/plans/2026-07-16-unified-multi-die-
+    # specialist-distillation.md):
+    /home/saps/IsaacLab/isaaclab.sh -p scripts/train_franka.py --variant joint-die-d12-d20-mixed \
+        --num_envs 4096 --checkpoint distilled-d12-d20/model_1499.pt --policy_only_checkpoint \
+        --max_iterations 2999
 """
 
 import argparse
@@ -37,6 +43,25 @@ parser.add_argument(
         "carry over - its previous TensorBoard event file is not appended to)."
     ),
 )
+parser.add_argument(
+    "--policy_only_checkpoint",
+    action="store_true",
+    default=False,
+    help=(
+        "Pass load_optimizer=False to rsl_rl.OnPolicyRunner.load() instead of the default True. Needed for "
+        "--checkpoint paths that carry no meaningful PPO optimizer state - e.g. "
+        "scripts/distill_specialists.py's save_student_checkpoint() output (Task 6 of "
+        "docs/superpowers/plans/2026-07-16-unified-multi-die-specialist-distillation.md fine-tunes a "
+        "distilled/BC checkpoint via fresh PPO), which intentionally writes an EMPTY optimizer_state_dict "
+        "since the distillation run's own BC optimizer's Adam moments have nothing to do with PPO's. Without "
+        "this flag, runner.load()'s default load_optimizer=True unconditionally calls "
+        "self.alg.optimizer.load_state_dict({}) and crashes with a KeyError - the same failure mode already "
+        "fixed for the eval-only scripts/franka_checkpoint_review.py (see its own load_optimizer=False "
+        "comment). Leave unset (default False->load_optimizer=True) for a genuine same-run PPO resume (e.g. "
+        "SPOT-preemption recovery), where restoring Adam's own momentum/variance state is the whole point of "
+        "resuming instead of restarting."
+    ),
+)
 parser.add_argument("--video", action="store_true", default=False, help="Record videos periodically during training.")
 parser.add_argument("--video_length", type=int, default=200, help="Length of each recorded video (steps).")
 parser.add_argument("--video_interval", type=int, default=2000, help="Steps between recorded videos.")
@@ -58,6 +83,7 @@ parser.add_argument(
         "joint-die-d8-big",
         "joint-die-d10-big",
         "joint-die-d12-big",
+        "joint-die-d12-d20-mixed",
     ],
     default="ik-cube",
     help=(
@@ -98,7 +124,12 @@ parser.add_argument(
         "which does not transfer across shapes), single undiluted 48mm population per shape/seed, mass pinned "
         "at 0.216kg - directly comparable to the asset-bisect's own cube (3/3) and d20 (1/3) 48mm baselines "
         "(docs/superpowers/plans/2026-07-16-unified-multi-die-specialist-distillation.md, "
-        ".superpowers/sdd/task-3.5-brief.md)."
+        ".superpowers/sdd/task-3.5-brief.md). "
+        "joint-die-d12-d20-mixed: Task 6 RL fine-tune env - the same ONE-env, deterministic-round-robin "
+        "d12/d20 mixed-population env Task 5's distillation training ran against "
+        "(FrankaDieLiftJointD12D20MixedEnvCfg, tasks/franka/dice_lift_joint_env_cfg.py), meant to be "
+        "--checkpoint-resumed from Task 5's distilled student weights via --policy_only_checkpoint "
+        "(docs/superpowers/plans/2026-07-16-unified-multi-die-specialist-distillation.md Task 6)."
     ),
 )
 parser.add_argument(
@@ -198,6 +229,10 @@ def main() -> None:
         from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftJointD12BigEnvCfg
 
         env_cfg = FrankaDieLiftJointD12BigEnvCfg()
+    elif args_cli.variant == "joint-die-d12-d20-mixed":
+        from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftJointD12D20MixedEnvCfg
+
+        env_cfg = FrankaDieLiftJointD12D20MixedEnvCfg()
     else:
         env_cfg = FrankaLiftEnvCfg()
     env_cfg.scene.num_envs = args_cli.num_envs
@@ -229,6 +264,7 @@ def main() -> None:
         "joint-die-d8-big": "_jointdied8big",
         "joint-die-d10-big": "_jointdied10big",
         "joint-die-d12-big": "_jointdied12big",
+        "joint-die-d12-d20-mixed": "_jointdied12d20mixed",
     }[args_cli.variant]
     log_dir = os.path.join(
         LOG_ROOT + _log_suffix,
@@ -259,7 +295,7 @@ def main() -> None:
 
     num_learning_iterations = agent_cfg.max_iterations
     if args_cli.checkpoint is not None:
-        runner.load(args_cli.checkpoint)
+        runner.load(args_cli.checkpoint, load_optimizer=not args_cli.policy_only_checkpoint)
         resumed_at = runner.current_learning_iteration
         num_learning_iterations = max(agent_cfg.max_iterations - resumed_at, 0)
         print(

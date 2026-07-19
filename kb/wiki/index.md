@@ -160,8 +160,11 @@ see the coverage boundary note below.)*
   grid (complete 2026-07-19): d8/d10 fully null even at 48mm parity
   (shape itself is the barrier), d12 shows one genuine partial positive
   (1/3 seeds, 4/8 envs, same lucky seed as d20's own bisect discovery).
-  Task 4 (distillation) status is a controller decision, not yet made,
-  given this mixed grid plus d20's own still-open dilution ambiguity.
+  d20's own dilution ambiguity closed 2026-07-19 (d20-big-geom gate task):
+  undiluted-48mm-with-geometry-conditioning retrain scored 2/3 seeds at
+  full 8/8, stronger than expected. Task 4 (distillation) scoped to d12 +
+  d20 only (d8/d10 deferred per BACKLOG.md), proceeding with those two
+  frozen specialists.
 
 ### Concepts
 

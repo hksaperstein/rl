@@ -149,3 +149,39 @@ Task 4 proceeds once this closes, using d12 (`seed123`,
 4/8) and the new d20-48mm-with-geometry checkpoint as its two frozen
 specialists — a real, if narrower-than-originally-planned, test of the
 GiGSL distillation mechanism itself.
+
+## `franka_checkpoint_review.py`'s settle-detection flatness-window
+heuristic may have undercounted true positives in already-reported
+d8-big/d10-big/d12-big numbers (2026-07-19)
+
+Found while executing the d20-big-geom gate task above: the settle-
+detection mechanism committed in `977a748` (a forward scan for the first
+15-consecutive-step window under a fixed range tolerance, used to find
+`resting_z` and separate the pre-grasp free-fall from the post-grasp
+analysis window) is fundamentally unsuited to this experiment's fast,
+decisive-grasp trajectories - it can silently lock onto a much later,
+fully-static held plateau instead of the true early table-rest phase,
+with no warning printed (a window *was* found, just the wrong one),
+producing false-negative "no sustained lift" verdicts. This was directly
+confirmed and fixed for the d20-big-geom gate task's own 3 seeds (see
+`ROADMAP.md`'s "d20-big-geom gate task" entry, 2026-07-19, for the full
+mechanism and fix - replaced with a MIN-over-a-fixed-early-window
+approach in `scripts/franka_checkpoint_review.py`).
+
+**Not chosen here: re-auditing Task 3.5's own already-reported
+d8-big/d10-big/d12-big grid (d8 0/3, d10 0/3, d12 1/3-partial) against the
+fixed script.** Out of this task's explicit scope (dispatch brief said do
+not attempt d8/d10, and this task's own remit was the d20 retrain, not a
+Task 3.5 re-audit). Flagged here as a real, non-trivial risk rather than
+silently left alone: the old flatness-window approach was never observed
+to work reliably for ANY env cfg checked so far in this whole experiment
+(it failed for d20-big-geom in two successive ways, at both the original
+5e-5m tolerance and a first-attempt-loosened 2e-3m tolerance) - it is
+plausible, not just theoretical, that some of d8-big/d10-big's reported
+0/8 nulls and/or d12-big's reported 4/8 (not 8/8) partial are themselves
+undercounts of the same kind. If d8/d10 are ever picked back up (per this
+same file's "narrow to d12+d20, defer d8/d10" entry above), or if Task 4's
+own results ever hinge on the exact d12-big number, re-run
+`franka_checkpoint_review.py` (now fixed) against those checkpoints'
+already-saved raw `.npy`/GCS artifacts before trusting the old numbers
+further.

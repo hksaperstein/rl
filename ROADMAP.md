@@ -3250,3 +3250,116 @@ clean numeric result only — whether/how Task 4 (distillation) proceeds
 given this grid (2 of 4 candidate shapes still fully null at 48mm parity,
 1 partial, d20 itself still gated on Task 3's own open ambiguity) is a
 controller decision, not made here.**
+
+## d20-big-geom gate task: undiluted-48mm d20 retrain closes Task 3's
+dilution ambiguity — result STRONGER than the falsifiable expectation
+(2026-07-19)
+
+Closes the open ambiguity flagged in Task 3's "0/120" entry above and in
+`BACKLOG.md`'s "Task 4 scope decision" entry (2026-07-19): Task 3's own
+d20 size-DR retry mixed 5 sizes at once (`random_choice=True`), diluting
+the 48mm sub-population ~5x, so it never actually tested "d20 at a single
+undiluted 48mm population with Task 1's geometry-descriptor conditioning."
+This task does exactly that, mirroring Task 3.5's own d8/d10/d12-big
+design, on GCP cloud (SPOT g2-standard-4+L4, `us-central1-a`, zero
+preemptions this run), 3 seeds (42/123/7), 1500 iterations each,
+`num_envs=4096` training / 8 eval envs, headless per the standing cloud
+exception.
+
+**No new env cfg class or `--variant` was added.** Direct source read
+(`tasks/franka/dice_lift_joint_env_cfg.py`, `tasks/franka/lift_env_cfg.py`)
+confirmed the existing `FrankaDieLiftJointBigEnvCfg`/`--variant
+joint-die-big` (the asset-bisect rung-2 class, already wired into
+`train_franka.py`/`franka_checkpoint_review.py`/`sync_run_to_gcs.py`)
+already produces exactly the target config: Task 1's
+`shape_class`/`geometry_descriptor` `ObsTerm`s were added unconditionally
+to the shared base `ObservationsCfg.PolicyCfg` by commit `ec32bb0`
+(2026-07-16), and `die_shape_class = "d20"` is set explicitly in
+`FrankaDieLiftJointEnvCfg.__post_init__` (inherited unchanged through
+`FrankaDieLiftJointHeavyEnvCfg` and `FrankaDieLiftJointBigEnvCfg`, neither
+of which override it). The BACKLOG entry's caveat was about the old
+*checkpoint* (trained 2026-07-12, before Task 1's code existed) predating
+the schema, not about the env cfg *class* itself lacking it — retraining
+today with the unchanged `joint-die-big` variant was sufficient to produce
+a schema-compatible checkpoint. Avoids a functionally-duplicate
+`FrankaDieLiftJointD20BigGeomEnvCfg` class that would have been
+byte-for-byte behaviorally identical to the existing one.
+
+**Per-seed discovery grid (envs with sustained lift / 8 envs per seed),
+independently re-derived from raw `.npy`, not the summary JSON alone:**
+
+| seed | sustained-lift envs |
+|------|---------------------|
+| 42   | 0/8                 |
+| 123  | 8/8                 |
+| 7    | 8/8                 |
+
+**2/3 seeds fully discovering (8/8 within-seed), not the ~1/3 (likely
+seed123 only) the task's own falsifiable expectation predicted going in.**
+Reported exactly as observed, per this task's own explicit instruction not
+to adjust the framing to match the a priori expectation. This is a
+materially STRONGER result than the asset-bisect ladder's original
+d20-at-48mm baseline (1/3 seeds, seed123, full 8/8) and than Task 3.5's
+own d12-big echo (1/3 seeds, seed123, 4/8 partial) — supports "population
+dilution was Task 3's real confound" more decisively than the falsified
+weaker form of that hypothesis: not only does undiluted-48mm d20 recover
+discovery, it recovers it in *more* seeds and at *higher* per-seed
+completeness than the pre-Task-1 baseline it's being compared against,
+consistent with (though not strong enough evidence alone to conclude)
+Task 1's geometry-descriptor conditioning itself helping rather than
+merely being neutral.
+
+**A genuine, serious measurement bug was found and fixed during this
+task's own verification step** (per this repo's bug-handling discipline
+and verification standard — raw-trajectory re-derivation is not optional
+for positive results). The first eval pass (using
+`franka_checkpoint_review.py` unchanged from `977a748`) reported seed123 at
+only 1/8 and seed7 at 0/8 — direct inspection of the raw per-step `.npy`
+found this was **wrong**: every env in both seeds showed a clean, smooth,
+continuous spawn(0.052m)→table-rest(0.019-0.021m)→lift-to-goal-plateau
+(0.26-0.46m, inside the 0.25-0.5m goal command z-range) trajectory, held
+stable for the rest of the episode — a textbook successful lift+carry,
+visually confirmed via the eval video too (arm reaches down to the table
+by ~step 20, is fully extended upward and holding by ~step 90-150,
+matching the height data). The bug: `_detect_settle_step`'s
+flatness-window heuristic (a forward scan for the first 15-consecutive-
+step window under a fixed range tolerance) is fundamentally unsuited to
+this env cfg's fast, decisive grasps — the true table-rest phase is too
+brief/noisy to reliably satisfy any single global tolerance (measured
+window-range floor during genuine rest: ~0.0010-0.0024m across 24
+env/seed combinations, both well above the original 5e-5m tolerance AND,
+for some envs, above a first-attempt loosened 2e-3m), so the scan silently
+walked past the true rest phase and locked onto a much later, fully-static
+held plateau instead — with no warning printed, since a window *was*
+found, just the wrong one. **Fixed by replacing the flatness-window
+heuristic entirely** with a simpler, more robust, physically-grounded MIN
+over a fixed early window (steps 10-45) — a grasp-driven ascent only moves
+the object *up* from its true rest height, so MIN is correct regardless of
+where within the window the low point falls. Verified directly: this
+reproduces a clean, consistent ~0.019m resting_z for every genuinely-
+resting env across all 3 seeds (vs. the flatness approach's spurious
+0.26-0.46m readings for the same envs). See
+`scripts/franka_checkpoint_review.py`'s own updated `EARLY_SETTLE_START`/
+`EARLY_SETTLE_END` comment for the full derivation. **Open follow-up,
+flagged to `BACKLOG.md`:** this same flatness-window mechanism (in one of
+its two forms) was used, unquestioned, for Task 3.5's own already-reported
+d8-big/d10-big/d12-big grid — those numbers were not re-audited here (out
+of this task's scope) but may also undercount true positives, since the
+old approach was never reliable for any env cfg checked so far, not just
+this one.
+
+**Checkpoints for Task 4** (both fully valid, either usable as the frozen
+d20 specialist teacher — seed123 kept as the nominal default per this
+project's own recurring "seed123 is the lucky seed" convention, seed7 as
+an equally-valid alternate given identical 8/8):
+- `gs://rl-manipulation-hks-runs/unified-multi-die-specialists/joint-die-big/seed123/2026-07-19_12-46-42/model_1499.pt`
+- `gs://rl-manipulation-hks-runs/unified-multi-die-specialists/joint-die-big/seed7/2026-07-19_13-17-02/model_1499.pt`
+
+Eval artifacts (video/heights json/npy, corrected-measurement versions)
+synced to
+`gs://rl-manipulation-hks-runs/unified-multi-die-specialists/eval-artifacts/joint-die-big/seed{42,123,7}/`.
+
+**Cost: ~$0.91** (2.39hr instance uptime, SPOT g2-standard-4+L4, zero
+preemptions, $0.361/hr compute + ~$0.05 boot-disk overhead), well under
+the ~$12.04 remaining allotment. Full teardown verified via
+`scripts/check_cloud_state.sh`: zero instances/disks/snapshots remain.

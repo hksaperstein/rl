@@ -208,23 +208,62 @@ os.makedirs(VIDEO_DIR, exist_ok=True)
 LIFT_HEIGHT_THRESHOLD_M = 0.04
 # 0.5s sustained at decimation=2, sim.dt=0.01 -> 50 control steps/s.
 SUSTAINED_LIFT_STEPS = 25
-# FALLBACK ONLY (Task 3.5 finding, see _detect_settle_step below): the
-# object's real spawn-to-table free-fall does NOT reliably finish settling
-# within a short fixed window - independently measured at ~24-25 steps for
-# the d8-big 48mm-parity variant, well past this constant. Used only if
-# _detect_settle_step can't find a genuine stable point in the trajectory
-# (e.g. the object never comes to rest at all).
-SETTLE_WINDOW_STEPS = 10
-# Convergence-detection params for _detect_settle_step: a window of
-# SETTLE_STABLE_WINDOW consecutive steps whose full range (max-min) is
-# under SETTLE_STABLE_EPS_M counts as "at rest". The range-over-a-window
-# test (not a single-step diff test) is deliberate - a single-step diff
-# threshold is fooled by a slow, smoothly-decaying free-fall tail (each
-# individual step's delta is tiny even while the trajectory is still
-# drifting substantially over many steps combined), reproduced directly
-# against Task 3.5's own d8-big raw data during this fix.
-SETTLE_STABLE_WINDOW = 15
-SETTLE_STABLE_EPS_M = 5e-5
+# THIRD AND FOURTH settle-detection bugs, found and fixed during the
+# d20-big-geom undiluted-48mm gate task (2026-07-19, closing Task 3's
+# dilution ambiguity). The prior mechanism (977a748: a forward scan for the
+# first window of SETTLE_STABLE_WINDOW=15 consecutive steps with range <
+# SETTLE_STABLE_EPS_M=5e-5m) turned out to be fundamentally fragile for
+# this env cfg's fast, decisive grasps, in two successive ways found by
+# direct per-step inspection of joint-die-big seed42/123/7's raw .npy:
+# (a) 5e-5m (0.05mm) is tighter than genuine PhysX table-rest jitter ever
+# gets here (measured 15-step window-range floor during true table-rest:
+# ~0.0010-0.0024m across 24 env/seed combinations checked - 20-45x above
+# 5e-5m, not a one-off). The forward scan then walked straight past the
+# true (brief, ~10-20-step) table-rest phase and silently locked onto a
+# much LATER, fully-static, arm-stopped-moving plateau near the episode's
+# end instead (settle_step values of 70-230, not ~15-25) - with NO warning
+# printed, since a window WAS found (just the wrong one), unlike the
+# already-flagged settle_step=-1 fallback case.
+# (b) Loosening the tolerance to 2e-3m (2mm) - chosen as a first attempt
+# to sit above the observed rest-jitter ceiling - was STILL insufficient:
+# a few envs' true-rest window-range floor measured as high as 0.0024m,
+# marginally above 2e-3m, so the same silent-wrong-plateau failure still
+# fired for a subset of envs. Root problem: a single global flatness
+# epsilon cannot cleanly separate "resting" from "slow asymptotic approach
+# to a held plateau" for this trajectory shape - the window-range shrinks
+# smoothly as the object's carried position converges, so real motion and
+# real rest overlap in range at some point along the curve regardless of
+# where the epsilon is set.
+# FIX: abandoned the flatness-window heuristic entirely in favor of a
+# simpler, more robust, physically-grounded MIN over a fixed early window
+# (EARLY_SETTLE_START:EARLY_SETTLE_END below) - the true table-rest height
+# is *by construction* the global minimum of the trajectory in the window
+# after free-fall begins and before any grasp-driven ascent could
+# plausibly complete (ascent only moves the object UP from its rest
+# height, never below it, so MIN is insensitive to exactly where within
+# the window the low point falls, unlike a flatness test). Window bounds
+# were set from direct measurement across all 24 env/seed combinations in
+# this task's own data: genuine table-rest is reliably present within
+# steps ~10-26 (spawn-to-table free-fall always completes by ~step 10,
+# matching this project's own established ~24-25-step worst-case settle
+# time with margin), and the earliest observed grasp-driven ascent onset
+# is ~step 24-30 - EARLY_SETTLE_END=45 sits comfortably past the former
+# and doesn't need to sit before the latter (MIN over a window that
+# partially overlaps early ascent still correctly reports the window's
+# true minimum). Verified directly: this MIN-based approach reproduces a
+# clean, consistent ~0.0188-0.0192m resting_z for every genuinely-resting
+# env across all 3 seeds (vs. the flatness approach's spurious
+# 0.26-0.46m readings for the same envs) and correctly reads 0/8, 8/8,
+# 8/8 for this task's seed 42/123/7 - see
+# kb/wiki/experiments/unified-multi-die-specialist-distillation.md's
+# "d20-big-geom" entry for the full raw-trajectory numbers this was
+# derived from. Not re-validated against Task 3.5's own already-reported
+# d8-big/d10-big/d12-big numbers (out of this task's scope - flagged to
+# BACKLOG.md as a follow-up: those may also undercount true positives,
+# since the old flatness approach was never reliable for ANY env cfg
+# checked so far, not just this one).
+EARLY_SETTLE_START = 10
+EARLY_SETTLE_END = 45
 
 
 def _max_consecutive_true(mask: list[bool]) -> int:
@@ -234,26 +273,6 @@ def _max_consecutive_true(mask: list[bool]) -> int:
         run = run + 1 if v else 0
         best = max(best, run)
     return best
-
-
-def _detect_settle_step(traj: torch.Tensor, window: int, eps_m: float) -> int:
-    """Return the first index i such that traj[i:i+window] has a full range
-    (max-min) under eps_m - a proxy for "the object has finished free-falling
-    and settled", found empirically to require far more than a short fixed
-    window in Task 3.5's own d8-big-48mm raw data (settle completed ~step 25,
-    not the previous SETTLE_WINDOW_STEPS=10). Returns -1 if no such window
-    exists anywhere in the trajectory (caller falls back to the old
-    fixed-window min() behavior and prints a loud warning - this should be
-    rare and worth investigating if it ever fires).
-    """
-    n = traj.shape[0]
-    if n < window:
-        return -1
-    for i in range(n - window + 1):
-        w = traj[i : i + window]
-        if (w.max() - w.min()) < eps_m:
-            return i
-    return -1
 
 
 def main() -> None:
@@ -378,21 +397,21 @@ def main() -> None:
     # `analysis_end = min(episode_length_steps, video_length)` (250) included
     # this one contaminated sample. Fixed by subtracting 1.
     #
-    # (b) SETTLE WINDOW TOO SHORT: SETTLE_WINDOW_STEPS=10 (the old
-    # min()-over-a-short-fixed-window) assumed the object starts "already
-    # resting" per its comment, but real trajectories (own d8-big data) show
-    # a genuine ~4.3cm spawn-to-table free-fall that does not finish
-    # settling until ~step 25 - a full 15 steps past the old window. Using
-    # the old window's premature "resting_z" made a mid-fall reading look
-    # like the rest state, so a later, still-in-flight sample could log a
-    # spurious gain. Fixed via _detect_settle_step (window-range convergence
-    # test, not a single-step-diff test - see its own docstring for why).
-    # Derived stats (gain/lifted_mask/sustained_lift/max_z) are now computed
-    # ONLY over the POST-settle portion of the trajectory - the pre-settle
-    # free-fall segment is real motion but not policy-driven, and leaving it
-    # in the max_z/gain window produces false positives (the object's own
-    # spawn height, ~4cm above its rest height, otherwise reads as a "gain"
-    # in its own right, independent of anything the policy does).
+    # (b) SETTLE WINDOW TOO SHORT, then (c)/(d) two further flatness-
+    # detection failures - see EARLY_SETTLE_START/EARLY_SETTLE_END's own
+    # docstring above for the full history. Current approach: resting_z is
+    # the MIN of each env's own trajectory over a fixed early window
+    # (EARLY_SETTLE_START:EARLY_SETTLE_END) - physically grounded (a
+    # grasp-driven ascent only moves the object UP from its true rest
+    # height, so MIN is correct regardless of where within the window the
+    # low point falls) and empirically verified against this task's own
+    # 24 env/seed raw trajectories. Derived stats (gain/lifted_mask/
+    # sustained_lift/max_z) are computed from EARLY_SETTLE_START onward -
+    # the pre-EARLY_SETTLE_START free-fall segment is real motion but not
+    # policy-driven, and leaving it in the max_z/gain window produces false
+    # positives (the object's own spawn height, ~4cm above its rest height,
+    # otherwise reads as a "gain" in its own right, independent of anything
+    # the policy does).
     episode_length_steps = int(env.unwrapped.max_episode_length)
     analysis_end = min(episode_length_steps - 1, args_cli.video_length)
     if analysis_end < args_cli.video_length:
@@ -403,30 +422,10 @@ def main() -> None:
         )
     analysis_history = height_history[:analysis_end]
 
-    resting_z = torch.zeros(num_envs)
-    settle_step = [-1] * num_envs
-    for env_idx in range(num_envs):
-        idx = _detect_settle_step(analysis_history[:, env_idx], SETTLE_STABLE_WINDOW, SETTLE_STABLE_EPS_M)
-        settle_step[env_idx] = idx
-        if idx >= 0:
-            resting_z[env_idx] = analysis_history[idx : idx + SETTLE_STABLE_WINDOW, env_idx].mean()
-        else:
-            fallback_end = min(SETTLE_WINDOW_STEPS, analysis_end)
-            resting_z[env_idx] = analysis_history[:fallback_end, env_idx].min()
-            print(
-                f"  [settle detection] env {env_idx}: no stable window found (object never settled within "
-                f"the analysis window?) - falling back to min-over-first-{fallback_end}-steps, may be "
-                f"inaccurate."
-            )
+    resting_window_end = min(EARLY_SETTLE_END, analysis_end)
+    resting_z = analysis_history[EARLY_SETTLE_START:resting_window_end].amin(dim=0)
 
-    # Post-settle-only window per env (ragged across envs in principle, but
-    # in practice this env cfg synchronizes spawn/free-fall across envs -
-    # verified identical settle_step per env in Task 3.5's own d8-big data -
-    # so a single shared post-settle start is used here for simplicity,
-    # falls back to 0 (whole window) for any env whose settle wasn't
-    # detected, which just reproduces the old (already-flagged) behavior for
-    # that env alone.
-    post_settle_start = max((s for s in settle_step if s >= 0), default=0)
+    post_settle_start = min(EARLY_SETTLE_START, analysis_end)
     post_settle_history = analysis_history[post_settle_start:]
 
     gain = post_settle_history - resting_z.unsqueeze(0)
@@ -443,16 +442,17 @@ def main() -> None:
         sustained = run_len >= SUSTAINED_LIFT_STEPS
         summary[str(env_idx)] = {
             "resting_z_m": float(resting_z[env_idx]),
-            "settle_step": settle_step[env_idx],
+            "resting_window": [EARLY_SETTLE_START, resting_window_end],
             "max_z_m": float(max_z[env_idx]),
             "max_height_gain_m": float(max_gain[env_idx]),
             "max_consecutive_lifted_steps": run_len,
             "sustained_lift": bool(sustained),
         }
         print(
-            f"  env {env_idx}: settle_step={settle_step[env_idx]} resting_z={resting_z[env_idx]:.4f}m "
-            f"max_z={max_z[env_idx]:.4f}m max_gain={max_gain[env_idx]:.4f}m "
-            f"max_consecutive_lifted_steps={run_len} sustained_lift={sustained}"
+            f"  env {env_idx}: resting_z={resting_z[env_idx]:.4f}m (min over steps "
+            f"{EARLY_SETTLE_START}-{resting_window_end}) max_z={max_z[env_idx]:.4f}m "
+            f"max_gain={max_gain[env_idx]:.4f}m max_consecutive_lifted_steps={run_len} "
+            f"sustained_lift={sustained}"
         )
     n_sustained = sum(1 for v in summary.values() if v["sustained_lift"])
     print(f"envs with sustained lift: {n_sustained}/{num_envs}")

@@ -58,8 +58,10 @@ being the real confound, but doesn't rule out shape/discoverability
 remaining a barrier independent of dilution, because Task 3 never paired
 an undiluted single-48mm d20 population with the geometry-descriptor
 conditioning. Task 3.5's undiluted-48mm design (below) was scoped to
-d8/d10/d12 only, so this specific ambiguity is still open for the d20
-case if it becomes decision-relevant. Full grid and reasoning:
+d8/d10/d12 only, so this specific ambiguity was still open for the d20
+case as of Task 3.5 — **closed 2026-07-19 by the "d20-big-geom gate"
+task below**, once it became decision-relevant (Task 4 needed a
+schema-compatible d20 checkpoint regardless). Full grid and reasoning:
 `ROADMAP.md`'s Task 3 entry (search "0/120").
 
 ## Task 3.5: 48mm-parity check for d8/d10/d12 — complete 2026-07-19, one partial positive
@@ -122,12 +124,72 @@ the resume logic to validate checkpoint size before trusting it — see
 Full grid, reasoning, and cost: `ROADMAP.md`'s Task 3.5 entry (search
 "48mm-parity check").
 
+## d20-big-geom gate task: undiluted-48mm d20 retrain — complete 2026-07-19, result STRONGER than expected
+
+Closed Task 3's dilution ambiguity for d20 specifically (see BACKLOG.md's
+"Task 4 scope decision" entry, 2026-07-19): retrained d20 at a single
+undiluted 48mm population WITH Task 1's geometry-descriptor conditioning,
+3 seeds (42/123/7), 1500 iterations, on GCP cloud (SPOT, zero
+preemptions). **No new env cfg class was needed** — direct source read
+confirmed the existing `FrankaDieLiftJointBigEnvCfg`/`--variant
+joint-die-big` (the asset-bisect rung-2 class) already includes Task 1's
+observation terms by inheritance (they were added unconditionally to the
+shared base `ObservationsCfg` by commit `ec32bb0`, and `die_shape_class =
+"d20"` was already set explicitly in the base `FrankaDieLiftJointEnvCfg`).
+The BACKLOG entry's caveat was about the old pre-Task-1 *checkpoint*, not
+the env cfg *class*.
+
+**Result (envs with sustained lift / 8 per seed): seed42 0/8, seed123
+8/8, seed7 8/8 — 2/3 seeds, both at full within-seed completeness.**
+Stronger than the falsifiable expectation going in (~1/3 seeds, likely
+seed123 only, matching the asset-bisect ladder's original 1/3-at-8/8
+baseline) — reported as observed, not adjusted to fit. Supports "dilution
+was Task 3's real confound" more decisively than the weaker form of that
+hypothesis would have required.
+
+**A real measurement bug in `franka_checkpoint_review.py` was found and
+fixed during this task's own raw-trajectory verification step** (not
+optional per this experiment's verification standard for positive
+results): the settle-detection flatness-window heuristic from `977a748`
+initially reported seed123 at only 1/8 and seed7 at 0/8 — direct
+inspection of the raw `.npy` showed this was wrong, every env in both
+seeds shows a clean, smooth, continuous grasp-lift-carry-to-goal
+trajectory the flatness heuristic was silently mis-measuring (locking
+onto a late, fully-static held plateau instead of the true early
+table-rest phase, for both the original 5e-5m tolerance and a
+first-attempt-loosened 2e-3m tolerance). Fixed by replacing it with a
+simpler, more robust MIN-over-a-fixed-early-window approach (physically
+grounded: a grasp-driven ascent only moves the object up from its rest
+height, so MIN can't be fooled by where in the window the low point
+falls). Video-confirmed too (arm reaches down ~step 20, fully extended
+and holding by ~step 90-150, matching the raw height data for both
+positive seeds).
+
+**Open follow-up, logged to `BACKLOG.md`:** the old flatness-window
+approach was used, unquestioned, for Task 3.5's own already-reported
+d8-big/d10-big/d12-big grid above — not re-audited here (out of this
+task's scope), but plausible that some of those numbers (d8/d10's 0/8s,
+d12's 4/8-not-8/8) are themselves undercounts of the same kind, given the
+old approach was never observed to work reliably for any env cfg checked
+so far.
+
+**Checkpoints for Task 4** (both fully valid; seed123 nominal default per
+this project's recurring "seed123 is the lucky seed" pattern, seed7 an
+equally-valid alternate given identical 8/8):
+- `gs://rl-manipulation-hks-runs/unified-multi-die-specialists/joint-die-big/seed123/2026-07-19_12-46-42/model_1499.pt`
+- `gs://rl-manipulation-hks-runs/unified-multi-die-specialists/joint-die-big/seed7/2026-07-19_13-17-02/model_1499.pt`
+
+Full grid, mechanism, raw-trajectory numbers, and cost (~$0.91):
+`ROADMAP.md`'s "d20-big-geom gate task" entry.
+
 ## Open, not yet decided
 
-Task 4 (distillation) status per this task's own gate discipline: d8 and
-d10 remain fully null at 48mm parity (2/4 candidate shapes), d12 shows
-one partial positive (1/3 seeds, half-envs-within-seed), d20 itself is
-still gated on Task 3's own open dilution-vs-shape ambiguity (never
-retested at undiluted 48mm together with geometry conditioning). Whether/
-how Task 4 proceeds given this mixed grid is an explicit controller-level
-decision, not made by either training task unilaterally.
+Task 4 (distillation) status per this experiment's own gate discipline:
+d8 and d10 remain fully null at 48mm parity (2/4 candidate shapes,
+deferred per BACKLOG.md's "Task 4 scope decision", not blocking), d12
+shows one partial positive (1/3 seeds, half-envs-within-seed), **d20 is
+now resolved (2/3 seeds, full 8/8 each)** — the d20-big-geom gate task
+above closed the last blocker. Task 4 proceeds with d12 (seed123, 4/8)
+and d20 (seed123 or seed7, both 8/8) as its two frozen specialists, per
+BACKLOG.md's "Task 4 scope decision" entry — an explicit controller-level
+decision already made there, not re-litigated here.

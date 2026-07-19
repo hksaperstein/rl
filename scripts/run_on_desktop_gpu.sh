@@ -82,7 +82,12 @@
 set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=8)
+# ServerAliveInterval/CountMax: fail a stale connection (e.g. desktop
+# rebooted mid-stream) within ~30s instead of hanging forever -- found
+# for real 2026-07-18: a batch of these SSH streaming calls survived a
+# desktop reboot as zombie connections, still "alive" per the local
+# kernel with no data flowing, blocking their callers indefinitely.
+SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=10 -o ServerAliveCountMax=3)
 REMOTE_HOME="/home/saps"
 REMOTE_TMUX="${REMOTE_HOME}/.local/bin/tmux"
 
@@ -136,6 +141,11 @@ for arg in "$@"; do
 done
 
 LOCAL_TMP_SCRIPT="$(mktemp)"
+# This trap is widened below (section 4) once STREAM_FIFO/SSH_TAIL_PID
+# exist, to also reap the streaming ssh process -- EXIT traps replace
+# rather than stack in bash, so only the widened one at the bottom
+# actually runs; this one only fires if the script exits before that
+# point (e.g. before dispatch even starts).
 trap 'rm -f "$LOCAL_TMP_SCRIPT"' EXIT
 
 cat > "$LOCAL_TMP_SCRIPT" <<EOF
@@ -215,6 +225,23 @@ fi
 # remote job keeps running under tmux + systemd-inhibit, unaffected. That
 # separation is the whole point of not just backgrounding over the raw SSH
 # pipe.
+#
+# Uses an explicit background job + FIFO (not `< <(ssh ...)` process
+# substitution) so the streaming ssh's PID is known and can be killed
+# once the loop is done -- 2026-07-18 finding: process substitution's
+# command is never reaped after the local `while read` loop `break`s on
+# the DONE_MARKER, so every successful dispatch leaked one orphaned
+# `ssh ... tail -f` process forever (confirmed: 13 accumulated over one
+# session, several outliving a desktop reboot as zombie connections that
+# hung any caller piping this script's output through another buffering
+# command like `| tail -N`, since that command blocks for EOF that never
+# comes while the leaked process still holds the pipe's write end open).
+STREAM_FIFO="$(mktemp -u)"
+mkfifo "$STREAM_FIFO"
+trap 'rm -f "$LOCAL_TMP_SCRIPT" "$STREAM_FIFO"; [ -n "${SSH_TAIL_PID:-}" ] && kill "$SSH_TAIL_PID" 2>/dev/null' EXIT
+ssh "${SSH_OPTS[@]}" desktop "tail -n +1 -f '${REMOTE_LOG}'" > "$STREAM_FIFO" &
+SSH_TAIL_PID=$!
+
 REMOTE_EXIT=""
 while IFS= read -r line; do
   echo "$line"
@@ -222,7 +249,11 @@ while IFS= read -r line; do
     REMOTE_EXIT="${line#${DONE_MARKER} exit=}"
     break
   fi
-done < <(ssh "${SSH_OPTS[@]}" desktop "tail -n +1 -f '${REMOTE_LOG}'")
+done < "$STREAM_FIFO"
+
+kill "$SSH_TAIL_PID" 2>/dev/null
+wait "$SSH_TAIL_PID" 2>/dev/null
+SSH_TAIL_PID=""
 
 if [ -z "$REMOTE_EXIT" ]; then
   echo "DISPATCH WARNING: log stream ended without a completion marker (SSH dropped?)." >&2

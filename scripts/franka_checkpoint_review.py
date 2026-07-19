@@ -208,10 +208,23 @@ os.makedirs(VIDEO_DIR, exist_ok=True)
 LIFT_HEIGHT_THRESHOLD_M = 0.04
 # 0.5s sustained at decimation=2, sim.dt=0.01 -> 50 control steps/s.
 SUSTAINED_LIFT_STEPS = 25
-# Steps used to estimate each env's settled/resting object height before any
-# policy action has moved it (object is spawned already resting on the
-# table via reset_object_position - see FrankaLiftSceneCfg's EventCfg).
+# FALLBACK ONLY (Task 3.5 finding, see _detect_settle_step below): the
+# object's real spawn-to-table free-fall does NOT reliably finish settling
+# within a short fixed window - independently measured at ~24-25 steps for
+# the d8-big 48mm-parity variant, well past this constant. Used only if
+# _detect_settle_step can't find a genuine stable point in the trajectory
+# (e.g. the object never comes to rest at all).
 SETTLE_WINDOW_STEPS = 10
+# Convergence-detection params for _detect_settle_step: a window of
+# SETTLE_STABLE_WINDOW consecutive steps whose full range (max-min) is
+# under SETTLE_STABLE_EPS_M counts as "at rest". The range-over-a-window
+# test (not a single-step diff test) is deliberate - a single-step diff
+# threshold is fooled by a slow, smoothly-decaying free-fall tail (each
+# individual step's delta is tiny even while the trajectory is still
+# drifting substantially over many steps combined), reproduced directly
+# against Task 3.5's own d8-big raw data during this fix.
+SETTLE_STABLE_WINDOW = 15
+SETTLE_STABLE_EPS_M = 5e-5
 
 
 def _max_consecutive_true(mask: list[bool]) -> int:
@@ -221,6 +234,26 @@ def _max_consecutive_true(mask: list[bool]) -> int:
         run = run + 1 if v else 0
         best = max(best, run)
     return best
+
+
+def _detect_settle_step(traj: torch.Tensor, window: int, eps_m: float) -> int:
+    """Return the first index i such that traj[i:i+window] has a full range
+    (max-min) under eps_m - a proxy for "the object has finished free-falling
+    and settled", found empirically to require far more than a short fixed
+    window in Task 3.5's own d8-big-48mm raw data (settle completed ~step 25,
+    not the previous SETTLE_WINDOW_STEPS=10). Returns -1 if no such window
+    exists anywhere in the trajectory (caller falls back to the old
+    fixed-window min() behavior and prints a loud warning - this should be
+    rare and worth investigating if it ever fires).
+    """
+    n = traj.shape[0]
+    if n < window:
+        return -1
+    for i in range(n - window + 1):
+        w = traj[i : i + window]
+        if (w.max() - w.min()) < eps_m:
+            return i
+    return -1
 
 
 def main() -> None:
@@ -323,51 +356,84 @@ def main() -> None:
     env.close()
     print(f"Checkpoint review video written to: {VIDEO_DIR}")
 
-    # MEASUREMENT-ARTIFACT FIX (Task 3.5, docs/superpowers/plans/2026-07-16-
-    # unified-multi-die-specialist-distillation.md): Tasks 2 and 3 both
-    # independently traced the SAME artifact in this script's derived stats
-    # (task-2-report.md; task-3-report.md Section 7, which pinned the exact
-    # mechanism) - a naive max()/argmax over the full multi-episode
-    # video_length window picks up a one-step reset-teleport spike whenever
-    # video_length spans more than one episode (this script's own default,
-    # 500 steps, is exactly 2 episodes at this env's 250-step episode
-    # length): at every episode-length boundary the object is
-    # reset-teleported back to its RigidObjectCfg.InitialStateCfg spawn z
-    # for one step, then free-falls and resettles identically to steps 0-4
-    # of the recording - not a policy-driven event. Fixed here (3rd
-    # occurrence, per this task's own dispatch instruction to stop working
-    # around it) by restricting every derived stat (resting_z, gain, max_z,
-    # lifted_mask, sustained_lift) to the FIRST episode only
-    # (env.unwrapped.max_episode_length steps, read generically rather than
-    # hardcoded, so this is correct for any variant/episode-length
-    # combination, not just this env's own 250-step episode). The full raw
-    # per-step array is still saved to the .npy completely unchanged -
-    # nothing is lost, only the derived-stats window is narrowed. This only
-    # changes this script's FORWARD behavior from this commit onward - it
-    # does not touch or retroactively alter any already-synced GCS artifact
-    # or already-written report from Task 2 or Task 3.
+    # MEASUREMENT-ARTIFACT FIXES. Tasks 2/3 independently traced a naive
+    # max()/argmax over the full multi-episode video_length window picking up
+    # a one-step reset-teleport spike whenever video_length spans more than
+    # one episode; a first fix (Task 3.5, commit 1ce90a4) restricted derived
+    # stats to `env.unwrapped.max_episode_length` steps ("the first episode
+    # only"). Re-verifying that fix against Task 3.5's own real d8-big raw
+    # data (independent per-shape/per-seed re-derivation, per this task's own
+    # dispatch instruction) found TWO further, still-live bugs in it - fixed
+    # here, forward-only, same as the prior fix (does not touch any
+    # already-synced GCS artifact or already-written report):
+    #
+    # (a) OFF-BY-ONE at the episode boundary: this env's vectorized
+    # auto-reset convention (isaaclab's ManagerBasedRLEnv / gym vec-env step
+    # semantics) returns the POST-reset observation on the very step where an
+    # episode ends, not the terminal one - i.e. index
+    # `max_episode_length - 1` (0-indexed) is already episode 2's first
+    # frame, not episode 1's last. Confirmed directly: for a 250-step
+    # episode, height_history[249] == height_history[0] byte-for-byte across
+    # every env, and height_history[250] == height_history[1] - the previous
+    # `analysis_end = min(episode_length_steps, video_length)` (250) included
+    # this one contaminated sample. Fixed by subtracting 1.
+    #
+    # (b) SETTLE WINDOW TOO SHORT: SETTLE_WINDOW_STEPS=10 (the old
+    # min()-over-a-short-fixed-window) assumed the object starts "already
+    # resting" per its comment, but real trajectories (own d8-big data) show
+    # a genuine ~4.3cm spawn-to-table free-fall that does not finish
+    # settling until ~step 25 - a full 15 steps past the old window. Using
+    # the old window's premature "resting_z" made a mid-fall reading look
+    # like the rest state, so a later, still-in-flight sample could log a
+    # spurious gain. Fixed via _detect_settle_step (window-range convergence
+    # test, not a single-step-diff test - see its own docstring for why).
+    # Derived stats (gain/lifted_mask/sustained_lift/max_z) are now computed
+    # ONLY over the POST-settle portion of the trajectory - the pre-settle
+    # free-fall segment is real motion but not policy-driven, and leaving it
+    # in the max_z/gain window produces false positives (the object's own
+    # spawn height, ~4cm above its rest height, otherwise reads as a "gain"
+    # in its own right, independent of anything the policy does).
     episode_length_steps = int(env.unwrapped.max_episode_length)
-    analysis_end = min(episode_length_steps, args_cli.video_length)
+    analysis_end = min(episode_length_steps - 1, args_cli.video_length)
     if analysis_end < args_cli.video_length:
         print(
             f"[analysis window] restricting derived stats to the first episode only: steps "
-            f"0-{analysis_end - 1} (episode_length={episode_length_steps} steps, "
-            f"recording={args_cli.video_length} steps) to avoid the known episode-reset-boundary "
-            f"artifact (see .superpowers/sdd/task-2-report.md, task-3-report.md Section 7)."
+            f"0-{analysis_end - 1} (episode_length={episode_length_steps} steps, one boundary-"
+            f"contaminated sample excluded, recording={args_cli.video_length} steps)."
         )
     analysis_history = height_history[:analysis_end]
 
-    # Per-env settled/resting z: min over the first SETTLE_WINDOW_STEPS steps
-    # (the object is spawned already resting on the table per
-    # reset_object_position, so this window just absorbs any initial
-    # micro-settling rather than measuring a real drop).
-    settle_end = min(SETTLE_WINDOW_STEPS, analysis_end)
-    resting_z = analysis_history[:settle_end].min(dim=0).values
-    gain = analysis_history - resting_z.unsqueeze(0)
-    max_gain = gain.max(dim=0).values
-    max_z = analysis_history.max(dim=0).values
+    resting_z = torch.zeros(num_envs)
+    settle_step = [-1] * num_envs
+    for env_idx in range(num_envs):
+        idx = _detect_settle_step(analysis_history[:, env_idx], SETTLE_STABLE_WINDOW, SETTLE_STABLE_EPS_M)
+        settle_step[env_idx] = idx
+        if idx >= 0:
+            resting_z[env_idx] = analysis_history[idx : idx + SETTLE_STABLE_WINDOW, env_idx].mean()
+        else:
+            fallback_end = min(SETTLE_WINDOW_STEPS, analysis_end)
+            resting_z[env_idx] = analysis_history[:fallback_end, env_idx].min()
+            print(
+                f"  [settle detection] env {env_idx}: no stable window found (object never settled within "
+                f"the analysis window?) - falling back to min-over-first-{fallback_end}-steps, may be "
+                f"inaccurate."
+            )
 
-    lifted_mask = gain >= LIFT_HEIGHT_THRESHOLD_M  # (analysis_end, num_envs) bool
+    # Post-settle-only window per env (ragged across envs in principle, but
+    # in practice this env cfg synchronizes spawn/free-fall across envs -
+    # verified identical settle_step per env in Task 3.5's own d8-big data -
+    # so a single shared post-settle start is used here for simplicity,
+    # falls back to 0 (whole window) for any env whose settle wasn't
+    # detected, which just reproduces the old (already-flagged) behavior for
+    # that env alone.
+    post_settle_start = max((s for s in settle_step if s >= 0), default=0)
+    post_settle_history = analysis_history[post_settle_start:]
+
+    gain = post_settle_history - resting_z.unsqueeze(0)
+    max_gain = gain.max(dim=0).values
+    max_z = post_settle_history.max(dim=0).values
+
+    lifted_mask = gain >= LIFT_HEIGHT_THRESHOLD_M  # (post-settle steps, num_envs) bool
 
     summary = {}
     print("\n=== Instrumented height readout (per env) ===")
@@ -377,14 +443,16 @@ def main() -> None:
         sustained = run_len >= SUSTAINED_LIFT_STEPS
         summary[str(env_idx)] = {
             "resting_z_m": float(resting_z[env_idx]),
+            "settle_step": settle_step[env_idx],
             "max_z_m": float(max_z[env_idx]),
             "max_height_gain_m": float(max_gain[env_idx]),
             "max_consecutive_lifted_steps": run_len,
             "sustained_lift": bool(sustained),
         }
         print(
-            f"  env {env_idx}: resting_z={resting_z[env_idx]:.4f}m max_z={max_z[env_idx]:.4f}m "
-            f"max_gain={max_gain[env_idx]:.4f}m max_consecutive_lifted_steps={run_len} sustained_lift={sustained}"
+            f"  env {env_idx}: settle_step={settle_step[env_idx]} resting_z={resting_z[env_idx]:.4f}m "
+            f"max_z={max_z[env_idx]:.4f}m max_gain={max_gain[env_idx]:.4f}m "
+            f"max_consecutive_lifted_steps={run_len} sustained_lift={sustained}"
         )
     n_sustained = sum(1 for v in summary.values() if v["sustained_lift"])
     print(f"envs with sustained lift: {n_sustained}/{num_envs}")
@@ -401,9 +469,9 @@ def main() -> None:
                 "video_length_steps": args_cli.video_length,
                 "episode_length_steps": episode_length_steps,
                 "analysis_window_steps": analysis_end,
+                "post_settle_start_step": post_settle_start,
                 "lift_height_threshold_m": LIFT_HEIGHT_THRESHOLD_M,
                 "sustained_lift_steps": SUSTAINED_LIFT_STEPS,
-                "settle_window_steps": settle_end,
                 "envs_with_sustained_lift": n_sustained,
                 "per_env": summary,
             },

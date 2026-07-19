@@ -321,3 +321,34 @@ while preparing for it) is committed separately. 28/28 Task 4 unit tests
 and `--dry-run` still pass/reproduce unchanged. No cloud spend incurred
 (desktop-only); wall-clock cost: two failed desktop dispatches, both
 cleanly torn down, no wasted cloud budget.
+
+**Controller decision (2026-07-19): (b), single mixed-population env.**
+Reuses `FrankaDieLiftJointMixedEnvCfg`'s already-validated round-robin
+mechanism instead of building new distributed multi-process
+orchestration — smaller total new surface area, and this codebase
+already trusts and understands the mechanism (Task 3's own d20 size-DR
+work already confirmed via direct source read that `random_choice=False`
+gives an exact, deterministic `index % len(assets_cfg)` per-env
+assignment, not a runtime-only fact requiring new introspection). This
+determinism is exactly what de-risks the observation-contract change
+the senior engineer flagged as the real cost of (b): a per-env-aware
+`object_shape_class_onehot`/`object_geometry_descriptor` does **not**
+need to read anything back off the live USD stage/spawner state at
+runtime — since the assignment is a pure, known-in-advance function of
+env index and the assets list order/length, the observation functions
+can just replicate that same `index % len(assets)` formula directly
+(matching the exact mechanism `FrankaDieLiftJointMixedEnvCfg`'s own
+docstring already documents and cites by source location). This turns
+what looked like a real observation-contract redesign into a bounded,
+mechanical extension: add a new `FrankaDieLiftJointD12D20MixedEnvCfg`
+(2-shape round-robin, `assets_cfg=[d12_cfg, d20_cfg]`,
+`scene.replicate_physics = False` per the existing class's own
+documented gotcha) and make the two observation functions compute
+per-env shape class from env index + a shapes-list ordering constant
+instead of a single `env.cfg.die_shape_class` broadcast — every other
+env cfg in the file keeps the old single-shape broadcast behavior
+unchanged (this is additive, not a breaking change to Tasks 2/3/3.5's
+already-shipped, already-verified single-shape env cfgs). Not chosen:
+(a) two-process IPC orchestration — real distributed-training
+infrastructure with its own new failure modes, not justified when (b)
+reuses an already-proven mechanism instead.

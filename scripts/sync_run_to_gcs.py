@@ -72,6 +72,7 @@ VARIANT_MAP = {
     "train_franka_jointdied8big": "joint-die-d8-big",
     "train_franka_jointdied10big": "joint-die-d10-big",
     "train_franka_jointdied12big": "joint-die-d12-big",
+    "train_franka_jointdied12d20mixed": "joint-die-d12-d20-mixed",
 }
 
 DEFAULT_BUCKET = os.environ.get("GCS_BUCKET", "gs://rl-manipulation-hks-runs")

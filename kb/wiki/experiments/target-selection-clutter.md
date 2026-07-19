@@ -116,6 +116,29 @@ other structurally different approach. Not decided in this task — see
 the plan's Task 4 Step 4 instruction ("STOP and report to the
 controller").
 
+## Gripper actuator low-pass-filtering check (2026-07-19) — ruled out
+
+A candidate alternative explanation for the "reach but never grasp"
+pattern was checked and ruled out: Neunert et al. (DeepMind, CoRL 2019,
+arXiv:2001.00449) report that slow gripper actuators can act as a
+low-pass filter that attenuates small-amplitude Gaussian exploration
+noise before it ever produces a full-closure command — but only for a
+**continuous velocity/position-delta** gripper action space. This
+project's gripper action is `mdp.BinaryJointPositionActionCfg` (a hard
+sign-threshold mapping any raw action to a FULL open or close joint
+target, structurally the same fix Neunert et al. themselves recommend,
+not their failure-mode baseline). A direct instrumented rollout of this
+Stage SO checkpoint (`model_1499.pt`, d20 target, 8 envs, one full
+episode) confirmed the raw gripper action was positive ("open",
+magnitude +0.48 to +7.77) for 100% of steps in all 8 envs — never once
+negative. The policy has confidently learned to keep the gripper open
+throughout the episode; nothing is being filtered out by actuator
+dynamics. This is a reward/exploration-discovery problem, consistent
+with the exploration-reward research track (H1/H2/H3) in
+`docs/superpowers/specs/research/2026-07-19-exploration-reward-expansion-
+literature.md`, whose addendum has the full writeup. Diagnostic script:
+`scripts/_diag_gripper_lowpass_check.py`.
+
 ## Related
 
 [[unified-multi-die-specialist-distillation]] — this experiment's own

@@ -566,6 +566,98 @@ this document's only recommendation on that axis.
 
 ---
 
+## Addendum (2026-07-19): the flagged Neunert et al. low-pass-filter prerequisite check — resolved, does NOT apply here
+
+Per §2c/§5's flagged, unresolved prerequisite ("verify directly whether this
+project's Franka gripper action formulation exhibits the low-pass-filtering
+failure mode Neunert et al. describe... before investing in any of H1-H3"),
+a Senior thread checked this directly (diagnostic only, no training run, no
+env cfg changes) and got a clear answer: **no, it does not apply.**
+
+**1. Config-level finding.** This project's gripper action
+(`tasks/franka/lift_env_cfg.py`'s `gripper_action = mdp.
+BinaryJointPositionActionCfg(...)`, inherited unchanged by every joint-die
+variant including the target-selection-clutter Stage SO env) is mapped by
+Isaac Lab's own `BinaryJointAction.process_actions` (`isaaclab/envs/mdp/
+actions/binary_joint_actions.py`, read directly from the installed package
+source) via a **hard sign threshold**: `binary_mask = actions < 0`, then
+`processed_actions = where(binary_mask, close_command, open_command)`. Any
+raw policy action, however small in magnitude, produces the FULL
+open/close joint-position target — there is no proportional/scaled mapping
+from action magnitude to a partial command. This is structurally different
+from the setup Neunert et al.'s finding describes: their quoted low-pass-
+filter sentence is about their **baseline**, which controls the gripper in
+**continuous velocity mode** — small-magnitude, zero-mean-initialized
+Gaussian noise there produces small velocity commands that slow finger
+actuator dynamics can attenuate before enough motion accumulates to reach a
+meaningfully closed position. Neunert et al.'s own *fix* for this is to
+discretize the gripper action to `{-1, 1}` (full speed open/close) —
+i.e., a binary/threshold gripper action, which is structurally what this
+project already has, not what its failure-mode baseline used. This point
+alone was enough to make the low-pass-filter mechanism implausible on
+priors, before any rollout.
+
+**2. Direct rollout evidence, on the actual failing checkpoint.** Per this
+project's verification standard (real evidence over config-reading alone),
+a short instrumented rollout was run against the exact Stage SO checkpoint
+this document's opening cited (`gs://rl-manipulation-hks-runs/target-
+selection-clutter/joint-die-target-selection-so/seed42/2026-07-19_21-25-52/
+model_1499.pt`, d20-pinned-target eval variant, 8 envs, one full 250-step
+episode, deterministic inference policy, new diagnostic script
+`scripts/_diag_gripper_lowpass_check.py`), logging the raw gripper action,
+the processed joint-position command, and the REALIZED finger joint
+position every step. Result: **the raw gripper action was positive
+(commanding "open") for 100% of steps, in all 8 envs, with no exceptions**
+— `frac_steps_raw_action_negative = 0.000` for every env.  Critically, the
+raw action values were not small/borderline (which might still suggest a
+noise-magnitude story): they ranged from +0.48 to +7.77 across envs/steps —
+a confidently, strongly positive "stay open" signal, not a near-zero value
+teetering on the sign threshold. The policy never once, in any of the 8
+sampled episodes, produced a negative (attempt-close) raw action.
+
+**Conclusion: this is a reward/exploration-discovery problem, not an
+actuator/action-space attenuation problem.** The converged Stage SO policy
+has confidently learned to keep the gripper open throughout the episode —
+consistent with the video-review finding ("the gripper reaches down and
+hovers directly over the die but never closes around it") but for a
+different underlying reason than Neunert et al.'s mechanism would predict.
+Nothing here is being filtered out by slow actuator dynamics; the policy's
+own output signal is unambiguous and never attempts closure. This
+corroborates, rather than undercuts, this document's own H1/H2/H3
+research track (exploration-mechanism/reward changes remain the right
+class of intervention) and closes the flagged prerequisite from §5 as
+resolved-negative — no action-space/actuator-config change is indicated
+before pursuing H1-H3.
+
+**Caveats, stated plainly:** (a) this rollout used the deterministic
+inference policy (`runner.get_inference_policy`, the standard rsl_rl mean-
+action path, no sampling noise), so it directly characterizes the
+*converged* Stage SO policy's behavior, not the stochastic action
+distribution actually sampled during early training — but the config-level
+structural argument (§1 above: a hard sign-threshold action mapping cannot
+attenuate small-magnitude noise regardless of when in training one looks)
+already rules out the mechanism independent of this timing distinction. (b)
+One incidental, minor, unexplained observation not central to this check:
+env 0 showed `frac_steps_joint_actually_20pct_closed=0.372` despite never
+being commanded closed — plausibly the fingers physically contacting the
+die while trying to reach the commanded-open target (a passive contact
+effect, not a commanded closure); not investigated further as it doesn't
+bear on the low-pass-filter question. (c) Only Stage SO's d20-pinned-target
+eval variant was checked (not d12, and not D1/D2); given the mechanism
+being tested is about the *action-space plumbing* (shared, unchanged,
+across every joint-die variant in this codebase) rather than anything
+d12/d20/distractor-count-specific, this is not expected to change the
+answer for those, but was not independently re-verified.
+
+Full raw per-step arrays and JSON summary (not committed, `logs/` is
+gitignored): `logs/diag_gripper_lowpass/summary_d20.json` and
+`raw_arrays_d20.npz`, produced by
+`scripts/_diag_gripper_lowpass_check.py --checkpoint <Stage SO
+model_1499.pt> --eval_target_shape d20 --num_envs 8 --num_steps 250` (run
+on the desktop GPU, isolated `git worktree` at commit `7ed07a2` to avoid
+touching the concurrent d8/d10 demo-warm-start workstream's dirty checkout
+on that same machine).
+
 ## Related
 
 [[reward-hacking-and-sparse-discoverability]] (the general framework this

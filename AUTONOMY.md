@@ -104,6 +104,26 @@ Reading those instructions together, not narrowly:
   have a clear recommendation, state it and proceed — don't render it
   as a choice for the user to make.
 
+- **2026-07-18** — mid-session on Task 3.5's cloud fallback, after asking
+  via `AskUserQuestion` whether to wait for the desktop or fall back to
+  cloud when the desktop was confirmed powered off: *"shouldn't you be
+  doing http client server requests and if you aren't getting a signal,
+  should fallback to cloud"* — pointing out that `scripts/
+  check_gpu_availability.sh` already implements exactly this decision
+  (desktop-first, cloud-fallback, no human input needed) and had already
+  returned `TARGET=cloud`. A sixth reinforcement of the same underlying
+  mandate, one step more specific than the 2026-07-16 entry above: when
+  a script/tool/policy has *already automated* the decision (not just
+  "a clear recommendation exists" but "the infrastructure already
+  computed the answer"), run it and act on its output directly — asking
+  the user to re-decide something a already-built, already-approved
+  routing script just decided is pure redundancy, not caution. Followed
+  by *"update whatever start up script to use that one and don't prompt
+  me"* — extends the same expectation to the boot-time autonomous-resume
+  path specifically (`~/bin/claude_rl_autostart.sh`'s auto-continuation
+  message), since asking is especially pointless when nobody is present
+  to answer (see that script's own comments for the applied change).
+
 ## What still gets stopped on and flagged
 
 None of the instructions above were about money, other people's

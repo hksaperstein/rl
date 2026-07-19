@@ -84,6 +84,9 @@ parser.add_argument(
         "joint-die-d10-big",
         "joint-die-d12-big",
         "joint-die-d12-d20-mixed",
+        "joint-die-target-selection-so",
+        "joint-die-target-selection-d1",
+        "joint-die-target-selection-d2",
     ],
     default="ik-cube",
     help=(
@@ -129,7 +132,24 @@ parser.add_argument(
         "d12/d20 mixed-population env Task 5's distillation training ran against "
         "(FrankaDieLiftJointD12D20MixedEnvCfg, tasks/franka/dice_lift_joint_env_cfg.py), meant to be "
         "--checkpoint-resumed from Task 5's distilled student weights via --policy_only_checkpoint "
-        "(docs/superpowers/plans/2026-07-16-unified-multi-die-specialist-distillation.md Task 6)."
+        "(docs/superpowers/plans/2026-07-16-unified-multi-die-specialist-distillation.md Task 6). "
+        "joint-die-target-selection-so: target-selection-in-clutter curriculum Stage SO (0 active "
+        "distractors) - the full 3-die scene topology (target + 2 always-present-but-PARKED distractor "
+        "bodies), 43-dim observation schema (Task 2's distractor_distance_summary term added), trained "
+        "FROM SCRATCH (not resumed from model_2998.pt - dimensionality mismatch, 41 vs 43 dims). Internal "
+        "sanity gate before Stage D1/D2 (FrankaDieLiftJointD12D20TargetSelectionSOEnvCfg, "
+        "docs/superpowers/plans/2026-07-19-target-selection-clutter-implementation.md Task 4, "
+        "docs/superpowers/specs/2026-07-19-target-selection-clutter-design.md). "
+        "joint-die-target-selection-d1: Stage D1 (1 active distractor, drawn from {d12,d20} via "
+        "MultiAssetSpawnerCfg(random_choice=True)) - meant to be --checkpoint-resumed from Stage SO's own "
+        "checkpoint (same 43-dim schema, a normal same-dimensionality PPO resume, no "
+        "--policy_only_checkpoint needed) (FrankaDieLiftJointD12D20TargetSelectionD1EnvCfg, "
+        "docs/superpowers/plans/2026-07-19-target-selection-clutter-implementation.md Task 5). "
+        "joint-die-target-selection-d2: Stage D2 (2 active distractors, both independently drawn from "
+        "{d12,d20}) - the experiment's target configuration and primary falsification check, meant to be "
+        "--checkpoint-resumed from Stage D1's own checkpoint "
+        "(FrankaDieLiftJointD12D20TargetSelectionD2EnvCfg, "
+        "docs/superpowers/plans/2026-07-19-target-selection-clutter-implementation.md Task 6)."
     ),
 )
 parser.add_argument(
@@ -233,6 +253,18 @@ def main() -> None:
         from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftJointD12D20MixedEnvCfg
 
         env_cfg = FrankaDieLiftJointD12D20MixedEnvCfg()
+    elif args_cli.variant == "joint-die-target-selection-so":
+        from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftJointD12D20TargetSelectionSOEnvCfg
+
+        env_cfg = FrankaDieLiftJointD12D20TargetSelectionSOEnvCfg()
+    elif args_cli.variant == "joint-die-target-selection-d1":
+        from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftJointD12D20TargetSelectionD1EnvCfg
+
+        env_cfg = FrankaDieLiftJointD12D20TargetSelectionD1EnvCfg()
+    elif args_cli.variant == "joint-die-target-selection-d2":
+        from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftJointD12D20TargetSelectionD2EnvCfg
+
+        env_cfg = FrankaDieLiftJointD12D20TargetSelectionD2EnvCfg()
     else:
         env_cfg = FrankaLiftEnvCfg()
     env_cfg.scene.num_envs = args_cli.num_envs
@@ -265,6 +297,9 @@ def main() -> None:
         "joint-die-d10-big": "_jointdied10big",
         "joint-die-d12-big": "_jointdied12big",
         "joint-die-d12-d20-mixed": "_jointdied12d20mixed",
+        "joint-die-target-selection-so": "_jointdietargetselectionso",
+        "joint-die-target-selection-d1": "_jointdietargetselectiond1",
+        "joint-die-target-selection-d2": "_jointdietargetselectiond2",
     }[args_cli.variant]
     log_dir = os.path.join(
         LOG_ROOT + _log_suffix,

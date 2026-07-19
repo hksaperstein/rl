@@ -83,6 +83,9 @@ parser.add_argument(
         "joint-die-d8-big",
         "joint-die-d10-big",
         "joint-die-d12-big",
+        "joint-die-target-selection-so",
+        "joint-die-target-selection-d1",
+        "joint-die-target-selection-d2",
     ],
     default="ik-cube",
     help=(
@@ -124,7 +127,30 @@ parser.add_argument(
         "which does not transfer across shapes), single undiluted 48mm population per shape/seed, mass pinned "
         "at 0.216kg - directly comparable to the asset-bisect's own cube (3/3) and d20 (1/3) 48mm baselines "
         "(docs/superpowers/plans/2026-07-16-unified-multi-die-specialist-distillation.md, "
-        ".superpowers/sdd/task-3.5-brief.md); _PLAY probe is the same fixed size, 50 envs."
+        ".superpowers/sdd/task-3.5-brief.md); _PLAY probe is the same fixed size, 50 envs. "
+        "joint-die-target-selection-so/-d1/-d2: target-selection-in-clutter curriculum Stages SO (0 active "
+        "distractors, internal sanity gate)/D1 (1 active distractor)/D2 (2 active distractors, primary "
+        "falsification check) - full 3-die scene topology, 43-dim observation schema (Task 2's "
+        "distractor_distance_summary term), reward/terminations unchanged "
+        "(docs/superpowers/plans/2026-07-19-target-selection-clutter-implementation.md, "
+        "docs/superpowers/specs/2026-07-19-target-selection-clutter-design.md). Each stage has 2 "
+        "pinned-target-shape _PLAY classes (d12/d20) - REQUIRES --eval_target_shape to disambiguate which "
+        "one to load; distractor slots are never pinned, only the target."
+    ),
+)
+parser.add_argument(
+    "--eval_target_shape",
+    choices=["d12", "d20"],
+    default=None,
+    help=(
+        "Which shape is pinned as the commanded target for this eval run - REQUIRED when --variant is one "
+        "of joint-die-target-selection-{so,d1,d2}, since a single --variant string alone is ambiguous "
+        "between that stage's two pinned-target _PLAY classes "
+        "(..._PLAY_D12Target/..._PLAY_D20Target, tasks/franka/dice_lift_joint_env_cfg.py; Task 1 of "
+        "docs/superpowers/plans/2026-07-19-target-selection-clutter-implementation.md). Distractor slots "
+        "are NOT pinned by this flag - they keep whatever MultiAssetSpawnerCfg/parked state their own "
+        "stage already sets, exactly as the spec requires (only the target needs pinning at eval). Ignored "
+        "for every other --variant."
     ),
 )
 parser.add_argument(
@@ -146,6 +172,22 @@ args_cli.enable_cameras = True  # required for video rendering
 
 if not os.path.isfile(args_cli.checkpoint):
     sys.exit(f"Checkpoint not found: {args_cli.checkpoint}")
+
+# --eval_target_shape resolves the 6-way pinned-target-shape ambiguity for the target-selection-clutter
+# curriculum stages (Task 3, docs/superpowers/plans/2026-07-19-target-selection-clutter-implementation.md):
+# each of joint-die-target-selection-{so,d1,d2} has TWO _PLAY classes (d12-pinned/d20-pinned target), so
+# --variant alone cannot select one.
+_TARGET_SELECTION_VARIANTS = {
+    "joint-die-target-selection-so",
+    "joint-die-target-selection-d1",
+    "joint-die-target-selection-d2",
+}
+if args_cli.variant in _TARGET_SELECTION_VARIANTS and args_cli.eval_target_shape is None:
+    sys.exit(
+        f"--eval_target_shape {{d12,d20}} is required when --variant is one of "
+        f"{sorted(_TARGET_SELECTION_VARIANTS)} (ambiguous between the stage's two pinned-target _PLAY "
+        f"classes otherwise)."
+    )
 
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
@@ -196,6 +238,21 @@ elif args_cli.variant == "joint-die-d10-big":
     from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftJointD10BigEnvCfg_PLAY  # noqa: E402
 elif args_cli.variant == "joint-die-d12-big":
     from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftJointD12BigEnvCfg_PLAY  # noqa: E402
+elif args_cli.variant == "joint-die-target-selection-so":
+    from tasks.franka.dice_lift_joint_env_cfg import (  # noqa: E402
+        FrankaDieLiftJointD12D20TargetSelectionSOEnvCfg_PLAY_D12Target,
+        FrankaDieLiftJointD12D20TargetSelectionSOEnvCfg_PLAY_D20Target,
+    )
+elif args_cli.variant == "joint-die-target-selection-d1":
+    from tasks.franka.dice_lift_joint_env_cfg import (  # noqa: E402
+        FrankaDieLiftJointD12D20TargetSelectionD1EnvCfg_PLAY_D12Target,
+        FrankaDieLiftJointD12D20TargetSelectionD1EnvCfg_PLAY_D20Target,
+    )
+elif args_cli.variant == "joint-die-target-selection-d2":
+    from tasks.franka.dice_lift_joint_env_cfg import (  # noqa: E402
+        FrankaDieLiftJointD12D20TargetSelectionD2EnvCfg_PLAY_D12Target,
+        FrankaDieLiftJointD12D20TargetSelectionD2EnvCfg_PLAY_D20Target,
+    )
 
 VIDEO_DIR = args_cli.output_dir or os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs", "videos", "franka_checkpoint_review"
@@ -304,6 +361,24 @@ def main() -> None:
         env_cfg = FrankaDieLiftJointD10BigEnvCfg_PLAY()
     elif args_cli.variant == "joint-die-d12-big":
         env_cfg = FrankaDieLiftJointD12BigEnvCfg_PLAY()
+    elif args_cli.variant == "joint-die-target-selection-so":
+        env_cfg = (
+            FrankaDieLiftJointD12D20TargetSelectionSOEnvCfg_PLAY_D12Target()
+            if args_cli.eval_target_shape == "d12"
+            else FrankaDieLiftJointD12D20TargetSelectionSOEnvCfg_PLAY_D20Target()
+        )
+    elif args_cli.variant == "joint-die-target-selection-d1":
+        env_cfg = (
+            FrankaDieLiftJointD12D20TargetSelectionD1EnvCfg_PLAY_D12Target()
+            if args_cli.eval_target_shape == "d12"
+            else FrankaDieLiftJointD12D20TargetSelectionD1EnvCfg_PLAY_D20Target()
+        )
+    elif args_cli.variant == "joint-die-target-selection-d2":
+        env_cfg = (
+            FrankaDieLiftJointD12D20TargetSelectionD2EnvCfg_PLAY_D12Target()
+            if args_cli.eval_target_shape == "d12"
+            else FrankaDieLiftJointD12D20TargetSelectionD2EnvCfg_PLAY_D20Target()
+        )
     else:
         env_cfg = FrankaLiftEnvCfg_PLAY()
     env_cfg.scene.num_envs = args_cli.num_envs
@@ -341,11 +416,17 @@ def main() -> None:
     env = ManagerBasedRLEnv(cfg=env_cfg, render_mode="rgb_array")
 
     checkpoint_name = os.path.splitext(os.path.basename(args_cli.checkpoint))[0]
+    # run_tag folds --eval_target_shape into every output filename when set - otherwise two eval runs of
+    # the same --variant + --checkpoint (one per pinned target shape, the whole reason --eval_target_shape
+    # exists for the target-selection-clutter variants) would silently overwrite each other's video/
+    # heights.npy/summary.json, since args_cli.variant alone is no longer a unique run identity for those
+    # variants (Task 3, docs/superpowers/plans/2026-07-19-target-selection-clutter-implementation.md).
+    run_tag = args_cli.variant if args_cli.eval_target_shape is None else f"{args_cli.variant}-{args_cli.eval_target_shape}"
     video_kwargs = {
         "video_folder": VIDEO_DIR,
         "step_trigger": lambda step: step == 0,
         "video_length": args_cli.video_length,
-        "name_prefix": f"franka_checkpoint_review_{args_cli.variant}_{checkpoint_name}",
+        "name_prefix": f"franka_checkpoint_review_{run_tag}_{checkpoint_name}",
         "disable_logger": True,
     }
     print_dict(video_kwargs, nesting=4)
@@ -476,13 +557,14 @@ def main() -> None:
     n_sustained = sum(1 for v in summary.values() if v["sustained_lift"])
     print(f"envs with sustained lift: {n_sustained}/{num_envs}")
 
-    heights_npy_path = os.path.join(VIDEO_DIR, f"heights_{args_cli.variant}_{checkpoint_name}.npy")
+    heights_npy_path = os.path.join(VIDEO_DIR, f"heights_{run_tag}_{checkpoint_name}.npy")
     np.save(heights_npy_path, height_history.numpy())
-    summary_json_path = os.path.join(VIDEO_DIR, f"heights_{args_cli.variant}_{checkpoint_name}.json")
+    summary_json_path = os.path.join(VIDEO_DIR, f"heights_{run_tag}_{checkpoint_name}.json")
     with open(summary_json_path, "w") as f:
         json.dump(
             {
                 "variant": args_cli.variant,
+                "eval_target_shape": args_cli.eval_target_shape,
                 "checkpoint": args_cli.checkpoint,
                 "num_envs": num_envs,
                 "video_length_steps": args_cli.video_length,

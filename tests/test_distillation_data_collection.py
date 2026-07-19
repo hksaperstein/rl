@@ -29,6 +29,7 @@ from tasks.franka.distillation import (
     dagger_beta_schedule,
     mix_actions,
     pool_and_shuffle,
+    regress_on_paired_batches,
     run_dagger_iteration,
 )
 
@@ -374,3 +375,73 @@ class TestRunDaggerIterationIntegration:
         loss = run_dagger_iteration(envs, student, router, optimizer, rollout_steps=2, batch_size=100, num_epochs=3, beta=1.0)
         assert isinstance(loss, float)
         assert loss >= 0.0
+
+
+class TestRegressOnPairedBatches:
+    """Task 1 of docs/superpowers/plans/2026-07-19-d8-d10-demo-warmstart-
+    implementation.md: regress_on_paired_batches mirrors
+    regress_on_pooled_batches' own shuffle/minibatch/epoch loop and its call
+    to behavior_cloning_loss verbatim, but against pre-paired (obs, action)
+    tensors passed in directly - no MultiShapeTeacherRouter relabeling step
+    (H1's demonstration data already carries one fixed action label per row,
+    not a live teacher network to query). Reuses _StubActorCritic, same
+    tiny-real-linear-layer stand-in TestRunDaggerIterationIntegration
+    already uses so gradients genuinely flow."""
+
+    def test_loss_decreases_over_epochs_on_synthetic_paired_data(self):
+        """Clearest possible end-to-end sanity check: a BC regression toward
+        a FIXED target (teacher_action is a constant tensor here) must drive
+        the loss down over epochs."""
+        torch.manual_seed(0)
+        obs = torch.randn(40, OBS_DIM)
+        actions = torch.full((40, NUM_ACTIONS), 3.0)
+        student = _StubActorCritic(OBS_DIM, NUM_ACTIONS)
+        optimizer = torch.optim.Adam(student.actor.parameters(), lr=0.1)
+        gen = torch.Generator(device="cpu").manual_seed(0)
+
+        losses = []
+        for _ in range(6):
+            loss = regress_on_paired_batches(obs, actions, student, optimizer, batch_size=8, num_epochs=2, generator=gen)
+            losses.append(loss)
+        assert losses[-1] < losses[0]
+
+    def test_returned_loss_is_mean_over_all_regression_steps(self):
+        obs = torch.randn(20, OBS_DIM)
+        actions = torch.zeros(20, NUM_ACTIONS)
+        student = _StubActorCritic(OBS_DIM, NUM_ACTIONS)
+        optimizer = torch.optim.Adam(student.actor.parameters(), lr=0.01)
+        loss = regress_on_paired_batches(obs, actions, student, optimizer, batch_size=100, num_epochs=3, generator=None)
+        assert isinstance(loss, float)
+        assert loss >= 0.0
+
+    def test_obs_actions_row_count_mismatch_raises(self):
+        obs = torch.randn(10, OBS_DIM)
+        actions = torch.zeros(9, NUM_ACTIONS)
+        student = _StubActorCritic(OBS_DIM, NUM_ACTIONS)
+        optimizer = torch.optim.Adam(student.actor.parameters(), lr=0.01)
+        try:
+            regress_on_paired_batches(obs, actions, student, optimizer, batch_size=4, num_epochs=1)
+            assert False, "expected ValueError"
+        except ValueError:
+            pass
+
+    def test_deterministic_shuffling_with_seeded_generator(self):
+        """Same shape TestPoolAndShuffle/TestMixActions already establish
+        for this module's other seeded-generator functions: two runs with
+        independently-seeded-but-equal generators must produce identical
+        results (same minibatch order -> identical loss trajectory, since
+        the student/optimizer start from the same zero-initialized state
+        each time)."""
+        obs = torch.randn(24, OBS_DIM)
+        actions = torch.randn(24, NUM_ACTIONS)
+
+        def _run(seed: int) -> float:
+            torch.manual_seed(123)  # same student init both runs
+            student = _StubActorCritic(OBS_DIM, NUM_ACTIONS)
+            optimizer = torch.optim.Adam(student.actor.parameters(), lr=0.05)
+            gen = torch.Generator(device="cpu").manual_seed(seed)
+            return regress_on_paired_batches(obs, actions, student, optimizer, batch_size=6, num_epochs=2, generator=gen)
+
+        loss1 = _run(42)
+        loss2 = _run(42)
+        assert loss1 == pytest.approx(loss2)

@@ -175,6 +175,43 @@ measurably worse on the SAME batch - holds identically under either
 mechanism. `MultiShapeTeacherRouter.relabel` is unaffected either way: it
 already routes per-row off each row's own live shape-onehot observation
 feature, never off which env/call produced that row.
+
+=====================================================================
+TASK 1 ADDITION (2026-07-19, d8/d10 demo-warmstart plan):
+`regress_on_paired_batches` - NEW, NOT REUSABLE AS-IS FROM
+`regress_on_pooled_batches`/`MultiShapeTeacherRouter`
+=====================================================================
+
+`docs/superpowers/plans/2026-07-19-d8-d10-demo-warmstart-implementation.md`
+(H1: DAPG-style behavior-cloning pretrain from a scripted demonstration)
+needs a THIRD regression entry point alongside the two above. Per that
+plan's own design spec's "Integration into tasks/franka/distillation.py's
+existing plumbing" section:
+
+  - `collect_rollout`, `pool_and_shuffle`, `build_student_actor_critic`,
+    `behavior_cloning_loss`, `save_student_checkpoint` are REUSABLE AS-IS
+    (confirmed again by this task, not just assumed from the spec) -
+    none of their contracts require a live teacher/student policy network;
+    `collect_rollout`'s `action_fn(obs) -> action` contract in particular
+    is satisfied exactly by a scripted-replay closure that ignores `obs`
+    and returns a logged reference trajectory's precomputed action at the
+    current step index.
+  - `regress_on_pooled_batches` and `MultiShapeTeacherRouter` are NOT
+    reusable as-is: both are built around a live, queryable TEACHER POLICY
+    NETWORK (`router.relabel(pooled_obs)` calls a frozen
+    `ActorCritic.act_inference` per row, routed by shape). H1 has no such
+    network for either shape - a scripted DiffIK controller's replayed
+    trajectory produces FIXED, ALREADY-PAIRED (observation, action) pairs
+    directly from `collect_rollout`'s own output, with no relabeling step
+    possible or needed (there is exactly one "teacher" per shape, and it is
+    not a callable model, just recorded data).
+
+`regress_on_paired_batches` (below) is the new, small function this gap
+needs: it mirrors `regress_on_pooled_batches`'s shuffle/minibatch/epoch
+loop and its call to `behavior_cloning_loss` verbatim, but takes
+pre-paired `(obs, actions)` tensors directly instead of calling a router -
+a mechanical, well-specified addition (same loop shape as existing, tested
+code), not a new mechanism.
 """
 
 from __future__ import annotations
@@ -559,6 +596,53 @@ def regress_on_pooled_batches(
             batch_labels = teacher_labels[idx]
             student_mean = student.act_inference({"policy": batch_obs})
             loss = behavior_cloning_loss(student_mean, batch_labels)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            losses.append(loss.item())
+    return sum(losses) / len(losses)
+
+
+def regress_on_paired_batches(
+    obs: torch.Tensor,
+    actions: torch.Tensor,
+    student: ActorCritic,
+    optimizer: torch.optim.Optimizer,
+    batch_size: int,
+    num_epochs: int,
+    generator: torch.Generator | None = None,
+) -> float:
+    """Task 1 of docs/superpowers/plans/2026-07-19-d8-d10-demo-warmstart-
+    implementation.md - see module docstring's "TASK 1 ADDITION" section for
+    why this exists alongside (not replacing) `regress_on_pooled_batches`.
+
+    Runs `num_epochs` passes of minibatch BC regression directly against an
+    already-paired `(obs, actions)` dataset - e.g. a scripted demonstration's
+    replayed (observation, closed-form-converted action) pairs, produced by
+    `collect_rollout` with a scripted-replay `action_fn` and Task 1's own
+    `tasks/franka/demo_action_mapping.py` conversion, pooled across multiple
+    captured trajectories via `pool_and_shuffle` before this is called (or
+    passed in already pooled/shuffled - this function itself does not pool
+    multiple sources, only shuffles minibatches within the single dataset
+    it's given, mirroring `regress_on_pooled_batches`' own inner loop
+    exactly). NO `MultiShapeTeacherRouter`/relabeling step - `actions` IS
+    the supervised-learning label for its paired `obs` row, already fixed at
+    call time, unlike `regress_on_pooled_batches`' teacher-queried label.
+    Returns the mean loss across all regression steps, same convention as
+    `regress_on_pooled_batches`."""
+    if obs.shape[0] != actions.shape[0]:
+        raise ValueError(f"regress_on_paired_batches: obs/actions row-count mismatch: {obs.shape[0]} vs {actions.shape[0]}")
+
+    losses = []
+    n = obs.shape[0]
+    for _epoch in range(num_epochs):
+        perm = torch.randperm(n, generator=generator, device="cpu").to(obs.device)
+        for start in range(0, n, batch_size):
+            idx = perm[start : start + batch_size]
+            batch_obs = obs[idx]
+            batch_actions = actions[idx]
+            student_mean = student.act_inference({"policy": batch_obs})
+            loss = behavior_cloning_loss(student_mean, batch_actions)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()

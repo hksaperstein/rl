@@ -7,6 +7,18 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# Root-level data/models (2026-07-19 fix, found while implementing Task 1 of
+# docs/superpowers/plans/2026-07-19-d8-d10-demo-warmstart-implementation.md:
+# CLAUDE.md's monorepo section already claims "data/ and models/ stay
+# gitignored" and this plan's own Global Constraints claim
+# data/franka_demo_trajectories/ is "already-gitignored data/" - neither was
+# actually true before this fix; only vision/.gitignore's own /data//models/
+# entries covered vision/data//vision/models/, not the repo-root dirs these
+# claims actually meant. Anchored (leading slash) so this doesn't also
+# double-cover vision/'s own already-gitignored data/models dirs.
+/data/
+/models/
+
 # site/ portfolio bundle media is a deliverable (deploy agent pulls it from GitHub)
 !site/assets/
 !site/assets/**

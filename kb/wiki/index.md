@@ -162,10 +162,19 @@ see the coverage boundary note below.)*
   fully recovered a real BC/DAgger distillation regression (4/8 d20, 1/8
   d12) to an exact 8/8 match with each frozen specialist, both shapes —
   a working unified 2-shape policy, checkpointed. ≈$5.87 of the $15 cloud
-  cap spent. Distractors/target-selection follow-on (every env here spawns
-  exactly one die) has its research grounding done, no spec yet:
-  `docs/superpowers/specs/research/2026-07-19-target-selection-clutter-literature.md`
-  (see the article's "Open, not yet decided" section).
+  cap spent. Distractors/target-selection follow-on: see
+  [[target-selection-clutter]].
+- [[target-selection-clutter]] (2026-07-19, IN PROGRESS — Stage SO gate
+  FAILED, stopped) — 3-die clutter curriculum (SO: 0 active distractors ->
+  D1: 1 -> D2: 2) built on the above's finished single-object checkpoint.
+  Stage SO (internal sanity gate, trained fully from scratch — new 43-dim
+  schema incompatible with the 41-dim baseline checkpoint) got 0/8 both
+  shapes, well below the >=7/8 gate; plan execution stopped before Stage
+  D1/D2 per its own pre-registered discipline. No code bug found; the
+  likely explanation is a confound between "did the new scene/observation
+  code break something" (what the gate targets) and "does plain
+  from-scratch PPO ever discover d12/d20 grasps without a distillation
+  bootstrap" (a separate, pre-existing difficulty) — not yet resolved.
 
 ### Concepts
 

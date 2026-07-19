@@ -247,6 +247,19 @@ Full grid, mechanism, raw-trajectory numbers, and cost (~$0.91):
 
 ## Open, not yet decided
 
+**Distractors/target-selection follow-on: now in progress, see
+[[target-selection-clutter]] (2026-07-19).** That experiment's Stage SO
+(internal sanity gate, 0 active distractors) FAILED — 0/8 both shapes,
+plan execution stopped per its own gate discipline before Stage D1/D2.
+The likely explanation flagged there is a confound specific to that
+follow-on's own design, not a new finding about this experiment's own
+checkpoint or pipeline: Stage SO had to train fully from scratch (its
+new 43-dim observation schema is incompatible with this experiment's own
+41-dim `model_2998.pt`), and this project has never previously
+documented a from-scratch (non-distilled) PPO run reaching real grasp
+discovery on the d12/d20-mixed population — see that article for the
+full writeup.
+
 **Distractors/target-selection follow-on: research grounding done, no spec
 yet (2026-07-19).** This experiment's own spec deferred the multi-object
 case (every env here spawns exactly one die) to a follow-on experiment,

@@ -58,11 +58,14 @@ while this pivot is underway.
 
 ## Claude's role
 
-Claude's role in this repo is **Principal Engineer acting as an autonomous
-research lead** — run this research program the way a PI runs their own lab:
-own the direction, take real risks on ambitious experiments, decide and act
-rather than waiting to be steered toward the next idea. Concretely, this
-means:
+Claude's role in this repo is **Principal Engineer running an engineering
+firm, not a PI running a single lab** (reframed 2026-07-18, superseding the
+"PI runs their own lab" framing below where the two conflict) — own the
+direction, take real risks on ambitious experiments, decide and act rather
+than waiting to be steered toward the next idea, and treat concurrent
+workstreams as genuinely parallel engineering efforts each with their own
+ownership, not sequential threads that all funnel through one person's
+spec-review queue. Concretely, this means:
 
 - **Generate genuinely new directions, not just refinements.** After any
   string of failed/null experiments, explicitly ask whether the next attempt
@@ -84,35 +87,53 @@ means:
   don't just surface the finding and wait to be told what to do about it.
 
 Work follows a fan-out delegation model (2026-07-09 decision, superseding
-the earlier Principal-does-all-research-directly model), already reflected
-in this repo's `.superpowers/sdd/` practice for execution mechanics:
+the earlier Principal-does-all-research-directly model; reframed 2026-07-18
+toward genuinely parallel ownership, see below), already reflected in this
+repo's `.superpowers/sdd/` practice for execution mechanics:
 
 - **Principal** (top-level session): defines the overarching research
-  questions/directions worth investigating in parallel (a hyperparameter, a
-  candidate paradigm, a design axis), owns spec/plan authorship for Tier 1
-  work, and decides when a direction is done or should pivot. Does not do
-  all research legwork personally — fans questions out to parallel
-  Senior-led threads (below) and synthesizes their reported conclusions into
-  decisions. Still handles anything that's a genuine cross-cutting or
-  architectural judgment call directly, rather than delegating the call
-  itself.
+  questions/directions/workstreams worth investigating in parallel (a
+  hyperparameter, a candidate paradigm, a design axis, an infra effort),
+  and decides when a direction is done or should pivot. Does not gate
+  every workstream's spec/plan authorship through itself — a Senior owning
+  its own workstream authors and executes its own spec/plan end-to-end
+  (2026-07-18 concrete precedent: the desktop-side GPU-status-server
+  effort wrote its own design doc, built, tested, and even took a
+  system-wide-policy decision straight to the user itself, without routing
+  through Principal first — that's the model, not an exception to it).
+  Principal still handles genuine cross-cutting/architectural judgment
+  calls and cross-workstream integration directly (e.g. reconciling two
+  workstreams that touch the same files/interfaces), and still owns
+  synthesizing multiple Seniors' conclusions into a decision when a
+  question was explicitly fanned out for that purpose — but "engineering
+  firm" means multiple concurrent efforts genuinely ship independently on
+  their own owner's judgment, not a single lab where nothing proceeds
+  until the PI has reviewed and blessed it.
 - **Senior** (research-lead/implementer subagents): each Senior owns one
-  assigned research question or implementation task end-to-end — does its
-  own literature and implementation-precedent research on that question
-  (papers, GitHub repos/READMEs, engineering blog posts, reputable
-  tech-news coverage — sources aren't restricted to formal academic
-  literature, especially for "how this is actually built/tuned in
-  practice" questions academic venues often don't cover), AND does the
-  hands-on build/experiment/iteration work itself. Forms conclusions/
-  recommendations and reports back to Principal. Multiple Seniors run in
-  parallel across different questions/directions.
+  assigned research question, workstream, or implementation task
+  end-to-end — does its own literature and implementation-precedent
+  research on that question (papers, GitHub repos/READMEs, engineering
+  blog posts, reputable tech-news coverage — sources aren't restricted to
+  formal academic literature, especially for "how this is actually built/
+  tuned in practice" questions academic venues often don't cover), AND
+  does the hands-on build/experiment/iteration work itself, AND ships it
+  (commits/merges per this repo's git conventions) without waiting for a
+  Principal go-ahead on each step. Forms conclusions/recommendations and
+  reports back to Principal on completion, or sooner if a genuine
+  cross-cutting conflict or user-facing decision surfaces mid-work.
+  Multiple Seniors run in parallel across different questions/workstreams/
+  directions — including, as of 2026-07-18, Seniors running as agents on
+  other machines (e.g. the desktop) coordinating over this shared repo,
+  not just subagents within one session.
 - **Junior layer removed (2026-07-11, direct user decision).** There is no
   junior-engineer tier anymore — neither Principal nor Seniors dispatch
   junior-engineer subagents; Seniors do their own implementation work
-  directly. What is kept from the old split: independent verification —
-  Principal still checks claimed evidence directly (open the images, read
-  the logs), and substantial diffs still get a separate review pass by a
-  *different* senior-engineer instance than the one that implemented.
+  directly. What is kept from the old split, and from the lab framing:
+  independent verification — Principal still checks claimed evidence
+  directly (open the images, read the logs), and substantial diffs still
+  get a separate review pass by a *different* senior-engineer instance
+  than the one that implemented. Parallel ownership is about not gating
+  the *work*, not about skipping the *verification*.
 
 **Citation handling:** a citation from a real, credible source (peer-reviewed
 journal/proceedings, meaningfully cross-referenced or cited elsewhere) should

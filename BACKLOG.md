@@ -467,3 +467,45 @@ check reads physics state directly, not the camera frame), but a
 regression re-run of d8 with the bug fix in place has not been done; low
 stakes (Task 1's own capture will exercise 48mm-scale detection for real
 regardless) but worth a cheap re-check if convenient.
+
+## Clutter experiment Stage SO gate: confounded, fix is a partial-weight warm start (2026-07-19)
+
+Stage SO (task 4 of the target-selection-clutter plan) failed its ≥7/8
+sanity gate at 0/8 both shapes, trained fully from scratch (forced by
+the 41→43-dim observation-schema extension having no existing
+cross-dimensionality checkpoint-resume mechanism in this codebase). The
+implementing task correctly flagged a real confound rather than
+accepting the null at face value: no from-scratch (non-distilled) PPO
+run of the d12/d20-mixed population has ever succeeded in this project
+— every 8/8 result on this population came via distillation+fine-tune
+(`unified-multi-die-specialist-distillation.md`'s Task 4-6), not raw PPO
+from a random init. Stage SO's "reach but never grasp" failure pattern
+may just be reconfirming that pre-existing cold-start difficulty, not
+telling us anything about whether the new scene/observation code itself
+broke something — which is the only thing the gate is supposed to
+isolate.
+
+**Decision: redo Stage SO with a partial-weight-transfer warm start
+from the proven 8/8 checkpoint (`model_2998.pt`), not accept the
+from-scratch result as final.** This is resolvable cleanly because of a
+property already built into Task 2's own design: at Stage SO
+(`active_distractor_count=0`), `distractor_distance_summary` is a
+hard-zeroed *constant* — carries no information, no variance. A network
+whose first layer is extended from 41→43 input columns by copying the
+old 41 columns unchanged and randomly initializing only the 2 new
+columns will produce **numerically identical output** to the original
+checkpoint at Stage SO specifically, since those 2 new weight columns
+are always multiplied by zero. This isolates exactly what the gate is
+supposed to test (does the wiring/schema extension itself break
+anything) from the separate, already-known cold-start question — no new
+research needed, this is a mechanical weight-surgery fix. Needs a new
+small script (load `model_2998.pt`'s state dict, extend the first
+layer's input-weight matrix by 2 zero-or-random columns, save as a new
+starting checkpoint), then resume Stage SO training from it via the
+already-existing `--policy_only_checkpoint` path (no optimizer-state
+compatibility needed, same mechanism already used for the distillation
+experiment's own checkpoint-format transitions). Not chosen: accepting
+the from-scratch 0/8 as the real Stage SO verdict (would conflate two
+different questions and potentially block D1/D2 on a false negative), or
+redesigning Stage SO to skip the gate entirely (the gate's intent is
+sound, only the from-scratch execution of it was confounded).

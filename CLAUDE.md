@@ -208,12 +208,15 @@ fall back to cloud (or stop), not assume availability.
 Three scripts implement this, in the order a dispatch should use them:
 
 1. **`scripts/check_desktop_gpu.sh`** — low-level availability probe.
-   SSHes to the desktop and checks both `nvidia-smi
-   --query-compute-apps` AND `systemd-inhibit --list` for a lock named
-   `rl-gpu-job` (see below — this catches a job that's still in Isaac
-   Sim's 5-8 minute GPU-allocation startup window, before `nvidia-smi`
-   would show anything). Exit 0 = AVAILABLE, 1 = BUSY, 2 = UNKNOWN
-   (unreachable or the check itself failed — not the same as available).
+   Queries `GET http://home.local:8077/gpu-status` (a small always-on
+   HTTP status server on the desktop, `scripts/gpu_status_server.py`,
+   see `docs/superpowers/specs/2026-07-18-gpu-status-server-design.md`)
+   instead of SSHing to the desktop twice. Same judgment as before:
+   non-empty `compute_apps` OR a non-zero `rl_gpu_job_guard_count`
+   (covers both the Pi-dispatched `rl-gpu-job` guard and the desktop's
+   own auto-detect `rl-gpu-job-auto-detect` guard, added by the same
+   server) means BUSY. No SSH fallback if the HTTP call fails — that's
+   UNKNOWN, same as before.
 2. **`scripts/check_gpu_availability.sh`** — routing decision. Calls
    (1) and prints `TARGET=desktop` (exit 0) or `TARGET=cloud` (exit 1 if
    BUSY, exit 2 if UNKNOWN) plus a human-readable reason. Does not
@@ -238,6 +241,19 @@ Three scripts implement this, in the order a dispatch should use them:
    code since arbitrary integers don't round-trip through shell exit
    status).
 
+**GPU status server (`scripts/gpu_status_server.py`, added 2026-07-18):**
+runs as a `systemd --user` service (`~/.config/systemd/user/gpu-status-server.service`,
+local machine config, not committed) on the desktop, started at boot via
+`loginctl enable-linger saps` (already enabled on this account) +
+`systemctl --user enable --now gpu-status-server.service`. Serves `GET
+/gpu-status` on port 8077 (LAN-only, no auth — approved posture, read-only
+endpoint on a trusted home network) with GPU telemetry plus the
+`compute_apps`/`rl_gpu_job_guard_count` fields `check_desktop_gpu.sh`
+actually judges availability on. Also runs the auto-detect shutdown-inhibitor
+watchdog described above. See
+`docs/superpowers/specs/2026-07-18-gpu-status-server-design.md` for the
+full design and endpoint contract.
+
 **Known gaps on the desktop side, as of 2026-07-18 (both root causes:
 no passwordless sudo on the desktop, so neither is fixable from an
 unattended SSH session — flagging here rather than working around
@@ -255,32 +271,21 @@ silently):**
   properly apt-installed by someone with root later, update
   `REMOTE_TMUX` in `run_on_desktop_gpu.sh` (or symlink `/usr/bin/tmux`
   into `~/.local/bin`).
-- **`systemd-inhibit --what=shutdown:sleep:idle` is denied by polkit for
-  SSH sessions.** Polkit's default rules only implicitly grant
-  `org.freedesktop.login1.inhibit-*` actions to seated/active-local
-  sessions; an SSH session has no seat and there's no polkit auth agent
-  to prompt interactively, so the desktop-side job script's dispatch
-  currently **degrades to `--what=idle` only** (probed and detected
-  automatically, with a loud warning printed into the job's own log) —
-  meaning **shutdown/sleep are NOT actually blocked** during a
-  dispatched job right now, only idle-suspend is. `--who=rl-gpu-job`
-  still shows up correctly in `systemd-inhibit --list` either way, so
-  `check_desktop_gpu.sh`'s BUSY detection is unaffected by this
-  degradation. The real fix needs a one-time root action on the
-  desktop: create a polkit rule file, e.g.
-  `/etc/polkit-1/rules.d/49-rl-gpu-job-inhibit.rules`, containing:
-  ```js
-  polkit.addRule(function(action, subject) {
-      if (action.id.indexOf("org.freedesktop.login1.inhibit-") == 0 &&
-          subject.user == "saps") {
-          return polkit.Result.YES;
-      }
-  });
-  ```
-  (numbered below `50-default.rules` so it's evaluated first; no
-  restart needed, polkit picks up rule file changes automatically).
-  Until that's applied by whoever has desktop root, treat shutdown/sleep
-  as unprotected during dispatched jobs.
+- **Polkit fix applied 2026-07-18.**
+  `/etc/polkit-1/rules.d/49-rl-gpu-job-inhibit.rules` (root-owned, not
+  committed to git) now grants user `saps` unconditional
+  `org.freedesktop.login1.inhibit-*` access regardless of seat, removing
+  the shutdown/sleep degradation described above for both this
+  Pi-dispatch job guard and the desktop's own auto-detect watchdog
+  (`scripts/gpu_status_server.py`'s `InhibitWatchdog`, holding a
+  `rl-gpu-job-auto-detect` guard whenever `nvidia-smi` shows any active
+  compute app, independent of whether the job was Pi-dispatched).
+  **Open follow-up:** this was verified to work for an active login
+  session; full proof for the unattended (linger, no-seat) case — the
+  actual scenario this fix targets — requires observing the guard
+  correctly acquire `shutdown:sleep` (not just `idle`) after a real
+  reboot with no one logged in. Confirm this the next time this desktop
+  reboots, and remove this note once observed.
 
 All three scripts were tested live against the real desktop (not just
 exit codes): a genuine `sleep`-based job was dispatched, and mid-run,

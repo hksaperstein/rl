@@ -216,7 +216,11 @@ Three scripts implement this, in the order a dispatch should use them:
    (covers both the Pi-dispatched `rl-gpu-job` guard and the desktop's
    own auto-detect `rl-gpu-job-auto-detect` guard, added by the same
    server) means BUSY. No SSH fallback if the HTTP call fails — that's
-   UNKNOWN, same as before.
+   UNKNOWN, same as before. Requires `jq` on the Pi to parse the JSON
+   response (`apt install jq` — not preinstalled on Raspberry Pi OS);
+   if missing, the script fails safe to UNKNOWN (never a false
+   AVAILABLE), but desktop routing will silently never fire until it's
+   installed.
 2. **`scripts/check_gpu_availability.sh`** — routing decision. Calls
    (1) and prints `TARGET=desktop` (exit 0) or `TARGET=cloud` (exit 1 if
    BUSY, exit 2 if UNKNOWN) plus a human-readable reason. Does not
@@ -250,7 +254,7 @@ local machine config, not committed) on the desktop, started at boot via
 endpoint on a trusted home network) with GPU telemetry plus the
 `compute_apps`/`rl_gpu_job_guard_count` fields `check_desktop_gpu.sh`
 actually judges availability on. Also runs the auto-detect shutdown-inhibitor
-watchdog described above. See
+watchdog described below. See
 `docs/superpowers/specs/2026-07-18-gpu-status-server-design.md` for the
 full design and endpoint contract.
 
@@ -274,9 +278,12 @@ silently):**
 - **Polkit fix applied 2026-07-18.**
   `/etc/polkit-1/rules.d/49-rl-gpu-job-inhibit.rules` (root-owned, not
   committed to git) now grants user `saps` unconditional
-  `org.freedesktop.login1.inhibit-*` access regardless of seat, removing
-  the shutdown/sleep degradation described above for both this
-  Pi-dispatch job guard and the desktop's own auto-detect watchdog
+  `org.freedesktop.login1.inhibit-*` access regardless of seat. Before
+  this fix, polkit denied `systemd-inhibit --what=shutdown:sleep:idle`
+  for non-seated/unattended sessions, silently degrading to idle-only
+  protection (shutdown/sleep left unprotected); this fix removes that
+  degradation for both this Pi-dispatch job guard and the desktop's own
+  auto-detect watchdog
   (`scripts/gpu_status_server.py`'s `InhibitWatchdog`, holding a
   `rl-gpu-job-auto-detect` guard whenever `nvidia-smi` shows any active
   compute app, independent of whether the job was Pi-dispatched).

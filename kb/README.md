@@ -83,6 +83,15 @@ against the wiki, periodic health-checks that re-derive facts from the raw
 sources (not just check internal consistency — see the risk noted below),
 and possibly a small search tool.
 
+**Cadence: continuous, not batched (direct user instruction, 2026-07-18).**
+Update the relevant article(s) as soon as a finding lands — a training
+result, a root-caused bug, a design decision — not deferred to a
+once-per-session "compile the kb" pass. This applies to any Senior/
+subagent dispatch expected to produce a real finding too: its own task
+brief should ask it to write/update the relevant kb article as part of
+its own definition of done, not leave that for Principal to backfill
+afterward from the task's report alone.
+
 **Known risk to design against later:** an LLM linting a wiki it wrote
 itself can be confidently wrong in a way that's internally consistent
 (it can propagate its own error through backlinks it also authored).

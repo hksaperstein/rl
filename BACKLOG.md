@@ -105,3 +105,47 @@ blocker for this specific task now that desktop dispatch exists).
   documented default and remains the right choice for larger batches
   where the cost multiplier matters more); a per-task judgment call
   worth reconsidering fresh each time preemption rate is unusually high.
+
+## Task 4 scope decision: narrow to d12+d20, defer d8/d10 (2026-07-19)
+
+Direct controller decision (Principal), made and executed rather than
+surfaced as an open question: with Task 3.5's full grid in (d8 0/3, d10
+0/3, d12 1/3 at undiluted 48mm), d8 and d10 are dropped from Task 4's
+specialist set. Both are genuinely null across two independent size
+regimes (real ~16-18mm size in Task 2, and 48mm parity in Task 3.5) —
+that's a real shape-discoverability barrier, not a dilution or
+absolute-scale artifact, and per this project's own systematic-debugging
+precedent (3+ failed fixes on the same mechanism escalates rather than
+invites a fourth speculative tweak), more reward-shaping attempts on
+these two specifically aren't the next move without new mechanistic
+insight. Logged here as an open, explicitly deferred research question
+(not silently dropped, not blocking): why d8/d10 fail to ever discover
+grasp while d12/d20 partially succeed has no obvious a priori answer yet
+(no clean roundness/face-count story — d20 is the roundest shape and
+succeeds most decisively) and would need its own dedicated investigation
+if picked up later.
+
+**Before Task 4 itself: one gap-closing task, not in the original plan.**
+Task 3's own d20 size-DR retry (0/120) is confounded by population
+dilution (`random_choice=True` still assigns one size per env once,
+diluting the 48mm sub-population ~5x) — never resolved, per that task's
+own flagged ambiguity. Additionally, and decisively for Task 4 in
+particular: asset-bisect's own working d20-at-48mm checkpoint
+(`gs://rl-manipulation-hks-runs/asset-bisect/joint-die-big/seed123/2026-07-12_15-07-49/model_1499.pt`)
+predates Task 1's shape-onehot/geometry-descriptor observation terms
+(added 2026-07-16) — its policy network's observation space doesn't
+match the unified schema Task 4's distillation needs, so it cannot be
+used directly as a frozen teacher regardless of the dilution question.
+Both problems share one fix: retrain d20 at a single undiluted 48mm
+population WITH the Task 1 geometry-descriptor conditioning, mirroring
+Task 3.5's own d8/d10/d12-big design exactly. This produces a
+schema-compatible d20 specialist AND closes Task 3's open ambiguity in
+the same run. Not chosen: proceeding to Task 4 with the old-schema
+checkpoint anyway (architecturally broken) or retraining d8/d10 first
+(deferred per above, not blocking this narrower 2-shape line).
+
+Task 4 proceeds once this closes, using d12 (`seed123`,
+`gs://rl-manipulation-hks-runs/unified-multi-die-specialists/joint-die-d12-big/seed123/2026-07-19_06-37-16/model_1499.pt`,
+4/8) and the new d20-48mm-with-geometry checkpoint as its two frozen
+specialists — a real, if narrower-than-originally-planned, test of the
+GiGSL distillation mechanism itself.

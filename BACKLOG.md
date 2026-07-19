@@ -389,3 +389,37 @@ no live USD/spawner-state introspection needed. Real outcome: distilled
 policy 4/8 (d20) / 1/8 (d12) sustained lift vs. each specialist's own 8/8
 — a real regression, not the null result this entry's own blocker made
 impossible to observe before.
+
+## d8/d10 demo-warmstart Task 0: d10 failed at perception, not grasp (2026-07-19)
+
+d8 passed the 48mm-scale demo re-verification cleanly (242.6mm z-gain).
+d10 failed — but at the vision detector (0 detections for class `d10` at
+the enlarged 48mm scale, `select_target_detection`'s existing fail-loud
+contract raised before the scripted grasp controller ever ran), not at
+the grasp mechanism itself, which was never exercised. The implementing
+task flagged this as a real per-shape split and deferred the "does d8
+proceed alone" call to the controller rather than deciding it.
+
+**Decision: fix d10's demo-capture path with a ground-truth bypass,
+proceed with both shapes, not d8 alone.** This project already has
+direct precedent for exactly this situation: the d4 rung-1 work hit an
+identical detector-miss-at-an-off-distribution-condition failure and
+built a ground-truth XY-bypass specifically to test the underlying
+mechanism independent of the perception gap (`kb/wiki/experiments/`'s
+d4 rung-1 entries, "extending rung 0's own GT-for-orientation isolation
+precedent to position"). d10's 48mm-scale detector miss is the same
+class of problem — an out-of-distribution scale the detector's training
+data doesn't cover, not evidence about grasp discoverability, which is
+the actual question this experiment investigates. Bypassing detection
+for the demo-capture step only (not touching `dice_pick_demo.py`'s
+production fail-loud contract, not attempting to fix the detector)
+lets d10 proceed on equal footing with d8 rather than silently narrowing
+this experiment's scope a second time without a substantive reason —
+the multi-die experiment already narrowed once (d8/d10 dropped from
+distillation) on real evidence; narrowing again here on an unrelated
+perception gap, when a small precedented fix exists, would not be a
+considered call. Not chosen: proceeding with d8 alone and deferring d10
+indefinitely (would leave this experiment's own question about d10
+specifically unanswered for no good reason) or attempting to actually
+fix/retrain the detector for 48mm dice (real scope creep — a vision/
+training-data problem, not what this experiment is testing).

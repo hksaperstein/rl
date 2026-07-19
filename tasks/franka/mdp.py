@@ -42,6 +42,7 @@ from isaaclab.utils.math import combine_frame_transforms, subtract_frame_transfo
 # Isaac Lab's own installed-package library, not this repo's AR4-era code.
 from isaaclab.envs.mdp import *  # noqa: F401, F403
 
+from .distractor_observations import distractor_distance_summary as _distractor_distance_summary_pure
 from .lift_reward import lifting_object_reward, object_goal_distance_reward, reaching_object_reward
 from .shape_observations import (
     geometry_descriptor_broadcast,
@@ -165,3 +166,37 @@ def object_geometry_descriptor(
         return geometry_descriptor_per_env(per_env_classes, env.num_envs, device=env.device)
     shape_class = getattr(env.cfg, "die_shape_class", _DEFAULT_SHAPE_CLASS)
     return geometry_descriptor_broadcast(shape_class, env.num_envs, device=env.device)
+
+
+def distractor_distance_summary(
+    env: ManagerBasedRLEnv, object_cfg: SceneEntityCfg = SceneEntityCfg("object")
+) -> torch.Tensor:
+    """Observation term: (num_envs, 2) fixed-size, hard-zero-padded
+    target-to-distractor distance summary (DexSinGrasp's own `d_t^S`
+    mechanism, arXiv:2504.04516 §III-A Eq. 1 - see
+    tasks/franka/distractor_observations.py's module docstring for the full
+    design rationale and the exact zero-padding semantics).
+
+    Reads THREE live scene entities - `object_cfg.name` (the target,
+    default "object"), and the two always-present clutter-scene slots
+    `env.scene["distractor_1"]`/`env.scene["distractor_2"]` (added by
+    dice_lift_joint_env_cfg.py's FrankaDieLiftTargetSelectionSceneCfg, Task
+    1) - plus `env.cfg.active_distractor_count` (0/1/2, a per-env-cfg
+    constant set by each curriculum-stage env cfg's own __post_init__, see
+    lift_env_cfg.py's FrankaLiftEnvCfg.active_distractor_count docstring),
+    and delegates the actual distance/zero-padding computation to the pure
+    function in tasks/franka/distractor_observations.py. Only meaningful
+    for env cfgs that actually have distractor_1/distractor_2 scene
+    entities (the 3 new target-selection curriculum-stage classes) - NOT
+    wired into the shared base ObservationsCfg.PolicyCfg for exactly that
+    reason (see TargetSelectionObservationsCfg in lift_env_cfg.py)."""
+    target: RigidObject = env.scene[object_cfg.name]
+    distractor_1: RigidObject = env.scene["distractor_1"]
+    distractor_2: RigidObject = env.scene["distractor_2"]
+    active_distractor_count = getattr(env.cfg, "active_distractor_count", 0)
+    return _distractor_distance_summary_pure(
+        target.data.root_pos_w[:, :3],
+        distractor_1.data.root_pos_w[:, :3],
+        distractor_2.data.root_pos_w[:, :3],
+        active_distractor_count,
+    )

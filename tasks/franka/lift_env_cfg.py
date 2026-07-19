@@ -225,6 +225,41 @@ class ObservationsCfg:
 
 
 @configclass
+class TargetSelectionObservationsCfg(ObservationsCfg):
+    """`ObservationsCfg` + one new, additive term,
+    `distractor_distance_summary` (Task 2, docs/superpowers/plans/2026-07-19-
+    target-selection-clutter-implementation.md; spec:
+    docs/superpowers/specs/2026-07-19-target-selection-clutter-design.md) -
+    DexSinGrasp's own `d_t^S` mechanism (arXiv:2504.04516 §III-A Eq. 1), a
+    fixed-size K=2 hard-zero-padded target-to-distractor distance vector
+    (see mdp.distractor_distance_summary and
+    tasks/franka/distractor_observations.py for the pure math). Grows the
+    observation space by exactly 2 dims (41 -> 43) for whichever env cfg
+    uses this class.
+
+    Deliberately a NEW class, NOT a term added directly to the shared base
+    `ObservationsCfg.PolicyCfg` above: unlike `shape_class`/
+    `geometry_descriptor` (safe to broadcast unconditionally, since every
+    env cfg already has a `die_shape_class` constant),
+    `distractor_distance_summary` requires `env.scene["distractor_1"]`/
+    `env.scene["distractor_2"]` to actually exist as scene entities - only
+    dice_lift_joint_env_cfg.py's new target-selection curriculum-stage env
+    cfgs (FrankaDieLiftTargetSelectionSceneCfg, Task 1) have those. Adding
+    this term to the shared base class would `KeyError` on every other,
+    single-die env cfg already in this codebase (`ik-cube`, `joint-die`,
+    `joint-die-d12-d20-mixed`, etc.) the moment its observation manager ran.
+    This class is genuinely additive to the *new* clutter env cfgs only -
+    every other env cfg in this repo keeps using the original
+    `ObservationsCfg` unchanged."""
+
+    @configclass
+    class PolicyCfg(ObservationsCfg.PolicyCfg):
+        distractor_distance_summary = ObsTerm(func=mdp.distractor_distance_summary)
+
+    policy: PolicyCfg = PolicyCfg()
+
+
+@configclass
 class EventCfg:
     """Reset events: put the whole scene back to default, then jitter the cube's start pose."""
 

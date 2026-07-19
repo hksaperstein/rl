@@ -33,7 +33,7 @@ from isaaclab.sim.spawners.wrappers import MultiAssetSpawnerCfg
 from isaaclab.utils import configclass
 
 from . import mdp
-from .lift_env_cfg import EventCfg, FrankaLiftEnvCfg, FrankaLiftSceneCfg
+from .lift_env_cfg import EventCfg, FrankaLiftEnvCfg, FrankaLiftSceneCfg, TargetSelectionObservationsCfg
 
 _D20_USD = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
@@ -1110,6 +1110,14 @@ class FrankaDieLiftJointD12D20TargetSelectionSOEnvCfg(FrankaDieLiftJointD12D20Mi
 
     scene: FrankaDieLiftTargetSelectionSceneCfg = FrankaDieLiftTargetSelectionSceneCfg(num_envs=4096, env_spacing=2.5)
     events: TargetSelectionEventCfg = TargetSelectionEventCfg()
+    # Task 2 (docs/superpowers/plans/2026-07-19-target-selection-clutter-
+    # implementation.md): the new distractor_distance_summary observation
+    # term (see lift_env_cfg.py's TargetSelectionObservationsCfg docstring
+    # for why this is a NEW class, not added to the shared base
+    # ObservationsCfg). Grows the observation space from 41 to 43 dims for
+    # this class and its own _PLAY eval variants (which inherit this field
+    # unchanged - none of them override `observations`).
+    observations: TargetSelectionObservationsCfg = TargetSelectionObservationsCfg()
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -1188,6 +1196,14 @@ class FrankaDieLiftJointD12D20TargetSelectionD1EnvCfg(FrankaDieLiftJointD12D20Mi
 
     scene: FrankaDieLiftTargetSelectionSceneCfg = FrankaDieLiftTargetSelectionSceneCfg(num_envs=4096, env_spacing=2.5)
     events: TargetSelectionEventCfg = TargetSelectionEventCfg()
+    # Task 2 (docs/superpowers/plans/2026-07-19-target-selection-clutter-
+    # implementation.md): the new distractor_distance_summary observation
+    # term (see lift_env_cfg.py's TargetSelectionObservationsCfg docstring
+    # for why this is a NEW class, not added to the shared base
+    # ObservationsCfg). Grows the observation space from 41 to 43 dims for
+    # this class and its own _PLAY eval variants (which inherit this field
+    # unchanged - none of them override `observations`).
+    observations: TargetSelectionObservationsCfg = TargetSelectionObservationsCfg()
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -1280,6 +1296,14 @@ class FrankaDieLiftJointD12D20TargetSelectionD2EnvCfg(FrankaDieLiftJointD12D20Mi
 
     scene: FrankaDieLiftTargetSelectionSceneCfg = FrankaDieLiftTargetSelectionSceneCfg(num_envs=4096, env_spacing=2.5)
     events: TargetSelectionEventCfg = TargetSelectionEventCfg()
+    # Task 2 (docs/superpowers/plans/2026-07-19-target-selection-clutter-
+    # implementation.md): the new distractor_distance_summary observation
+    # term (see lift_env_cfg.py's TargetSelectionObservationsCfg docstring
+    # for why this is a NEW class, not added to the shared base
+    # ObservationsCfg). Grows the observation space from 41 to 43 dims for
+    # this class and its own _PLAY eval variants (which inherit this field
+    # unchanged - none of them override `observations`).
+    observations: TargetSelectionObservationsCfg = TargetSelectionObservationsCfg()
 
     def __post_init__(self) -> None:
         super().__post_init__()

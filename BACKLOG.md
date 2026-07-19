@@ -423,3 +423,47 @@ indefinitely (would leave this experiment's own question about d10
 specifically unanswered for no good reason) or attempting to actually
 fix/retrain the detector for 48mm dice (real scope creep — a vision/
 training-data problem, not what this experiment is testing).
+
+**Result (2026-07-19, follow-up task): d10 grasp mechanism PASSES at 48mm
+scale — 241.4mm z-gain (threshold 150mm), 0.8mm xy-drift, all 4 other
+dice undisturbed (gain ≈0.0mm each)**, via `--gt-xy-bypass` added to
+`scripts/_diag_d8d10_48mm_grasp_reverify.py` (commit `bcb0a27`), reusing
+`dice_pick_demo.py`'s own `--gt-xy-bypass` mechanism (d4 rung-1
+precedent) — full data: `outputs/dice_demo/diag_48mm_grasp_reverify/d10/
+verdict_d10_48mm.json` (not committed, gitignored `outputs/`). d10's
+grasp mechanism is confirmed sound at 48mm scale, same as d8's prior
+242.6mm result; both shapes proceed to Task 1 on equal footing as this
+entry's decision intended.
+
+**A real bug was found and fixed in the same pass, and it changes this
+entry's own premise**: `run_shape_reverify` called
+`run_detector_subprocess` immediately after `override_die_scale`, but
+`run_detector_subprocess` only reads whatever `rgb.png` already sits in
+`out_dir` — it never re-renders. Those files were last written by
+`spawn_scene_and_settle`, BEFORE the die was ever rescaled to 48mm. Every
+prior run of this diagnostic's detector step (both the original d8 PASS
+and the d10 FAIL that motivated this whole entry) therefore ran object
+detection against a STALE REAL-SIZE frame, never a genuine 48mm-scale
+image. Fixed via a new `recapture_camera_frame` (re-renders and
+overwrites the camera frame from the live post-rescale scene before
+detection runs). **With the bug fixed, the detector actually found d10 at
+genuine 48mm scale in this same run** — `class=d10 conf=0.101
+world_pos=(0.5416, 0.0460, 0.0056)`, only 3.7mm xy-error from ground
+truth — contradicting the "0 detections... at the enlarged 48mm scale"
+diagnosis this entry opened with. That original diagnosis was measured
+against the wrong image; it is not evidence that d10 is
+undetectable at 48mm scale, only that this diagnostic's own camera frame
+was stale. One low-confidence (10%) single-seed detection is not strong
+evidence either way about 48mm-scale detection reliability generally
+(this repo's own documented render-nondeterminism/detection-fragility
+precedent means one success at low confidence doesn't establish a stable
+detection rate) — flagged as an open question, not re-investigated
+further in this task (out of scope: this task's job was the grasp
+mechanism, not re-characterizing detector reliability at 48mm).
+**Follow-up not done in this task, flagged for whoever picks up Task
+1**: d8's earlier "PASS" also never exercised true 48mm-scale detection
+(same stale-frame bug) — its GRASP-mechanism verdict is unaffected (that
+check reads physics state directly, not the camera frame), but a
+regression re-run of d8 with the bug fix in place has not been done; low
+stakes (Task 1's own capture will exercise 48mm-scale detection for real
+regardless) but worth a cheap re-check if convenient.

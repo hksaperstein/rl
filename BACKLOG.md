@@ -43,3 +43,25 @@ same class of failure, not just these two specific ones. Not built this
 session because the user said stop; next cloud-heavy task should either
 build this image first or explicitly accept the from-scratch-install
 risk knowingly rather than by default.
+
+## Task 3.5 execution backend: desktop dispatch instead of cloud (2026-07-18)
+
+Task 3.5 (`docs/superpowers/plans/2026-07-16-unified-multi-die-specialist-distillation.md`)
+specifies GCP cloud as its execution backend — written before the
+Pi-as-primary-agent desktop-GPU-dispatch infra existed, and precisely
+where this experiment already hit real infra friction (SPOT preemption,
+pip-cache corruption, `Linger=no` killing a detached install — see the
+entry above). Decision: dispatch Task 3.5's actual training runs to the
+desktop (`scripts/run_on_desktop_gpu.sh`, per the new
+`CLAUDE.md` "Pi-as-primary-agent GPU dispatch" desktop-first-cloud-
+fallback routing, headless since this is an unattended dispatched job,
+not an interactively-observed local session) instead of re-attempting
+cloud provisioning — Isaac Lab is already installed on the desktop (no
+15-20min from-scratch install window to fail mid-way), no SPOT
+preemption risk since it isn't a cloud SPOT instance at all. Cloud
+remains the documented fallback if `check_gpu_availability.sh` reports
+the desktop unavailable when the task starts. Not chosen: sticking to
+the plan's literal cloud-only instruction, or building the pre-baked
+Isaac Lab VM image first per the entry above (still worth doing
+eventually for whenever cloud genuinely is the only option, but not a
+blocker for this specific task now that desktop dispatch exists).

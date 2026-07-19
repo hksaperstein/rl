@@ -334,6 +334,23 @@ class FrankaLiftEnvCfg(ManagerBasedRLEnvCfg):
     # the single-shape broadcast path (`die_shape_class`) is unaffected.
     die_shape_classes_per_env: tuple[str, ...] | None = None
 
+    # Per-env-cfg constant (Task 1, docs/superpowers/plans/2026-07-19-
+    # target-selection-clutter-implementation.md): how many of the two
+    # `distractor_1`/`distractor_2` scene slots (added by
+    # dice_lift_joint_env_cfg.py's FrankaDieLiftTargetSelectionSceneCfg) are
+    # REAL/active for this env cfg's own curriculum stage, vs. parked
+    # (off-workspace, degenerate zero-width reset range - see
+    # TargetSelectionEventCfg). Read by mdp.distractor_distance_summary
+    # (Task 2) to decide which of its two K=2 output columns are real
+    # distances vs. hard-zeroed - NOT a per-environment-varying value, same
+    # per-env-cfg-constant convention as die_shape_class/
+    # die_shape_classes_per_env above. Default 0 so every existing env cfg
+    # in this repo (none of which have distractor_1/distractor_2 scene
+    # entities at all) is completely unaffected; only the 3 new
+    # target-selection curriculum-stage env cfgs (SO=0, D1=1, D2=2) in
+    # dice_lift_joint_env_cfg.py override this.
+    active_distractor_count: int = 0
+
     def __post_init__(self) -> None:
         self.decimation = 2
         self.episode_length_s = 5.0

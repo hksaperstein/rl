@@ -25,13 +25,15 @@ FrankaLiftEnvCfg. Import only after an AppLauncher exists.
 import os
 
 from isaaclab.assets import RigidObjectCfg
+from isaaclab.managers import EventTermCfg as EventTerm
+from isaaclab.managers import SceneEntityCfg
 from isaaclab.sim.schemas.schemas_cfg import MassPropertiesCfg, RigidBodyPropertiesCfg
 from isaaclab.sim.spawners.from_files.from_files_cfg import UsdFileCfg
 from isaaclab.sim.spawners.wrappers import MultiAssetSpawnerCfg
 from isaaclab.utils import configclass
 
 from . import mdp
-from .lift_env_cfg import FrankaLiftEnvCfg
+from .lift_env_cfg import EventCfg, FrankaLiftEnvCfg, FrankaLiftSceneCfg
 
 _D20_USD = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
@@ -886,3 +888,481 @@ class FrankaDieLiftJointD12D20MixedEnvCfg(FrankaDieLiftJointHeavyEnvCfg):
             ],
             random_choice=False,
         )
+
+
+# ---------------------------------------------------------------------------
+# Task 1 (docs/superpowers/plans/2026-07-19-target-selection-clutter-
+# implementation.md): 3-die target-selection clutter scene topology + SO/D1/D2
+# distractor-count curriculum. See
+# docs/superpowers/specs/2026-07-19-target-selection-clutter-design.md for
+# the full design rationale.
+# ---------------------------------------------------------------------------
+
+# Step 1 finding (this task's own required source read of
+# isaaclab.envs.mdp.events.reset_root_state_uniform, confirmed on the
+# desktop's real installed Isaac Lab checkout,
+# /home/saps/IsaacLab/source/isaaclab/isaaclab/envs/mdp/events.py:1052-1094):
+#
+#     root_states = asset.data.default_root_state[env_ids].clone()
+#     ...
+#     positions = root_states[:, 0:3] + env.scene.env_origins[env_ids] + rand_samples[:, 0:3]
+#
+# `pose_range`'s x/y/z keys are sampled into `rand_samples` and added as an
+# OFFSET on top of the asset's own `default_root_state` position (which, for
+# a RigidObjectCfg, is derived from that field's own `init_state.pos` at
+# scene-spawn time) plus the env's own world origin - NOT an absolute
+# world-frame range. Consequence for this scene's 3 co-present entities
+# (target/distractor_1/distractor_2, each its own RigidObjectCfg with its
+# own `init_state.pos`): giving each entity a disjoint reset SUB-REGION of
+# the table requires BOTH (a) each entity's own `init_state.pos` "lane
+# center" to differ, AND (b) each entity's own `pose_range` "spread" to stay
+# narrow enough not to cross into a neighboring lane. Changing only
+# `pose_range` while leaving every entity's `init_state.pos` at the same
+# point would NOT produce disjoint regions - this is the reason
+# `FrankaDieLiftJointD12D20TargetSelectionD1EnvCfg`/`...D2EnvCfg` below
+# override BOTH `scene.distractor_N.init_state.pos` (the lane center) AND
+# `events.reset_distractor_N_position.params["pose_range"]` (the spread)
+# when activating a distractor slot - overriding only one would silently
+# reuse the parked lane center with a real spread, or vice versa.
+#
+# Step 2 design (three parallel Y-axis lanes, all sharing the SAME X range):
+# the existing `reset_object_position` term already uses x=(-0.1, 0.1) off
+# the object's own default x=0.5, giving x in [0.4, 0.6] - matching
+# `CommandsCfg`'s own goal `pos_x=(0.4, 0.6)` range exactly, the plan's own
+# suggested concrete "reachable" reference point. That 0.2m X span is too
+# narrow to host 3 side-by-side lanes, so this design keeps X shared
+# (0.4-0.6) across all three entities and instead splits Y
+# (`CommandsCfg`'s own `pos_y=(-0.25, 0.25)`, a roomier 0.5m span) into 3
+# non-overlapping lanes:
+#   distractor_1 lane: y in [-0.25, -0.12] (width 0.13m, center -0.185)
+#   target (object) lane: y in [-0.05, 0.05] (width 0.10m, center 0.0 - the
+#     object's own pre-existing default init_state.pos.y, unchanged; only
+#     its EVENT's pose_range narrows from the pre-existing +/-0.25 down to
+#     +/-0.05 in this new EventCfg subclass)
+#   distractor_2 lane: y in [0.12, 0.25] (width 0.13m, center +0.185)
+# Edge-to-edge gaps: target<->distractor_1 = 0.07m (70mm), target<->
+# distractor_2 = 0.07m (70mm). Each d12/d20 die at its 48mm-parity scale has
+# up to a ~48mm bounding diameter in an arbitrary orientation
+# (native_max_dim x scale, see this file's own d12/d20 scale-derivation
+# docstrings above) though a real settled footprint is typically smaller
+# (~18-30mm) - worst case, two adjacent dice could each reach ~24mm from
+# their own lane's edge toward the gap, needing >=48mm total clearance to
+# stay disjoint; the 70mm gap leaves ~22mm of margin over that worst case.
+# This is a design-time estimate, not treated as verified until Step 3/4's
+# live spawn-and-settle diagnostic
+# (scripts/_diag_target_selection_clutter_scene_check.py) empirically
+# confirms no overlap actually occurs - these dice have ZERO reset rotation
+# randomization (pose_range here never sets roll/pitch/yaw, matching the
+# pre-existing `reset_object_position` term) but CAN still roll/tumble a
+# little while settling after being dropped, especially the rounder
+# d12/d20 shapes.
+_TARGET_LANE_POSE_RANGE = {"x": (-0.1, 0.1), "y": (-0.05, 0.05), "z": (0.0, 0.0)}
+_DISTRACTOR_1_LANE_CENTER = (0.5, -0.185, 0.055)
+_DISTRACTOR_1_LANE_POSE_RANGE = {"x": (-0.1, 0.1), "y": (-0.065, 0.065), "z": (0.0, 0.0)}
+_DISTRACTOR_2_LANE_CENTER = (0.5, 0.185, 0.055)
+_DISTRACTOR_2_LANE_POSE_RANGE = {"x": (-0.1, 0.1), "y": (-0.065, 0.065), "z": (0.0, 0.0)}
+
+# Parked (inactive-distractor) position: off-workspace, well outside
+# CommandsCfg's own reachable pos_x=(0.4,0.6)/pos_y=(-0.25,0.25)/
+# pos_z=(0.25,0.5) goal range and outside every lane above - z=-0.9 is far
+# below the table/reach region (only a short ~0.15m drop to the shared
+# GroundPlaneCfg at world z=-1.05 - see FrankaLiftSceneCfg's own `plane`
+# field - negligible settle time), x/y offset from each other so the two
+# parked bodies don't spawn exactly coincident (avoids a degenerate
+# same-point interpenetration at reset, even though neither is observed or
+# read by anything while parked). Zero-width pose_range keeps a parked slot
+# pinned exactly at its own init_state.pos every reset - "a parameter
+# choice on an existing event term, not new event-handling code" per the
+# spec.
+_PARKED_DISTRACTOR_1_POS = (0.5, -0.3, -0.9)
+_PARKED_DISTRACTOR_2_POS = (0.5, 0.3, -0.9)
+_PARKED_POSE_RANGE = {"x": (0.0, 0.0), "y": (0.0, 0.0), "z": (0.0, 0.0)}
+
+
+@configclass
+class FrankaDieLiftTargetSelectionSceneCfg(FrankaLiftSceneCfg):
+    """`FrankaLiftSceneCfg` + two new sibling `RigidObjectCfg` distractor
+    slots (`distractor_1`/`distractor_2`, prim paths
+    `{ENV_REGEX_NS}/Distractor1`/`Distractor2`), following
+    `tasks/franka/dice_scene_cfg.py`'s `DiceSceneCfg` pattern for multiple
+    simultaneous `RigidObjectCfg` siblings on one scene cfg - the first time
+    this pattern is exercised inside a `ManagerBasedRLEnv` rather than a
+    scripted `InteractiveScene` demo (Task 1,
+    docs/superpowers/plans/2026-07-19-target-selection-clutter-
+    implementation.md). `scene.object` (inherited from `FrankaLiftSceneCfg`)
+    remains the sole target/commanded-die slot, unchanged in meaning.
+
+    Both distractor fields default to a PARKED placeholder: a single d12
+    UsdFileCfg (this file's own already-verified 48mm-parity scale/mass -
+    0.001476, `_D20_RIGID_PROPS`, 0.216kg mass, matching every other
+    rigid-body default in this file), positioned off-workspace at
+    `_PARKED_DISTRACTOR_1_POS`/`_PARKED_DISTRACTOR_2_POS` - this default
+    state IS Stage SO's own real desired topology (0 active distractors, see
+    `FrankaDieLiftJointD12D20TargetSelectionSOEnvCfg` below), not a
+    placeholder value stage SO further overrides.
+    `FrankaDieLiftJointD12D20TargetSelectionD1EnvCfg`/`...D2EnvCfg` override
+    `.spawn` (to a real `MultiAssetSpawnerCfg`) and `.init_state.pos` (to a
+    real lane center) in their own `__post_init__`, exactly like
+    `FrankaDieLiftJointD12D20MixedEnvCfg` already overrides
+    `self.scene.object.spawn` throughout this file. See the module-level
+    comment block immediately above this class for the full Step 1
+    (offset-vs-absolute `pose_range` semantics) and Step 2 (disjoint-lane
+    design) writeups this scene cfg and `TargetSelectionEventCfg` below both
+    depend on."""
+
+    distractor_1: RigidObjectCfg = RigidObjectCfg(
+        prim_path="{ENV_REGEX_NS}/Distractor1",
+        init_state=RigidObjectCfg.InitialStateCfg(pos=_PARKED_DISTRACTOR_1_POS, rot=(1.0, 0.0, 0.0, 0.0)),
+        spawn=UsdFileCfg(
+            usd_path=_D12_USD,
+            scale=(0.001476, 0.001476, 0.001476),
+            rigid_props=_D20_RIGID_PROPS,
+            mass_props=MassPropertiesCfg(mass=0.216),
+        ),
+    )
+    distractor_2: RigidObjectCfg = RigidObjectCfg(
+        prim_path="{ENV_REGEX_NS}/Distractor2",
+        init_state=RigidObjectCfg.InitialStateCfg(pos=_PARKED_DISTRACTOR_2_POS, rot=(1.0, 0.0, 0.0, 0.0)),
+        spawn=UsdFileCfg(
+            usd_path=_D12_USD,
+            scale=(0.001476, 0.001476, 0.001476),
+            rigid_props=_D20_RIGID_PROPS,
+            mass_props=MassPropertiesCfg(mass=0.216),
+        ),
+    )
+
+
+@configclass
+class TargetSelectionEventCfg(EventCfg):
+    """`EventCfg` + per-entity disjoint-lane resets for the 3-die
+    target-selection clutter scene (Task 1). REDECLARES `reset_object_position`
+    (narrowed to the target's own disjoint lane, `_TARGET_LANE_POSE_RANGE`)
+    rather than mutating it post-init, and adds two new fields,
+    `reset_distractor_1_position`/`reset_distractor_2_position`, both
+    `mdp.reset_root_state_uniform` (the same function `reset_object_position`
+    already uses) defaulting to the PARKED zero-width pose_range - matching
+    `FrankaDieLiftTargetSelectionSceneCfg`'s own "default state IS Stage SO's
+    real state" convention. Declared as real configclass fields on this
+    subclass (not dynamically added post-`__init__` instance attributes) -
+    the design note in docs/superpowers/plans/2026-07-19-target-selection-
+    clutter-implementation.md's Task 1 explicitly prefers this, matching how
+    `FrankaDieLiftTargetSelectionSceneCfg` above and every existing
+    `scene: <SceneCfgSubclass> = ...`/`observations: <ObservationsCfgSubclass>
+    = ...` field override in this codebase already works.
+    `FrankaDieLiftJointD12D20TargetSelectionD1EnvCfg`/`...D2EnvCfg` override
+    `events.reset_distractor_N_position.params["pose_range"]` (real lane
+    spread) in their own `__post_init__` when activating a distractor slot -
+    see the module-level Step 1/Step 2 comment block above
+    `FrankaDieLiftTargetSelectionSceneCfg` for why the matching
+    `scene.distractor_N.init_state.pos` override is ALSO required, not
+    optional."""
+
+    reset_object_position: EventTerm = EventTerm(
+        func=mdp.reset_root_state_uniform,
+        mode="reset",
+        params={
+            "pose_range": dict(_TARGET_LANE_POSE_RANGE),
+            "velocity_range": {},
+            "asset_cfg": SceneEntityCfg("object", body_names="Object"),
+        },
+    )
+
+    reset_distractor_1_position: EventTerm = EventTerm(
+        func=mdp.reset_root_state_uniform,
+        mode="reset",
+        params={
+            "pose_range": dict(_PARKED_POSE_RANGE),
+            "velocity_range": {},
+            "asset_cfg": SceneEntityCfg("distractor_1", body_names="Distractor1"),
+        },
+    )
+    reset_distractor_2_position: EventTerm = EventTerm(
+        func=mdp.reset_root_state_uniform,
+        mode="reset",
+        params={
+            "pose_range": dict(_PARKED_POSE_RANGE),
+            "velocity_range": {},
+            "asset_cfg": SceneEntityCfg("distractor_2", body_names="Distractor2"),
+        },
+    )
+
+
+@configclass
+class FrankaDieLiftJointD12D20TargetSelectionSOEnvCfg(FrankaDieLiftJointD12D20MixedEnvCfg):
+    """Distractor-count curriculum Stage SO (0 active distractors) - the
+    internal sanity-gate stage (spec's pre-registered gate, Task 4 of the
+    plan): the full 3-die scene topology (target + 2 always-present-but-
+    PARKED distractor bodies) with `active_distractor_count = 0`, trained
+    FROM SCRATCH (not resumed from the 41-dim `model_2998.pt` checkpoint -
+    this stage's schema is 43-dim once Task 2's `distractor_distance_summary`
+    observation term lands). Inherits `FrankaDieLiftJointD12D20MixedEnvCfg`'s
+    own already-proven d12/d20 round-robin TARGET population, 48mm-parity
+    scales, and `scene.replicate_physics = False` unchanged - only `scene`/
+    `events` are overridden to the new clutter-topology types below.
+
+    Both distractor slots stay at `FrankaDieLiftTargetSelectionSceneCfg`/
+    `TargetSelectionEventCfg`'s own class-level PARKED defaults - no further
+    override needed here, since those defaults already ARE this stage's real
+    desired state (a degenerate zero-width pose_range at a fixed
+    off-workspace position, outside the arm's reachable volume - reuses
+    `reset_root_state_uniform` with a parameter choice, not new
+    event-handling code, per the spec)."""
+
+    scene: FrankaDieLiftTargetSelectionSceneCfg = FrankaDieLiftTargetSelectionSceneCfg(num_envs=4096, env_spacing=2.5)
+    events: TargetSelectionEventCfg = TargetSelectionEventCfg()
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.active_distractor_count = 0
+
+
+@configclass
+class FrankaDieLiftJointD12D20TargetSelectionSOEnvCfg_PLAY_D12Target(FrankaDieLiftJointD12D20TargetSelectionSOEnvCfg):
+    """Stage SO eval variant, target shape pinned to d12 (distractor slots
+    stay parked, unaffected by which shape is pinned as target - matching
+    Stage SO's own 0-active-distractor topology). `num_envs=8` (this arc's
+    own established eval `num_envs`, matching every specialist-eval `_PLAY`
+    invocation, e.g. `franka_checkpoint_review.py --num_envs 8`)."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.scene.object.spawn = UsdFileCfg(
+            usd_path=_D12_USD,
+            scale=(0.001476, 0.001476, 0.001476),
+            rigid_props=_D20_RIGID_PROPS,
+            mass_props=MassPropertiesCfg(mass=0.216),
+        )
+        self.die_shape_class = "d12"
+        self.die_shape_classes_per_env = None
+        self.scene.num_envs = 8
+        self.scene.env_spacing = 2.5
+        self.observations.policy.enable_corruption = False
+
+
+@configclass
+class FrankaDieLiftJointD12D20TargetSelectionSOEnvCfg_PLAY_D20Target(FrankaDieLiftJointD12D20TargetSelectionSOEnvCfg):
+    """Stage SO eval variant, target shape pinned to d20 (see
+    `..._PLAY_D12Target`'s own docstring for shared rationale)."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.scene.object.spawn = UsdFileCfg(
+            usd_path=_D20_USD,
+            scale=(0.001585, 0.001585, 0.001585),
+            rigid_props=_D20_RIGID_PROPS,
+            mass_props=MassPropertiesCfg(mass=0.216),
+        )
+        self.die_shape_class = "d20"
+        self.die_shape_classes_per_env = None
+        self.scene.num_envs = 8
+        self.scene.env_spacing = 2.5
+        self.observations.policy.enable_corruption = False
+
+
+@configclass
+class FrankaDieLiftJointD12D20TargetSelectionD1EnvCfg(FrankaDieLiftJointD12D20MixedEnvCfg):
+    """Distractor-count curriculum Stage D1 (1 active distractor):
+    `distractor_1` gets a REAL `MultiAssetSpawnerCfg(assets_cfg=[d12_cfg,
+    d20_cfg], random_choice=True)` population at its own real lane
+    (`_DISTRACTOR_1_LANE_CENTER`/`_DISTRACTOR_1_LANE_POSE_RANGE`, see the
+    module-level Step 1/Step 2 comment block above
+    `FrankaDieLiftTargetSelectionSceneCfg`); `distractor_2` stays parked
+    exactly as Stage SO. Resumes from Stage SO's own checkpoint (Task 5 of
+    the plan) - schema is stable across stages once Task 2 lands, a normal
+    same-dimensionality PPO resume.
+
+    `random_choice=True`, NOT `False`: the target's own population already
+    uses `random_choice=False` (deterministic round-robin,
+    `env_index % len(assets)`, inherited from
+    `FrankaDieLiftJointD12D20MixedEnvCfg`). If this distractor slot reused
+    the SAME 2-element `[d12_cfg, d20_cfg]` list with `random_choice=False`,
+    its assigned shape would ALSO be `env_index % 2` - identical to the
+    target's own formula, meaning every single env's distractor would
+    deterministically match its own target's shape, never a cross-shape
+    pairing. `random_choice=True` (an independent per-env-index
+    `random.choice(...)` draw, still fixed once at scene-spawn time, never
+    per-episode-resampled - confirmed by direct read of
+    `isaaclab/sim/spawners/wrappers/wrappers.py::spawn_multi_asset` for this
+    task) is required to pool both same-shape and cross-shape regimes in one
+    training population, per the spec."""
+
+    scene: FrankaDieLiftTargetSelectionSceneCfg = FrankaDieLiftTargetSelectionSceneCfg(num_envs=4096, env_spacing=2.5)
+    events: TargetSelectionEventCfg = TargetSelectionEventCfg()
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.active_distractor_count = 1
+        # Real lane center + spread for distractor_1 - BOTH init_state.pos
+        # (the lane center the pose_range offset is added to) and the
+        # event's own pose_range (the spread) must move together, per the
+        # Step 1 offset-semantics finding above.
+        self.scene.distractor_1.init_state.pos = _DISTRACTOR_1_LANE_CENTER
+        self.scene.distractor_1.spawn = MultiAssetSpawnerCfg(
+            assets_cfg=[
+                UsdFileCfg(
+                    usd_path=_D12_USD,
+                    scale=(0.001476, 0.001476, 0.001476),
+                    rigid_props=_D20_RIGID_PROPS,
+                    mass_props=MassPropertiesCfg(mass=0.216),
+                ),
+                UsdFileCfg(
+                    usd_path=_D20_USD,
+                    scale=(0.001585, 0.001585, 0.001585),
+                    rigid_props=_D20_RIGID_PROPS,
+                    mass_props=MassPropertiesCfg(mass=0.216),
+                ),
+            ],
+            random_choice=True,
+        )
+        self.events.reset_distractor_1_position.params["pose_range"] = dict(_DISTRACTOR_1_LANE_POSE_RANGE)
+        # distractor_2 stays parked - inherited TargetSelectionEventCfg/
+        # FrankaDieLiftTargetSelectionSceneCfg class-level defaults, untouched here.
+
+
+@configclass
+class FrankaDieLiftJointD12D20TargetSelectionD1EnvCfg_PLAY_D12Target(FrankaDieLiftJointD12D20TargetSelectionD1EnvCfg):
+    """Stage D1 eval variant, target shape pinned to d12. Distractor slots
+    are NOT pinned to a single shape at eval - `distractor_1` keeps its own
+    stage's real `MultiAssetSpawnerCfg`/`random_choice=True` population,
+    `distractor_2` stays parked, exactly as this class's own training
+    topology (only the target needs pinning per the spec)."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.scene.object.spawn = UsdFileCfg(
+            usd_path=_D12_USD,
+            scale=(0.001476, 0.001476, 0.001476),
+            rigid_props=_D20_RIGID_PROPS,
+            mass_props=MassPropertiesCfg(mass=0.216),
+        )
+        self.die_shape_class = "d12"
+        self.die_shape_classes_per_env = None
+        self.scene.num_envs = 8
+        self.scene.env_spacing = 2.5
+        self.observations.policy.enable_corruption = False
+
+
+@configclass
+class FrankaDieLiftJointD12D20TargetSelectionD1EnvCfg_PLAY_D20Target(FrankaDieLiftJointD12D20TargetSelectionD1EnvCfg):
+    """Stage D1 eval variant, target shape pinned to d20 (see
+    `..._PLAY_D12Target`'s own docstring for shared rationale)."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.scene.object.spawn = UsdFileCfg(
+            usd_path=_D20_USD,
+            scale=(0.001585, 0.001585, 0.001585),
+            rigid_props=_D20_RIGID_PROPS,
+            mass_props=MassPropertiesCfg(mass=0.216),
+        )
+        self.die_shape_class = "d20"
+        self.die_shape_classes_per_env = None
+        self.scene.num_envs = 8
+        self.scene.env_spacing = 2.5
+        self.observations.policy.enable_corruption = False
+
+
+@configclass
+class FrankaDieLiftJointD12D20TargetSelectionD2EnvCfg(FrankaDieLiftJointD12D20MixedEnvCfg):
+    """Distractor-count curriculum Stage D2 (2 active distractors - the
+    experiment's target configuration): both `distractor_1`/`distractor_2`
+    get their own independent real `MultiAssetSpawnerCfg(random_choice=True)`
+    populations at their own real lanes (see the module-level Step 1/Step 2
+    comment block above `FrankaDieLiftTargetSelectionSceneCfg`). Resumes from
+    Stage D1's own checkpoint (Task 6 of the plan).
+
+    `distractor_1` and `distractor_2` use TWO SEPARATE `MultiAssetSpawnerCfg`
+    instances (one per scene field), so their per-env draws are independent
+    of each other too - not just independent of the target's own round-robin
+    (see `FrankaDieLiftJointD12D20TargetSelectionD1EnvCfg`'s own docstring
+    for the `random_choice=True`-not-`False` rationale, which applies
+    identically to both slots here)."""
+
+    scene: FrankaDieLiftTargetSelectionSceneCfg = FrankaDieLiftTargetSelectionSceneCfg(num_envs=4096, env_spacing=2.5)
+    events: TargetSelectionEventCfg = TargetSelectionEventCfg()
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.active_distractor_count = 2
+        self.scene.distractor_1.init_state.pos = _DISTRACTOR_1_LANE_CENTER
+        self.scene.distractor_1.spawn = MultiAssetSpawnerCfg(
+            assets_cfg=[
+                UsdFileCfg(
+                    usd_path=_D12_USD,
+                    scale=(0.001476, 0.001476, 0.001476),
+                    rigid_props=_D20_RIGID_PROPS,
+                    mass_props=MassPropertiesCfg(mass=0.216),
+                ),
+                UsdFileCfg(
+                    usd_path=_D20_USD,
+                    scale=(0.001585, 0.001585, 0.001585),
+                    rigid_props=_D20_RIGID_PROPS,
+                    mass_props=MassPropertiesCfg(mass=0.216),
+                ),
+            ],
+            random_choice=True,
+        )
+        self.events.reset_distractor_1_position.params["pose_range"] = dict(_DISTRACTOR_1_LANE_POSE_RANGE)
+
+        self.scene.distractor_2.init_state.pos = _DISTRACTOR_2_LANE_CENTER
+        self.scene.distractor_2.spawn = MultiAssetSpawnerCfg(
+            assets_cfg=[
+                UsdFileCfg(
+                    usd_path=_D12_USD,
+                    scale=(0.001476, 0.001476, 0.001476),
+                    rigid_props=_D20_RIGID_PROPS,
+                    mass_props=MassPropertiesCfg(mass=0.216),
+                ),
+                UsdFileCfg(
+                    usd_path=_D20_USD,
+                    scale=(0.001585, 0.001585, 0.001585),
+                    rigid_props=_D20_RIGID_PROPS,
+                    mass_props=MassPropertiesCfg(mass=0.216),
+                ),
+            ],
+            random_choice=True,
+        )
+        self.events.reset_distractor_2_position.params["pose_range"] = dict(_DISTRACTOR_2_LANE_POSE_RANGE)
+
+
+@configclass
+class FrankaDieLiftJointD12D20TargetSelectionD2EnvCfg_PLAY_D12Target(FrankaDieLiftJointD12D20TargetSelectionD2EnvCfg):
+    """Stage D2 eval variant, target shape pinned to d12. Distractor slots
+    are NOT pinned to a single shape at eval - both keep their own stage's
+    real `MultiAssetSpawnerCfg`/`random_choice=True` populations, exactly as
+    this class's own training topology (only the target needs pinning per
+    the spec)."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.scene.object.spawn = UsdFileCfg(
+            usd_path=_D12_USD,
+            scale=(0.001476, 0.001476, 0.001476),
+            rigid_props=_D20_RIGID_PROPS,
+            mass_props=MassPropertiesCfg(mass=0.216),
+        )
+        self.die_shape_class = "d12"
+        self.die_shape_classes_per_env = None
+        self.scene.num_envs = 8
+        self.scene.env_spacing = 2.5
+        self.observations.policy.enable_corruption = False
+
+
+@configclass
+class FrankaDieLiftJointD12D20TargetSelectionD2EnvCfg_PLAY_D20Target(FrankaDieLiftJointD12D20TargetSelectionD2EnvCfg):
+    """Stage D2 eval variant, target shape pinned to d20 (see
+    `..._PLAY_D12Target`'s own docstring for shared rationale)."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.scene.object.spawn = UsdFileCfg(
+            usd_path=_D20_USD,
+            scale=(0.001585, 0.001585, 0.001585),
+            rigid_props=_D20_RIGID_PROPS,
+            mass_props=MassPropertiesCfg(mass=0.216),
+        )
+        self.die_shape_class = "d20"
+        self.die_shape_classes_per_env = None
+        self.scene.num_envs = 8
+        self.scene.env_spacing = 2.5
+        self.observations.policy.enable_corruption = False

@@ -134,7 +134,47 @@ vectorized env instance. Two reasons:
 If Task 5's real on-policy DAgger phase later needs genuinely-live
 in-episode shape switching, that is a new, separate design question for
 whoever runs Task 5 to raise, not something silently assumed resolved
-here.
+here. (Task 5, run 2026-07-19, did NOT need this - see the update
+immediately below; it still never introduces per-episode-reset shape
+resampling, only per-env-at-spawn-time shape assignment, same as this
+design note's own original mechanism.)
+
+=====================================================================
+TASK 5 UPDATE (2026-07-19): real run uses ONE mixed env, not two
+side-by-side single-shape envs
+=====================================================================
+
+The "two ROLLOUT environments run side by side" bullet above, and this
+design note's own "two teachers' own existing single-shape envs side by
+side" framing, describe `run_dagger_iteration`'s mechanism - still
+accurate for `--dry-run`'s stub envs (whose "no live simulation-context
+constraint" property is exactly why that mechanism is still exercised
+there) and for this task's own unit tests
+(`tests/test_distillation_data_collection.py`), both UNCHANGED by this
+update. They are NOT what the real (non-`--dry-run`) run does anymore:
+BACKLOG.md's 2026-07-19 "Task 5 BLOCKED" entry found that Isaac Lab cannot
+construct a second `ManagerBasedRLEnv` in-process after a first one is
+built, either simultaneously or after `.close()`, in this installation -
+so `scripts/distill_specialists.py`'s real-run driver instead builds ONE
+`tasks.franka.dice_lift_joint_env_cfg.FrankaDieLiftJointD12D20MixedEnvCfg`
+env (BACKLOG.md's controller decision "(b) single mixed-population env")
+that splits `num_envs` between d12/d20 via a deterministic round-robin
+`MultiAssetSpawnerCfg`, and calls `collect_rollout` + `regress_on_pooled_
+batches` (NOT `run_dagger_iteration`) directly against that one env.
+
+This does not change reason 2's own argument above at all - it only
+changes WHERE the pooled batch's shape mixture comes from: previously,
+pooling two single-shape envs' own separately-collected batches; now, one
+mixed env's single `collect_rollout` call already visits BOTH shapes in
+the same batch (different envs, same call), which `regress_on_pooled_
+batches` still pools+shuffles (trivially, over a one-element batch list)
+before every regression step exactly as before. The statistical property
+this design note's reason 2 relies on - consecutive regression minibatches
+mixing both shapes, so a policy that ignores the shape-onehot feature does
+measurably worse on the SAME batch - holds identically under either
+mechanism. `MultiShapeTeacherRouter.relabel` is unaffected either way: it
+already routes per-row off each row's own live shape-onehot observation
+feature, never off which env/call produced that row.
 """
 
 from __future__ import annotations
@@ -445,11 +485,28 @@ def mix_actions(
     independent of the supervised-learning LABEL used for the BC loss,
     which always comes from the teacher regardless of beta (see
     `MultiShapeTeacherRouter.relabel`) - beta only controls exploration
-    coverage, not label quality."""
+    coverage, not label quality.
+
+    REAL BUG found and fixed under Task 5's first real (GPU) smoke test
+    (2026-07-19, never previously exercised - the prior two-envs real-run
+    driver crashed before ever reaching this call with real GPU tensors,
+    see BACKLOG.md's BLOCKED entry): `torch.bernoulli` requires its
+    `generator` argument's device to match the `probs` tensor's device
+    exactly. The caller's own `generator` (`scripts/distill_specialists.py`'s
+    `main()`) is always a CPU generator (`torch.Generator(device="cpu")` -
+    the same convention `pool_and_shuffle`/`regress_on_pooled_batches`
+    already use for reproducibility), but `student_actions`/`teacher_actions`
+    live on the real env's device (`cuda` for a real GPU run) - `probs`
+    built on that device raised `RuntimeError: Expected a 'cuda' device type
+    for generator but found 'cpu'`. Fixed the same way `pool_and_shuffle`
+    already handles this device split: sample on CPU (matching the CPU
+    generator), then move the resulting mask to the actions' own device -
+    not just band-aided into student_actions.device, which would silently
+    reintroduce this same crash the next time this runs on GPU."""
     if student_actions.shape != teacher_actions.shape:
         raise ValueError(f"shape mismatch: student {tuple(student_actions.shape)} vs teacher {tuple(teacher_actions.shape)}")
-    probs = torch.full((student_actions.shape[0],), float(beta), device=student_actions.device)
-    use_teacher = torch.bernoulli(probs, generator=generator).bool()
+    probs = torch.full((student_actions.shape[0],), float(beta))  # CPU, matching `generator`'s own device
+    use_teacher = torch.bernoulli(probs, generator=generator).bool().to(student_actions.device)
     return torch.where(use_teacher.unsqueeze(-1), teacher_actions, student_actions)
 
 

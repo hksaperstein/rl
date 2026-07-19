@@ -43,7 +43,12 @@ from isaaclab.utils.math import combine_frame_transforms, subtract_frame_transfo
 from isaaclab.envs.mdp import *  # noqa: F401, F403
 
 from .lift_reward import lifting_object_reward, object_goal_distance_reward, reaching_object_reward
-from .shape_observations import geometry_descriptor_broadcast, shape_class_onehot
+from .shape_observations import (
+    geometry_descriptor_broadcast,
+    geometry_descriptor_per_env,
+    shape_class_onehot,
+    shape_class_onehot_per_env,
+)
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
@@ -127,9 +132,21 @@ def object_shape_class_onehot(
     identically to every parallel env - NOT read off live simulated object
     state (the live sim only has raw mesh/pose, no semantic shape label).
     See tasks/franka/shape_observations.py's module docstring for the full
-    scope rationale (every consumer of this task is single-shape-per-env-cfg;
-    per-env-varying shape is explicitly out of scope here).
+    scope rationale (every single-shape-per-env-cfg consumer of Task 1 uses
+    this path unchanged).
+
+    Task 5 extension (BACKLOG.md's 2026-07-19 controller decision "(b)
+    single mixed-population env"): if the env cfg sets `die_shape_classes_
+    per_env` (non-None - only FrankaDieLiftJointD12D20MixedEnvCfg does),
+    each env's OWN shape class is computed as
+    `env_index % len(die_shape_classes_per_env)` instead of broadcasting a
+    single constant - still a config-time-known, deterministic function of
+    env index, never read off live USD/spawner state (see
+    tasks/franka/shape_observations.py's shape_class_onehot_per_env).
     """
+    per_env_classes = getattr(env.cfg, "die_shape_classes_per_env", None)
+    if per_env_classes is not None:
+        return shape_class_onehot_per_env(per_env_classes, env.num_envs, device=env.device)
     shape_class = getattr(env.cfg, "die_shape_class", _DEFAULT_SHAPE_CLASS)
     return shape_class_onehot(shape_class, env.num_envs, device=env.device)
 
@@ -140,7 +157,11 @@ def object_geometry_descriptor(
     """Observation term: (num_envs, K) continuous geometry-descriptor
     feature (K=1, Wadell sphericity - see tasks/franka/shape_observations.py's
     module docstring for the exact formula/derivation), same per-env-cfg
-    static-property/broadcast treatment as object_shape_class_onehot above.
+    static-property/broadcast treatment (and same Task 5
+    `die_shape_classes_per_env` branch) as object_shape_class_onehot above.
     """
+    per_env_classes = getattr(env.cfg, "die_shape_classes_per_env", None)
+    if per_env_classes is not None:
+        return geometry_descriptor_per_env(per_env_classes, env.num_envs, device=env.device)
     shape_class = getattr(env.cfg, "die_shape_class", _DEFAULT_SHAPE_CLASS)
     return geometry_descriptor_broadcast(shape_class, env.num_envs, device=env.device)

@@ -5,12 +5,16 @@ policy - CLI entry point.
 Task 4 of `docs/superpowers/plans/2026-07-16-unified-multi-die-specialist-
 distillation.md` ("Distillation pipeline (local, no GPU training yet)").
 
-THIS SCRIPT DOES NOT RUN THE REAL DISTILLATION TRAINING. Task 4's own
-scope is the pipeline itself, verified mechanically (unit tests in
-`tests/test_distillation_data_collection.py` + `--dry-run` below) - the
-real run against real specialist checkpoints is Task 5, a separate, later,
-cloud-GPU dispatch. When Task 5 runs, it invokes this same script
-(unchanged) without `--dry-run`.
+Task 4's own scope was the pipeline itself, verified mechanically (unit
+tests in `tests/test_distillation_data_collection.py` + `--dry-run`
+below), not a real training run. Task 5 (BACKLOG.md's 2026-07-19
+controller decision "(b) single mixed-population env") runs this script
+for real, without `--dry-run`, against a single
+`FrankaDieLiftJointD12D20MixedEnvCfg` env (see `build_real_mixed_env`
+below) instead of Task 5's own original, blocked, two-single-shape-envs
+design - see that class's own docstring
+(`tasks/franka/dice_lift_joint_env_cfg.py`) and BACKLOG.md's BLOCKED entry
+for the full architectural trace.
 
 Scope (2026-07-19 narrowing, `BACKLOG.md`'s "Task 4 scope decision: narrow
 to d12+d20, defer d8/d10" entry + its "re-audit" follow-up correction):
@@ -36,10 +40,12 @@ architecture):
 
 For the imitation-loss formulation chosen (multi-teacher DAgger + per-state
 expert routing + MSE-on-mean regression) and the "shape-randomized-per-
-episode" design note (why this pipeline pools two side-by-side single-shape
-envs rather than building a new live per-episode-shape-resampling env cfg),
-see `tasks/franka/distillation.py`'s own module docstring - the actual
-mechanism lives there. This file is deliberately a thin argparse/
+episode" design note, see `tasks/franka/distillation.py`'s own module
+docstring - the actual DAgger/BC mechanics live there, unchanged by Task 5
+(only WHERE the pooled batch's two shapes come from changed - one mixed env
+instead of two side-by-side single-shape envs; `regress_on_pooled_batches`
+itself doesn't care whether its input list has one already-mixed batch or
+several single-shape ones). This file is deliberately a thin argparse/
 AppLauncher/real-env-construction wrapper around it, kept separate so
 `tasks/franka/distillation.py` stays plain-importable (no argparse-at-
 import-time, no `isaaclab.app.AppLauncher` needed at all) and therefore
@@ -53,11 +59,14 @@ Usage:
     # synthetic envs stand in for the real Isaac Lab single-shape envs):
     /home/saps/IsaacLab/_isaac_sim/python.sh scripts/distill_specialists.py --dry-run
 
-    # Real run (Task 5 only - launches Isaac Sim, headless per this plan's
-    # cloud exception):
+    # Real run (Task 5): launches Isaac Sim against the single mixed env.
+    # Non-headless per CLAUDE.md's standing "run non-headless, the user
+    # wants to watch" instruction (drop --headless unless running on a
+    # headless cloud box, in which case add it back per
+    # docs/cloud/dispatch-checklist.md).
     flock -o /tmp/rl_isaac_sim.lock -c \\
       "PYTHONUNBUFFERED=1 /home/saps/IsaacLab/isaaclab.sh -p scripts/distill_specialists.py \\
-        --num-iterations 1500 --headless"
+        --num-iterations 1500"
 """
 
 from __future__ import annotations
@@ -91,6 +100,7 @@ from tasks.franka.distillation import (  # noqa: E402
     run_dagger_iteration,
     save_student_checkpoint,
 )
+from tasks.franka.shape_observations import SHAPE_CLASSES  # noqa: E402
 
 DEFAULT_OUTPUT_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs", "distill_franka")
 
@@ -148,7 +158,19 @@ def build_arg_parser(app_launcher_cls) -> argparse.ArgumentParser:
     parser.add_argument("--d12-checkpoint", type=str, default=DEFAULT_D12_CHECKPOINT, help="d12 frozen teacher checkpoint (local path or gs:// URI).")
     parser.add_argument("--num-iterations", type=int, default=200, help="Number of DAgger iterations (rollout + BC regression steps).")
     parser.add_argument("--rollout-steps", type=int, default=24, help="Control steps collected per env per iteration (matches FrankaLiftPPORunnerCfg.num_steps_per_env).")
-    parser.add_argument("--num-envs", type=int, default=4096, help="Parallel envs per teacher's own single-shape env (matches this project's existing PPO training convention).")
+    parser.add_argument(
+        "--num-envs",
+        type=int,
+        default=4096,
+        help=(
+            "Total parallel envs in the single FrankaDieLiftJointD12D20MixedEnvCfg mixed env (Task 5 - "
+            "BACKLOG.md's 2026-07-19 controller decision), split ~evenly between d12/d20 via its own "
+            "deterministic round-robin (matches this project's existing PPO training convention's own "
+            "num_envs default; NOTE this is a per-shape sample-count reduction vs. Task 5's original "
+            "two-envs-side-by-side design, which gave each shape its own full num_envs - see "
+            "scripts/distill_specialists.py's own dispatch report for why this tradeoff was accepted)."
+        ),
+    )
     parser.add_argument("--batch-size", type=int, default=8192, help="Minibatch size for each BC regression step, drawn from the pooled+shuffled two-shape buffer.")
     parser.add_argument("--num-epochs-per-iteration", type=int, default=4, help="Number of passes over the pooled buffer's minibatches per DAgger iteration.")
     parser.add_argument(
@@ -184,21 +206,31 @@ def build_arg_parser(app_launcher_cls) -> argparse.ArgumentParser:
     return parser
 
 
-def build_real_env(shape: str, num_envs: int, device: str, seed: int):
-    """Constructs the real Isaac Lab single-shape env for `shape`
-    ('d20' -> FrankaDieLiftJointBigEnvCfg, 'd12' -> FrankaDieLiftJointD12BigEnvCfg),
-    wrapped exactly like this project's own training entry point
-    (scripts/train_franka.py) wraps it for rsl_rl. Every isaaclab-dependent
-    import lives inside this function (never at module level) so
-    `--dry-run`/`--help` never trigger them - only called from `main()`'s
-    non-dry-run branch, i.e. only ever exercised by Task 5's real run."""
+def build_real_mixed_env(num_envs: int, device: str, seed: int):
+    """Constructs the real Isaac Lab MIXED (d12+d20) env - Task 5's fix for
+    BACKLOG.md's 2026-07-19 BLOCKED entry (a second `ManagerBasedRLEnv`
+    cannot be constructed in-process after a first one is built or closed,
+    in this Isaac Lab installation - confirmed both simultaneously and via
+    sequential reopen). Replaces the original two-single-shape-envs design
+    (this module's own former `build_real_env`, which built either
+    `FrankaDieLiftJointBigEnvCfg` (d20) or `FrankaDieLiftJointD12BigEnvCfg`
+    (d12) one at a time) with ONE `FrankaDieLiftJointD12D20MixedEnvCfg`
+    (`tasks/franka/dice_lift_joint_env_cfg.py`) that splits `num_envs`
+    between both shapes via a deterministic round-robin
+    `MultiAssetSpawnerCfg` - see that class's own docstring and
+    BACKLOG.md's controller decision "(b) single mixed-population env" for
+    the full rationale. Wrapped exactly like this project's own training
+    entry point (scripts/train_franka.py) wraps it for rsl_rl. Every
+    isaaclab-dependent import lives inside this function (never at module
+    level) so `--dry-run`/`--help` never trigger them - only called from
+    `main()`'s non-dry-run branch, i.e. only ever exercised by Task 5's
+    real run."""
     from isaaclab.envs import ManagerBasedRLEnv
     from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper
 
-    from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftJointBigEnvCfg, FrankaDieLiftJointD12BigEnvCfg
+    from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftJointD12D20MixedEnvCfg
 
-    env_cfg_cls = {"d20": FrankaDieLiftJointBigEnvCfg, "d12": FrankaDieLiftJointD12BigEnvCfg}[shape]
-    env_cfg = env_cfg_cls()
+    env_cfg = FrankaDieLiftJointD12D20MixedEnvCfg()
     env_cfg.scene.num_envs = num_envs
     env_cfg.sim.device = device
     env = ManagerBasedRLEnv(cfg=env_cfg)
@@ -291,30 +323,45 @@ def main(args_cli: argparse.Namespace) -> None:
             f"vs d12 (obs={d12_obs_dim}, act={d12_num_actions})"
         )
     obs_dim, num_actions = d20_obs_dim, d20_num_actions
-    shape_classes = ("d12", "d20")
+    # REAL BUG found and fixed while wiring up Task 5's mixed-env driver
+    # (2026-07-19, never previously exercised - the original two-envs
+    # design crashed before ever reaching router.relabel with real data,
+    # see BACKLOG.md's BLOCKED entry): the real env's shape_class
+    # observation term is a 4-dim one-hot over the CANONICAL
+    # (d8, d10, d12, d20) order (tasks/franka/shape_observations.py's
+    # SHAPE_CLASSES - confirmed live, scripts/_diag_d12d20_mixed_env_check.py,
+    # 2026-07-19: shape_class term dim is (4,), argmax index 2 for d12 rows,
+    # index 3 for d20 rows), NOT a 2-dim ("d12", "d20")-only encoding.
+    # MultiShapeTeacherRouter.relabel's own row-routing loop
+    # (`for i, shape in enumerate(self._shape_classes): mask = shape_idx ==
+    # i`) requires `shape_classes` to be THE SAME order/length as the
+    # observation's own onehot columns - passing the 2-element
+    # ("d12", "d20") tuple here (copied from --dry-run's own 2-shape STUB
+    # env, which deliberately uses a non-faithful 2-dim onehot layout - see
+    # that branch's own NOTE comment) against the real env's 4-dim onehot
+    # would have silently produced an all-`None`/crashing relabel (argmax
+    # values 2/3 never match loop indices 0/1). Fixed by using the full
+    # canonical SHAPE_CLASSES tuple for the real run instead - i=2 ("d12")
+    # and i=3 ("d20") then correctly match the real onehot's own columns;
+    # i=0/1 ("d8"/"d10") simply never match any row (this mixed env never
+    # spawns those shapes) and are safely skipped, exactly like any other
+    # registered-but-unused shape.
+    shape_classes = SHAPE_CLASSES
 
     d20_teacher = load_frozen_teacher(args_cli.d20_checkpoint, obs_dim, num_actions, device, args_cli.checkpoint_cache_dir)
     d12_teacher = load_frozen_teacher(args_cli.d12_checkpoint, obs_dim, num_actions, device, args_cli.checkpoint_cache_dir)
 
-    # REAL BUG found under this task's own first real dispatch (2026-07-19,
-    # not caught by --dry-run's stub envs): Isaac Lab's SimulationContext is
-    # a process-wide singleton - constructing two ManagerBasedRLEnv objects
-    # at once (one per teacher's own single-shape env, as originally written
-    # here and as tasks/franka/distillation.py's run_dagger_iteration
-    # assumes) raises "RuntimeError: Simulation context already exists."
-    # Fixed by never holding both envs open at once: each DAgger iteration
-    # opens shape A's env, collects its rollout, closes it, then does the
-    # same for shape B, THEN pools+regresses on both already-collected
-    # (and now env-free) batches via regress_on_pooled_batches - the same
-    # statistical procedure (mixture-policy rollout against the CURRENT
-    # student in each shape's own env, pooled+shuffled before one regression
-    # step), just sequenced instead of parallel. See
-    # tasks/franka/distillation.py's run_dagger_iteration docstring for the
-    # full trace; that function itself is unchanged and still used by
-    # --dry-run (whose stub envs have no simulation-context constraint).
-    probe_env = build_real_env("d20", args_cli.num_envs, device, args_cli.seed)
-    shape_onehot_start, shape_onehot_dim = compute_shape_onehot_offset(probe_env)
-    probe_env.close()
+    # Task 5 architecture fix (BACKLOG.md's 2026-07-19 controller decision
+    # "(b) single mixed-population env" - see that entry and
+    # build_real_mixed_env's own docstring for the full trace of why the
+    # original two-single-shape-envs design is unusable in this Isaac Lab
+    # installation). ONE FrankaDieLiftJointD12D20MixedEnvCfg env is built
+    # ONCE for the entire run (not per-iteration/per-shape) - its own
+    # deterministic round-robin MultiAssetSpawnerCfg already gives every
+    # DAgger iteration a single batch mixing both shapes' visited states,
+    # so no separate per-shape env open/close/pool step is needed at all.
+    env = build_real_mixed_env(args_cli.num_envs, device, args_cli.seed)
+    shape_onehot_start, shape_onehot_dim = compute_shape_onehot_offset(env)
 
     router = MultiShapeTeacherRouter(
         {"d20": actor_inference_fn(d20_teacher), "d12": actor_inference_fn(d12_teacher)},
@@ -326,28 +373,32 @@ def main(args_cli: argparse.Namespace) -> None:
     optimizer = torch.optim.Adam(student.actor.parameters(), lr=args_cli.learning_rate)
     student_action_fn = actor_inference_fn(student)
 
-    for it in range(args_cli.num_iterations):
-        beta = dagger_beta_schedule(it, args_cli.num_iterations, args_cli.beta_start, args_cli.beta_end)
+    try:
+        for it in range(args_cli.num_iterations):
+            beta = dagger_beta_schedule(it, args_cli.num_iterations, args_cli.beta_start, args_cli.beta_end)
 
-        def _mixture_action_fn(obs: torch.Tensor) -> torch.Tensor:
-            student_actions = student_action_fn(obs)
-            teacher_actions = router.relabel(obs)
-            return mix_actions(student_actions, teacher_actions, beta, generator=generator)
+            def _mixture_action_fn(obs: torch.Tensor) -> torch.Tensor:
+                student_actions = student_action_fn(obs)
+                teacher_actions = router.relabel(obs)
+                return mix_actions(student_actions, teacher_actions, beta, generator=generator)
 
-        per_shape_batches = []
-        for shape in ("d20", "d12"):
-            env = build_real_env(shape, args_cli.num_envs, device, args_cli.seed)
-            per_shape_batches.append(collect_rollout(env, _mixture_action_fn, args_cli.rollout_steps, device=device))
-            env.close()
-
-        mean_loss = regress_on_pooled_batches(
-            per_shape_batches, student, router, optimizer, args_cli.batch_size, args_cli.num_epochs_per_iteration, generator
-        )
-        print(f"iteration {it}/{args_cli.num_iterations}: beta={beta:.3f} mean_bc_loss={mean_loss:.6f}")
-        if (it + 1) % args_cli.save_interval == 0 or it == args_cli.num_iterations - 1:
-            out_path = os.path.join(args_cli.output_dir, f"model_{it}.pt")
-            save_student_checkpoint(student, out_path, it)
-            print(f"saved checkpoint: {out_path}")
+            # A single mixed-population rollout batch (both shapes already
+            # present, per-row-routed by MultiShapeTeacherRouter.relabel off
+            # each row's own live shape-onehot observation feature) - passed
+            # as a one-element list since regress_on_pooled_batches expects a
+            # list of per-source batches to pool+shuffle (trivially a no-op
+            # concat of one tensor here, still shuffled before regression).
+            batch = collect_rollout(env, _mixture_action_fn, args_cli.rollout_steps, device=device)
+            mean_loss = regress_on_pooled_batches(
+                [batch], student, router, optimizer, args_cli.batch_size, args_cli.num_epochs_per_iteration, generator
+            )
+            print(f"iteration {it}/{args_cli.num_iterations}: beta={beta:.3f} mean_bc_loss={mean_loss:.6f}")
+            if (it + 1) % args_cli.save_interval == 0 or it == args_cli.num_iterations - 1:
+                out_path = os.path.join(args_cli.output_dir, f"model_{it}.pt")
+                save_student_checkpoint(student, out_path, it)
+                print(f"saved checkpoint: {out_path}")
+    finally:
+        env.close()
 
 
 if __name__ == "__main__":

@@ -320,6 +320,20 @@ class FrankaLiftEnvCfg(ManagerBasedRLEnvCfg):
     # override this in their own __post_init__.
     die_shape_class: str = "d20"
 
+    # Per-env-cfg constant (Task 5, BACKLOG.md's 2026-07-19 controller
+    # decision "(b) single mixed-population env"): for a MIXED-shape env cfg
+    # only (FrankaDieLiftJointD12D20MixedEnvCfg), the ordered tuple of shape
+    # classes its MultiAssetSpawnerCfg(assets_cfg=[...], random_choice=False)
+    # was built with - e.g. ("d12", "d20"). When set (non-None),
+    # mdp.object_shape_class_onehot/object_geometry_descriptor compute EACH
+    # env's own shape class as `env_index % len(die_shape_classes_per_env)`
+    # (mirroring the live spawner's own deterministic round-robin formula,
+    # see tasks/franka/shape_observations.py's module docstring) instead of
+    # broadcasting the single `die_shape_class` constant above to every row.
+    # Default None for every other env cfg in this file - this is additive,
+    # the single-shape broadcast path (`die_shape_class`) is unaffected.
+    die_shape_classes_per_env: tuple[str, ...] | None = None
+
     def __post_init__(self) -> None:
         self.decimation = 2
         self.episode_length_s = 5.0

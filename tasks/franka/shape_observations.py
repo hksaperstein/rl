@@ -19,10 +19,27 @@ single-shape specialist env cfg classes, Task 2's specialist training) has
 exactly one shape per training run - every one of a run's `num_envs`
 parallel environments holds the SAME shape. Building a mechanism for a
 single run to mix different shapes across its parallel envs simultaneously
-is explicitly out of scope here (that is Task 3's d20 size-domain-
-randomization retry and Phase 2/3's actual multi-shape-per-episode unified
-policy). Both functions below simply broadcast one constant to
-`(num_envs, K)`.
+was explicitly out of scope here (that was Task 3's d20 size-domain-
+randomization retry's own scope note, which used per-env SIZE variation
+only, not shape). `shape_class_onehot`/`geometry_descriptor_broadcast`
+below still simply broadcast one constant to `(num_envs, K)` and remain
+the single-shape-per-run path every existing env cfg in this file's sibling
+module (tasks/franka/dice_lift_joint_env_cfg.py) uses unchanged.
+
+**Extended 2026-07-19 (Task 5, BACKLOG.md's controller decision "(b) single
+mixed-population env"):** `FrankaDieLiftJointD12D20MixedEnvCfg` mixes TWO
+shapes (d12, d20) across one run's parallel envs via a deterministic
+`MultiAssetSpawnerCfg(random_choice=False)` round-robin - the same
+per-env-fixed-at-spawn-time mechanism `FrankaDieLiftJointMixedEnvCfg`
+already uses for per-env size (not shape) variation. `shape_class_onehot_
+per_env`/`geometry_descriptor_per_env` (below) extend this module to that
+one additional case: still per-env-cfg-*determined* (known at env-cfg-
+construction time from the assets-list order/length, not read off live
+per-env simulated state), just no longer a single constant broadcast to
+every row - each env's row is picked by the same `index % len(assets)`
+formula the live spawner itself uses. This is additive: every existing
+single-shape env cfg's observations are produced by the original two
+broadcast functions above, completely unchanged.
 
 Geometry descriptor (K=1): a single scalar, the Wadell sphericity of each
 die's own baked mesh (Wadell, H. 1935, "Volume, shape, and roundness of
@@ -96,3 +113,67 @@ def geometry_descriptor_broadcast(
         raise ValueError(f"unknown shape_class {shape_class!r}, expected one of {tuple(SHAPE_GEOMETRY_DESCRIPTORS)}")
     value = SHAPE_GEOMETRY_DESCRIPTORS[shape_class]
     return torch.full((num_envs, GEOMETRY_DESCRIPTOR_K), value, dtype=torch.float32, device=device)
+
+
+# =====================================================================
+# Per-env (mixed-population) variants (Task 5, BACKLOG.md's 2026-07-19
+# controller decision "(b) single mixed-population env"):
+# FrankaDieLiftJointD12D20MixedEnvCfg (tasks/franka/dice_lift_joint_env_cfg.py)
+# spawns a DETERMINISTIC round-robin mix of shapes across its parallel envs
+# via `MultiAssetSpawnerCfg(assets_cfg=[...], random_choice=False)`. This is
+# the exact same mechanism FrankaDieLiftJointMixedEnvCfg already uses for
+# per-env SIZE variation (that class's own docstring, confirmed again by a
+# fresh direct source read for this task,
+# isaaclab/sim/spawners/wrappers/wrappers.py::spawn_multi_asset:
+# `proto_path = proto_prim_paths[index % len(proto_prim_paths)]`, where
+# `index` enumerates the env's own prim paths in ascending env-index order,
+# i.e. env i is assigned `cfg.assets_cfg[i % len(cfg.assets_cfg)]`).
+# Since this assignment is deterministic and known at env-cfg-construction
+# time (not something that requires querying live USD/spawner state), these
+# functions just replicate that exact `i % len(shapes)` formula directly
+# given the SAME shapes-list order/length the env cfg used to build its
+# MultiAssetSpawnerCfg - see tasks/franka/mdp.py's
+# object_shape_class_onehot/object_geometry_descriptor for the thin wrappers
+# that branch to these functions instead of the single-shape broadcast ones
+# above, based on whether the env cfg sets `die_shape_classes_per_env`.
+# =====================================================================
+
+
+def shape_class_onehot_per_env(
+    shape_classes_per_env: tuple[str, ...], num_envs: int, device: torch.device | str = "cpu"
+) -> torch.Tensor:
+    """One-hot (num_envs, 4) tensor over SHAPE_CLASSES, where env i's row is
+    `shape_class_onehot(shape_classes_per_env[i % len(shape_classes_per_env)], ...)`
+    - i.e. a deterministic round-robin per-env assignment, mirroring
+    MultiAssetSpawnerCfg(random_choice=False)'s own `i % len(assets_cfg)`
+    formula exactly (see module docstring section above)."""
+    if not shape_classes_per_env:
+        raise ValueError("shape_classes_per_env must be non-empty")
+    for shape_class in shape_classes_per_env:
+        if shape_class not in SHAPE_CLASSES:
+            raise ValueError(f"unknown shape_class {shape_class!r}, expected one of {SHAPE_CLASSES}")
+    table = torch.stack(
+        [shape_class_onehot(shape_class, 1, device=device)[0] for shape_class in shape_classes_per_env], dim=0
+    )  # (len(shape_classes_per_env), 4)
+    idx = torch.arange(num_envs, device=device) % len(shape_classes_per_env)
+    return table[idx]
+
+
+def geometry_descriptor_per_env(
+    shape_classes_per_env: tuple[str, ...], num_envs: int, device: torch.device | str = "cpu"
+) -> torch.Tensor:
+    """(num_envs, GEOMETRY_DESCRIPTOR_K) tensor, same deterministic
+    round-robin per-env assignment as shape_class_onehot_per_env above."""
+    if not shape_classes_per_env:
+        raise ValueError("shape_classes_per_env must be non-empty")
+    for shape_class in shape_classes_per_env:
+        if shape_class not in SHAPE_GEOMETRY_DESCRIPTORS:
+            raise ValueError(
+                f"unknown shape_class {shape_class!r}, expected one of {tuple(SHAPE_GEOMETRY_DESCRIPTORS)}"
+            )
+    table = torch.stack(
+        [geometry_descriptor_broadcast(shape_class, 1, device=device)[0] for shape_class in shape_classes_per_env],
+        dim=0,
+    )  # (len(shape_classes_per_env), GEOMETRY_DESCRIPTOR_K)
+    idx = torch.arange(num_envs, device=device) % len(shape_classes_per_env)
+    return table[idx]

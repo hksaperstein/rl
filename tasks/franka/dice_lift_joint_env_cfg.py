@@ -84,6 +84,12 @@ _D20_RIGID_PROPS = RigidBodyPropertiesCfg(
     disable_gravity=False,
 )
 
+# Task 5 (FrankaDieLiftJointD12D20MixedEnvCfg below): the exact assets-list
+# order/length its MultiAssetSpawnerCfg is built with - a plain module-level
+# constant (not a class attribute) so it can't be mistaken for a configclass/
+# dataclass field by isaaclab.utils.configclass's field-processing.
+_D12D20_MIXED_ASSETS_ORDER = ("d12", "d20")
+
 
 @configclass
 class FrankaDieLiftJointEnvCfg(FrankaLiftEnvCfg):
@@ -798,3 +804,85 @@ class FrankaDieLiftJointD12BigEnvCfg_PLAY(FrankaDieLiftJointD12BigEnvCfg):
         self.scene.num_envs = 50
         self.scene.env_spacing = 2.5
         self.observations.policy.enable_corruption = False
+
+
+@configclass
+class FrankaDieLiftJointD12D20MixedEnvCfg(FrankaDieLiftJointHeavyEnvCfg):
+    """Task 5 mixed-population env (docs/superpowers/plans/2026-07-16-
+    unified-multi-die-specialist-distillation.md Task 5; BACKLOG.md's
+    2026-07-19 controller decision "(b) single mixed-population env" -
+    read that entry for the full architectural rationale). Replaces the
+    original two-envs-side-by-side distillation design
+    (`tasks/franka/distillation.py`'s module docstring), which hit a real
+    Isaac Lab limitation: a second `ManagerBasedRLEnv` cannot be constructed
+    in-process after a first one is built, either simultaneously
+    (`RuntimeError: Simulation context already exists`) or sequentially
+    after `.close()` (hangs indefinitely - independently confirmed via an
+    isolated minimal repro, BACKLOG.md's BLOCKED entry). This class instead
+    splits `num_envs` between d12 and d20 within ONE `ManagerBasedRLEnv`.
+
+    Mechanism: `MultiAssetSpawnerCfg(assets_cfg=[d12_cfg, d20_cfg],
+    random_choice=False)` - the exact same deterministic-round-robin,
+    per-env-fixed-at-spawn-time mechanism `FrankaDieLiftJointMixedEnvCfg`
+    already uses for per-env SIZE (not shape) variation, reused here for
+    per-env SHAPE variation instead. Confirmed by a fresh direct source
+    read for this task (not just trusting that class's own docstring
+    citation), `isaaclab/sim/spawners/wrappers/wrappers.py::
+    spawn_multi_asset`:
+
+        proto_path = proto_prim_paths[index % len(proto_prim_paths)]
+
+    where `index` enumerates `prim_paths` (each env's own `.../Object` prim,
+    resolved via `find_matching_prim_paths` and iterated in ascending
+    env-index order) and `proto_prim_paths` preserves `cfg.assets_cfg`'s own
+    list order. So with `assets_cfg=[d12_cfg, d20_cfg]`
+    (`_D12D20_MIXED_ASSETS_ORDER`, this module's own top-level constant):
+    env 0 -> d12, env 1 -> d20, env 2 -> d12, env 3 -> d20, ... - an exact,
+    deterministic 50/50 split (up to the +/-1 parity remainder for an odd
+    `num_envs`), matching `FrankaDieLiftJointMixedEnvCfg`'s own already-
+    verified ~819-envs-per-size 5-way split at 4096 envs. `self.
+    die_shape_classes_per_env = _D12D20_MIXED_ASSETS_ORDER` (set below) tells
+    `tasks/franka/mdp.py`'s `object_shape_class_onehot`/
+    `object_geometry_descriptor` to replicate this exact `index % len(...)`
+    formula themselves (no live USD/spawner-state query needed - the
+    controller decision's own de-risking argument) instead of the single-
+    shape broadcast every other env cfg in this file uses.
+
+    Both shapes at their own already-verified 48mm-parity scale/mass -
+    reused directly from `FrankaDieLiftJointD12BigEnvCfg` (d12: scale
+    0.001476) and `FrankaDieLiftJointBigEnvCfg` (d20: scale 0.001585), not
+    re-derived; mass pinned at 0.216kg on both (this file's existing
+    carried-over placeholder, same as every other rung).
+
+    scene.replicate_physics = False (same reason as
+    `FrankaDieLiftJointMixedEnvCfg`/`FrankaDieLiftJointRandomSizeEnvCfg`:
+    `InteractiveSceneCfg`'s default True clones every env from env_0's own
+    content AFTER `spawn_multi_asset` has already authored heterogeneous
+    per-env assets, silently discarding the per-env shape variation before
+    it reaches the live PhysX stage)."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if not os.path.isfile(_D12_USD):
+            raise FileNotFoundError(f"baked die asset missing - run scripts/bake_die_asset.py --die d12: {_D12_USD}")
+        # _D20_USD is already existence-checked by FrankaDieLiftJointEnvCfg's
+        # own __post_init__, in the super() chain above.
+        self.scene.replicate_physics = False
+        self.die_shape_classes_per_env = _D12D20_MIXED_ASSETS_ORDER
+        self.scene.object.spawn = MultiAssetSpawnerCfg(
+            assets_cfg=[
+                UsdFileCfg(
+                    usd_path=_D12_USD,
+                    scale=(0.001476, 0.001476, 0.001476),
+                    rigid_props=_D20_RIGID_PROPS,
+                    mass_props=MassPropertiesCfg(mass=0.216),
+                ),
+                UsdFileCfg(
+                    usd_path=_D20_USD,
+                    scale=(0.001585, 0.001585, 0.001585),
+                    rigid_props=_D20_RIGID_PROPS,
+                    mass_props=MassPropertiesCfg(mass=0.216),
+                ),
+            ],
+            random_choice=False,
+        )

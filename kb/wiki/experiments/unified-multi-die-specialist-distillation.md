@@ -334,8 +334,100 @@ later cloud-GPU dispatch) runs the real distillation training against
 these two real checkpoints and reports real discovery-rate numbers —
 nothing in this task constitutes a result yet.
 
-## Task 5: real distillation run attempted — BLOCKED on an Isaac Lab
-architectural limit, no checkpoint yet (2026-07-19)
+## Task 5: BLOCKER RESOLVED, real run complete — distilled policy 4/8 (d20)
+/ 1/8 (d12), a real regression vs. each specialist's own 8/8 (2026-07-19)
+
+**Supersedes the "BLOCKED" write-up below** (kept for history — it's the
+reason this task's architecture changed, not a still-open problem).
+BACKLOG.md's controller decision, "(b) single mixed-population env", was
+implemented and run to a real completion.
+
+**Fix:** added `FrankaDieLiftJointD12D20MixedEnvCfg`
+(`tasks/franka/dice_lift_joint_env_cfg.py`) — ONE env splitting `num_envs`
+between d12/d20 via `MultiAssetSpawnerCfg(random_choice=False)`'s
+already-proven deterministic round-robin (same mechanism
+`FrankaDieLiftJointMixedEnvCfg` already uses for per-env SIZE, reused here
+for per-env SHAPE), both shapes at their own already-verified 48mm-parity
+scale. `object_shape_class_onehot`/`object_geometry_descriptor`
+(`tasks/franka/mdp.py`) got a per-env-aware path
+(`tasks/franka/shape_observations.py`'s `shape_class_onehot_per_env`/
+`geometry_descriptor_per_env`) computing each env's shape as `env_index %
+len(shapes)` — a pure function of index, no live spawner-state query
+needed, additive (every other env cfg's single-shape broadcast is
+unaffected). **Verified directly against a real live env**
+(`scripts/_diag_d12d20_mixed_env_check.py`, 8 real envs): the predicted
+round-robin matched BOTH the live `observation_manager`'s own computed
+values AND the live USD-authored per-env scale (independent ground truth)
+on all 8 envs. `scripts/distill_specialists.py`'s real-run driver now
+builds this one env ONCE for the whole run (no more per-iteration
+open/close, no more two-envs-at-once).
+
+**Two more real bugs found and fixed** (never previously exercised — the
+old two-envs design crashed before real GPU data ever reached either):
+`mix_actions` built its Bernoulli `probs` on the actions' own (possibly
+`cuda`) device but was called with a CPU generator — `torch.bernoulli`
+requires matching devices; fixed by sampling on CPU (matching the
+generator) then moving the result to the actions' device, same pattern
+`pool_and_shuffle` already used. And the real-run branch's
+`MultiShapeTeacherRouter` was built with a 2-element `("d12","d20")`
+shape-classes tuple (copied from `--dry-run`'s own non-faithful 2-shape
+stub) against the real env's 4-dim canonical one-hot — silently broken;
+fixed by using the real canonical `SHAPE_CLASSES` tuple. Re-verified:
+55/55 unit tests pass, a small real-GPU smoke test ran end-to-end with a
+decreasing loss curve before the full dispatch.
+
+**Real run:** desktop GPU, non-headless, 1500 iterations, `num_envs=4096`
+(~2048/shape via the round-robin — half each shape's own sample count vs.
+the original two-full-4096-envs design, an accepted tradeoff over an
+untested 8192-env build). ~27 minutes wall-clock. Mean BC loss: 0.93 → 
+~0.0003-0.0006.
+
+**Real per-shape eval** (`franka_checkpoint_review.py`, same
+variants/mechanism/undiluted-48mm as each specialist's own baseline,
+num_envs=8):
+
+| shape | distilled | specialist baseline |
+|---|---|---|
+| d20 (`joint-die-big`) | **4/8** | 8/8 |
+| d12 (`joint-die-d12-big`) | **1/8** | 8/8 |
+
+Spot-checked via extracted video frames, not just JSON — failed envs show
+physically sensible failed-grasp scenes, not a broken render.
+
+**A real, honest negative/mixed result** — the BC loss converged very
+low, but real closed-loop discovery dropped substantially for both
+shapes, worse for d12. Not yet investigated, offered as context: MSE-on-
+mean regression matching two teachers' means closely in aggregate doesn't
+guarantee the student reproduces either teacher's actual closed-loop
+(autonomous, beta=0) trajectory — small per-step deviations can compound
+over 250 steps, a known DAgger/BC failure mode independent of the
+shape-mixing itself; d12 losing more than d20 is also consistent with one
+shared network finding d12's grasp geometry harder to compress alongside
+d20's. Same pattern as this project's own Experiment 15 (converging
+scalar metric, not-guaranteed-transferring real behavior), not a new
+phenomenon.
+
+**Checkpoint:**
+`gs://rl-manipulation-hks-runs/unified-multi-die-specialists/distilled-d12-d20/seed42/2026-07-19_16-10-12/model_1499.pt`.
+Eval artifacts:
+`gs://rl-manipulation-hks-runs/unified-multi-die-specialists/eval-artifacts/distilled-d12-d20/{joint-die-big,joint-die-d12-big}/`.
+Cost: desktop-only, $0 cloud compute.
+
+**Task 6 does not proceed from this dispatch** (separate, later task) —
+whoever picks it up should treat 4/8 (d20) / 1/8 (d12) as the real PPO
+fine-tune starting point, not an 8/8-equivalent warm start, and may want
+to weigh the explanations above before deciding whether to fine-tune this
+checkpoint directly or revisit the distillation loss formulation first.
+
+Files changed: `tasks/franka/dice_lift_joint_env_cfg.py`,
+`tasks/franka/mdp.py`, `tasks/franka/shape_observations.py`,
+`tasks/franka/distillation.py`, `scripts/distill_specialists.py`,
+`tests/test_mdp_shape_observations.py`,
+`scripts/_diag_d12d20_mixed_env_check.py` (new diagnostic).
+
+## Task 5 (HISTORICAL — see the resolved entry immediately above for the
+real fix/result): real distillation run attempted — BLOCKED on an Isaac
+Lab architectural limit, no checkpoint yet (2026-07-19)
 
 Dispatched to the desktop GPU (confirmed AVAILABLE at dispatch time).
 Found two real bugs under real execution, neither caught by Task 4's own

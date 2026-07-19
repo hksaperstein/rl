@@ -352,3 +352,16 @@ already-shipped, already-verified single-shape env cfgs). Not chosen:
 (a) two-process IPC orchestration — real distributed-training
 infrastructure with its own new failure modes, not justified when (b)
 reuses an already-proven mechanism instead.
+
+**Implemented and run, 2026-07-19 — see `ROADMAP.md`'s "Task 5 ... BLOCKER
+RESOLVED" entry and `kb/wiki/experiments/unified-multi-die-specialist-
+distillation.md`'s matching Task 5 entry for the real result:** the
+per-env indexing assumption above was independently re-verified against a
+real live env (not just re-trusted from this entry's own source-read
+citation) before relying on it, and held exactly.
+`object_shape_class_onehot`/`object_geometry_descriptor`'s extension
+turned out to be exactly the bounded, mechanical change predicted here —
+no live USD/spawner-state introspection needed. Real outcome: distilled
+policy 4/8 (d20) / 1/8 (d12) sustained lift vs. each specialist's own 8/8
+— a real regression, not the null result this entry's own blocker made
+impossible to observe before.

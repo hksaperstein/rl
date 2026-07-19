@@ -3034,3 +3034,85 @@ simply being too small at this Franka gripper's absolute scale,
 independent of shape. A controlled 48mm-parity rerun for d8/d10/d12
 (mirroring asset-bisect's own methodology) would resolve this and is the
 natural next step if Task 3/4 don't resolve it first.
+
+**Task 3 (d20 size-DR + geometry-feature retry) result: 0/120 discovery,
+independently reverified (2026-07-18) — exactly reproduces the diluted-
+population floor, does not clear the asset-bisect's undiluted 48mm
+baseline.** Plan
+`docs/superpowers/plans/2026-07-16-unified-multi-die-specialist-distillation.md`
+Task 3: `FrankaDieLiftJointRandomSizeEnvCfg`, 3 seeds (42/123/7) trained
+against a per-env size population spanning {22.0, 28.5, 35.0, 41.5,
+48.0}mm (`MultiAssetSpawnerCfg(random_choice=True)`, confirmed via direct
+`isaaclab.sim.spawners` source read at Task 3 Step 1 to assign one size
+per env once at scene-spawn time — the identical assignment mechanism as
+the already-falsified `FrankaDieLiftJointMixedEnvCfg`, differing only in
+random vs. round-robin pattern), with Task 1's geometry-descriptor
+observation conditioning added as this retry's actual new variable.
+Training/eval artifacts already existed in GCS
+(`gs://rl-manipulation-hks-runs/unified-multi-die-specialists/eval-artifacts/joint-die-random-size/`,
+all 15 seed×scale combinations) but the verdict was never independently
+verified or written up until now. Downloaded and recomputed genuine
+per-step height trajectories for all 15 (seed, scale) pairs — all 3
+seeds × all 5 scales, 120 total eval envs (8 envs/eval) — restricting
+analysis to the first-episode window to avoid the multi-episode
+reset-boundary artifact `franka_checkpoint_review.py` was fixed forward
+for at Task 3.5 (these Task 3 JSONs predate that fix and were never
+regenerated). Result unchanged from the unfixed summary JSONs: **0/120
+sustained lifts, at every scale, every seed:**
+
+| scale (target mm)  | seed 42 | seed 123 | seed 7 |
+|---------------------|---------|----------|--------|
+| 22.0mm (0.000727)   | 0/8     | 0/8      | 0/8    |
+| 28.5mm (0.000941)   | 0/8     | 0/8      | 0/8    |
+| 35.0mm (0.001156)   | 0/8     | 0/8      | 0/8    |
+| 41.5mm (0.001370)   | 0/8     | 0/8      | 0/8    |
+| 48.0mm (0.001585)   | 0/8     | 0/8      | 0/8    |
+
+No env's height gain ever sustains 25 consecutive steps above the 0.04m
+threshold, even transiently, at any scale/seed — the reset-boundary
+artifact never flips a verdict here either way. Separately identified a
+second, smaller measurement quirk in these particular JSONs (distinct
+from the reset-boundary one): every env's reported ~0.032-0.048m "max
+height gain" is fully explained by the object's spawn-to-table free-fall
+not finishing within the script's 10-step settle window (this env's
+fall+settle actually takes ~18-20 steps) — after settling, every
+inspected trajectory goes flat to within ~4e-8m for the remaining ~230
+steps of the episode, i.e. genuinely motionless, not merely
+"unsustained." Eval video reviewed directly (not just existence-checked):
+extracted and inspected frames across the full episode (steps 0/50/100/
+150/200/249/300/450) from the 48mm seed-42 video, plus mid-episode frames
+from seed-123/seed-7 at 48mm. Seed 42's arm never descends toward the die
+at all — it stays folded/elevated over the table for the entire episode
+while the die sits undisturbed at its spawn position in every sampled
+frame; seed 123/seed 7 show visibly different arm poses (reaching closer
+to the table surface at the same timestamps) despite an identical 0/8
+outcome. Comparison against existing baselines: the asset-bisect ladder's
+own single-size, undiluted 48mm d20 population scored 1/3
+(`docs/superpowers/plans/2026-07-12-asset-bisect-report.md`); the
+original size-curriculum's diluted 5-size population
+(`FrankaDieLiftJointMixedEnvCfg`) scored 0/3 (0/8, 0/8, 0/8), attributed
+there to ~5x dilution of the 48mm sub-population. This retry's 48mm
+column reproduces that diluted floor exactly (0/3, 0/8/0/8/0/8) —
+despite adding the geometry-descriptor conditioning Task 1 built
+specifically to help the policy differentiate/adapt across sizes.
+**Mechanism reading:** Task 3's population is per-env-fixed-at-spawn
+across the same 5 sizes as the falsified `MixedEnvCfg` (confirmed
+mechanism, not assumed), so its 48mm arm is itself a diluted (~1/5)
+sub-population, not a single undiluted 48mm run — structurally identical
+to the original size-curriculum's own 0/3 result. Reproducing that exact
+floor is *consistent with* population dilution being (at least) a real
+confound, and does not contradict that reading. But because Task 3 never
+paired an actual single-size, undiluted-48mm arm with the geometry-
+descriptor conditioning, this task's own data cannot distinguish
+"dilution alone explains the null" from "shape/discoverability remains a
+barrier even with geometry conditioning, independent of dilution" — both
+hypotheses predict exactly the 0/3-at-diluted-48mm result observed here.
+Task 3.5's own undiluted-48mm design (built to close exactly this gap)
+was scoped to d8/d10/d12 only and was never re-run for d20 itself, so
+this specific ambiguity remains technically open for the d20 case, even
+though Task 3.5's own plan-doc framing treats the dilution explanation as
+more settled than this task's data alone supports. Per the plan's own
+Task 3 Step 5 instruction, this is reported as a clean numeric result
+only — whether/how Task 4 (distillation) proceeds given zero working
+specialists across d8/d10/d12/d20 to date is a controller decision, not
+made here.

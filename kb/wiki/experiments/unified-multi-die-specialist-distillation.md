@@ -248,3 +248,88 @@ Task 4 proceeds with d12 (seed123, 8/8 — corrected from an originally-
 reported 4/8) and d20 (seed123 or seed7, both 8/8) as its two frozen
 specialists, per BACKLOG.md's "Task 4 scope decision" entry — an explicit
 controller-level decision already made there, not re-litigated here.
+
+## Task 4: distillation pipeline built (2026-07-19) — pipeline only, no real training yet
+
+Built `scripts/distill_specialists.py` (thin CLI entry point) +
+`tasks/franka/distillation.py` (the actual pure-torch/rsl_rl mechanics,
+importable without Isaac Sim) + `tests/test_distillation_data_collection.py`
+(28 unit tests, all passing). This is pipeline construction only — no real
+distillation training ran; that's Task 5, a separate later cloud dispatch.
+
+**Checkpoint verification (before designing around them):** both frozen
+teachers — d20 (`joint-die-big/seed123/2026-07-19_12-46-42/model_1499.pt`)
+and d12 (`joint-die-d12-big/seed123/2026-07-19_06-37-16/model_1499.pt`) —
+confirmed via `gsutil stat` + a real load through `rsl_rl.modules.ActorCritic`
+(not just a shape inspection): both carry an identical 41-dim observation
+(joint_pos_rel 9 + joint_vel_rel 9 + object_position 3 +
+target_object_position 7 + last_action 8 + shape_class_onehot 4 +
+geometry_descriptor 1 = 41) and 8-dim action (7 arm joints + 1 gripper),
+matching `FrankaLiftPPORunnerCfg`'s architecture ([256,128,64] hidden dims,
+elu) exactly — fully shape-compatible, confirming a single unified-policy
+architecture works unchanged for both teachers and the student.
+
+**Imitation-loss choice: multi-teacher DAgger with per-state expert
+routing + MSE-on-mean regression** (Ross/Gordon/Bagnell 2011 DAgger,
+generalized to 2 frozen teachers routed by the observation's own
+shape-onehot feature — full design rationale, including why `rsl_rl`'s own
+built-in single-teacher `StudentTeacher`/`DistillationRunner` classes were
+NOT reused, is in `tasks/franka/distillation.py`'s own module docstring).
+Mechanism: roll a beta-mixture (student/teacher) policy in each teacher's
+own single-shape env, relabel every visited state with ITS OWN shape's
+teacher (reading the shape-onehot slice already in the observation, so
+routing works correctly even on a pooled/shuffled multi-shape batch), pool
++shuffle both shapes' data before every BC regression step.
+
+**"Shape-randomized-per-episode" design note:** rather than building a new
+live env cfg that resamples shape at each individual episode reset (Isaac
+Lab's `MultiAssetSpawnerCfg` per-episode-resampling semantics are an
+unresolved risk flagged elsewhere in this plan, Task 3's own docstring),
+the pipeline runs the two teachers' existing single-shape envs
+(`FrankaDieLiftJointBigEnvCfg`, `FrankaDieLiftJointD12BigEnvCfg`) side by
+side and pools+shuffles their visited-state streams before every gradient
+step — the same statistical training distribution (shape varies
+episode-to-episode across the pooled stream) without touching that
+unresolved spawner question. Flagged explicitly as a scope choice, not an
+oversight.
+
+**Verification done (this task's own bar — no training run to video yet,
+so mechanical smoke-test + unit tests are the right bar):**
+- 28/28 unit tests pass (`tests/test_distillation_data_collection.py`,
+  stub envs/policies, no Isaac Sim, no real checkpoints) — TDD discipline
+  followed: confirmed failing (`ImportError`) against an emptied
+  `distillation.py` before implementing, then passing after.
+- `--help` runs clean with no Isaac Sim launch.
+- `--dry-run` runs the FULL real pipeline end to end (real checkpoint
+  download + load + shape-check, real student `ActorCritic`, only the env
+  is a physics-free stub) — BC loss visibly decreases across iterations
+  (1.93 → 1.54 → 1.05 over 3 dry-run iterations), and the saved checkpoint
+  round-trips (`torch.load` reproduces the expected keys/shapes).
+- Full repo test suite (`tests/`, 156 tests) still green — no regressions.
+
+**Two real bugs found and fixed while verifying `--dry-run`** (bug-handling
+discipline — fixed and re-verified in this same task, not deferred):
+1. Invoking `gcloud storage cp` via `subprocess` from a process launched
+   through Isaac Sim's bundled Python inherits that Python's own
+   `PYTHONPATH`, which crashes `gcloud`'s own Python invocation
+   (`AssertionError: SRE module mismatch`) before it ever runs. Fixed by
+   stripping `PYTHONPATH`/`PYTHONHOME` from the child `gcloud` subprocess's
+   environment (`tasks/franka/distillation.py`'s
+   `_subprocess_env_for_gcloud`).
+2. The `--dry-run` synthetic stub env originally sliced `actions` to the
+   observation's own non-shape-onehot width, silently assuming
+   `num_actions == obs_dim - num_shapes` — true only by coincidence for a
+   toy schema, false for the real 41-dim-obs/8-dim-action schema (39 != 8),
+   crashing on the first real dry-run. Fixed by broadcasting a per-env
+   scalar action summary (`actions.mean(dim=-1)`) across the stub's state
+   instead — dimension-agnostic, and a related second issue (the stub's
+   own onehot block placement didn't match `REFERENCE_SHAPE_ONEHOT_START`,
+   silently misrouting every state to the wrong teacher) was fixed by
+   deriving the stub's shape-onehot offset from its own actual layout
+   rather than the real env's reference constant.
+
+Files: `scripts/distill_specialists.py`, `tasks/franka/distillation.py`,
+`tests/test_distillation_data_collection.py`. Next: Task 5 (separate,
+later cloud-GPU dispatch) runs the real distillation training against
+these two real checkpoints and reports real discovery-rate numbers —
+nothing in this task constitutes a result yet.

@@ -154,6 +154,14 @@ see the coverage boundary note below.)*
   discoverability; the staged-anneal arm does prove the transfer
   mechanism itself works, yielding the project's first confirmed d20
   lift+carry at the real 30.3mm target size (seed 123, 8/8).
+- [[unified-multi-die-specialist-distillation]] (started 2026-07-16) —
+  per-shape specialist + distillation approach to a single policy that
+  grasps a commanded die among {d8, d10, d12, d20}. Zero working
+  specialists so far: d8/d10/d12 at real size 0/9, d20 size-DR retry
+  0/120 (ambiguous — its 48mm arm was itself a diluted sub-population).
+  Task 3.5 (48mm-parity check for d8/d10/d12, the task that resolves that
+  ambiguity) is in progress. Task 4 (distillation) is gated on this
+  task's result.
 
 ### Concepts
 
@@ -173,6 +181,9 @@ see the coverage boundary note below.)*
 - [[citation-verification-practice]] — the recurring pattern of senior
   review catching fabricated or overstated citations in delegated
   literature research, across nearly every research pass this session.
+- [[pi-as-primary-agent-gpu-dispatch]] — infra, not an RL experiment: the
+  Pi became the primary agent host and routes GPU work to the desktop
+  first, GCP cloud as fallback.
 - [[sim-physics-fidelity]] — dt/decimation control-period-preserving
   changes, PhysX's opaque auto-compute collision offsets, EE-frame
   verification methodology, and the settle-time/dt coupling bug class

@@ -78,22 +78,25 @@ d8-big trained/evaluated by a prior desktop-dispatch agent
 on GCP cloud (SPOT, switched to on-demand after 3 preemptions in ~3hrs —
 see `BACKLOG.md`'s "Task 3.5 cloud completion" entry).
 
-**Full grid (envs with sustained lift / 8 per seed):**
+**Full grid (envs with sustained lift / 8 per seed) — AS ORIGINALLY
+MEASURED, since corrected, see "Task 3.5 re-audit" section below:**
 
 | shape (48mm) | seed 42 | seed 123 | seed 7 | seeds-with-discovery |
 |--------------|---------|----------|--------|-----------------------|
 | d8-big       | 0/8     | 0/8      | 0/8    | 0/3                   |
 | d10-big      | 0/8     | 0/8      | 0/8    | 0/3                   |
-| d12-big      | 0/8     | **4/8**  | 0/8    | 1/3                   |
+| d12-big      | 0/8     | ~~4/8~~ **8/8** | 0/8 | 1/3                  |
 
 Compared to [[asset-bisect]]'s own undiluted-48mm baselines (cube 3/3
 seeds full 8/8, d20 1/3 seeds full 8/8): **d8 and d10 remain completely
 null even at pure 48mm parity — shape itself is a real barrier for these
 two, not population dilution or absolute scale** (matches Task 2's
-original ~16-18mm finding). **d12 shows a genuine but weaker echo of
-d20's own 1/3-seed pattern** — same lucky seed (123) as d20's original
-bisect discovery, but only half the envs within that seed (4/8, not
-d20's full 8/8).
+original ~16-18mm finding). d12-big seed123 was originally read as a
+*weaker* echo of d20's own 1/3-seed pattern (4/8, half the envs within
+its lucky seed) — the re-audit below found this was a measurement
+artifact of the same settle-detection bug fixed in the d20-big-geom gate
+task; the corrected reading is a *matching* echo, full 8/8 like d20's
+own lucky seeds.
 
 Independently re-verified d12-big seed123's positive result is real, not
 a third occurrence of the reset-boundary/settle-window artifacts already
@@ -123,6 +126,55 @@ the resume logic to validate checkpoint size before trusting it — see
 
 Full grid, reasoning, and cost: `ROADMAP.md`'s Task 3.5 entry (search
 "48mm-parity check").
+
+## Task 3.5 re-audit against fixed settle-detection — complete 2026-07-19, d12-big seed123 corrected 4/8 → 8/8
+
+The d20-big-geom gate task below fixed a real settle-detection bug in
+`franka_checkpoint_review.py` that predates all of Task 3.5's own
+d8-big/d10-big/d12-big runs. This task closed the resulting open risk
+(`BACKLOG.md`'s "settle-detection ... may have undercounted true
+positives" entry) via pure offline reanalysis — confirmed first that
+everything the fixed method needs (the raw `heights_*.npy` per-step
+array, plus `episode_length_steps` from the existing summary JSON) was
+already downloaded/synced and unaffected by the bug, so no new GPU
+rollout was needed.
+
+**Result: 8 of 9 (seed, shape) cells unchanged, all with wide safety
+margin (max height gain 0.003-0.009m vs. the 0.04m threshold — not close
+calls).** d8-big/d10-big confirmed 0/3 seeds each; d12-big seed42/seed7
+confirmed 0/8. **d12-big seed123 corrected from 4/8 to 8/8.** Root
+cause, read directly off the old per-env JSON fields: the flatness scan
+mistook 3 of the 4 previously-uncredited envs' own held-elevated
+plateau for their *resting* state (e.g. one env's reported
+`resting_z_m=0.2415` was actually its held height, not the true
+~0.0175m table-rest), so their real lift-and-hold registered as
+"already resting, zero gain"; the 4th env had an approximately-correct
+individually-detected resting_z but the old code's single *shared*
+`post_settle_start` (driven by the other envs' bad late detections)
+excluded its entire rise-and-fall event from the analysis window.
+
+All 4 newly-corrected envs confirmed as genuine physical lifts, not
+noise: all 8 envs in this seed show the same smooth rise starting within
+a 5-step window of each other (steps 38-43) with no teleports. 7 hold
+their elevated position to end-of-episode (matching the already-
+confirmed pattern for the originally-credited 4); the 8th ("env 0") is a
+genuine **lift-then-drop** — rises to ~0.111m, holds long enough to clear
+the 25-consecutive-step sustained-lift bar (37 steps), then smoothly
+descends back to true table-rest by ~step 115. Directly video-confirmed
+(env_0 is the one env this script's camera shows): frame at step 65
+shows a small elevated white sphere near the gripper matching the
+~0.111m reading; frame at step 95 shows it back near table level,
+matching the trajectory's descent.
+
+**Does not change which shapes show discovery** — d8/d10 remain fully
+null (`BACKLOG.md`'s "Task 4 scope decision" to defer them is
+unaffected at the shape-inclusion level), d12 remains the only partial
+(still 1/3 seeds). What changes is d12's own specialist-quality
+characterization: no longer a "weaker echo" of d20's pattern, now a
+full-completeness match — relevant since Task 4 already earmarks this
+exact d12 seed123 checkpoint as a frozen teacher. Full mechanism,
+corrected grid, and root-cause trace: `ROADMAP.md`'s "Task 3.5 re-audit"
+entry.
 
 ## d20-big-geom gate task: undiluted-48mm d20 retrain — complete 2026-07-19, result STRONGER than expected
 
@@ -171,7 +223,9 @@ d8-big/d10-big/d12-big grid above — not re-audited here (out of this
 task's scope), but plausible that some of those numbers (d8/d10's 0/8s,
 d12's 4/8-not-8/8) are themselves undercounts of the same kind, given the
 old approach was never observed to work reliably for any env cfg checked
-so far.
+so far. **Closed 2026-07-19 by the "Task 3.5 re-audit" section above:**
+d12-big seed123 was indeed undercounted (corrected to 8/8); all other 8
+cells confirmed unchanged with wide margin.
 
 **Checkpoints for Task 4** (both fully valid; seed123 nominal default per
 this project's recurring "seed123 is the lucky seed" pattern, seed7 an
@@ -187,9 +241,10 @@ Full grid, mechanism, raw-trajectory numbers, and cost (~$0.91):
 Task 4 (distillation) status per this experiment's own gate discipline:
 d8 and d10 remain fully null at 48mm parity (2/4 candidate shapes,
 deferred per BACKLOG.md's "Task 4 scope decision", not blocking), d12
-shows one partial positive (1/3 seeds, half-envs-within-seed), **d20 is
-now resolved (2/3 seeds, full 8/8 each)** — the d20-big-geom gate task
-above closed the last blocker. Task 4 proceeds with d12 (seed123, 4/8)
-and d20 (seed123 or seed7, both 8/8) as its two frozen specialists, per
-BACKLOG.md's "Task 4 scope decision" entry — an explicit controller-level
-decision already made there, not re-litigated here.
+shows one partial positive (1/3 seeds, now full 8/8-within-seed after
+the re-audit correction above), **d20 is now resolved (2/3 seeds, full
+8/8 each)** — the d20-big-geom gate task above closed the last blocker.
+Task 4 proceeds with d12 (seed123, 8/8 — corrected from an originally-
+reported 4/8) and d20 (seed123 or seed7, both 8/8) as its two frozen
+specialists, per BACKLOG.md's "Task 4 scope decision" entry — an explicit
+controller-level decision already made there, not re-litigated here.

@@ -157,9 +157,11 @@ see the coverage boundary note below.)*
 - [[unified-multi-die-specialist-distillation]] (started 2026-07-16) —
   per-shape specialist + distillation approach to a single policy that
   grasps a commanded die among {d8, d10, d12, d20}. Task 3.5's 48mm-parity
-  grid (complete 2026-07-19): d8/d10 fully null even at 48mm parity
-  (shape itself is the barrier), d12 shows one genuine partial positive
-  (1/3 seeds, 4/8 envs, same lucky seed as d20's own bisect discovery).
+  grid (complete 2026-07-19, re-audited against a settle-detection fix same
+  day): d8/d10 fully null even at 48mm parity (shape itself is the
+  barrier), d12 shows one genuine partial positive (1/3 seeds, full 8/8
+  envs within that seed — corrected from an originally-reported 4/8, same
+  lucky seed as d20's own bisect discovery).
   d20's own dilution ambiguity closed 2026-07-19 (d20-big-geom gate task):
   undiluted-48mm-with-geometry-conditioning retrain scored 2/3 seeds at
   full 8/8, stronger than expected. Task 4 (distillation) scoped to d12 +

@@ -146,13 +146,14 @@ checkpoint anyway (architecturally broken) or retraining d8/d10 first
 
 Task 4 proceeds once this closes, using d12 (`seed123`,
 `gs://rl-manipulation-hks-runs/unified-multi-die-specialists/joint-die-d12-big/seed123/2026-07-19_06-37-16/model_1499.pt`,
-4/8) and the new d20-48mm-with-geometry checkpoint as its two frozen
-specialists — a real, if narrower-than-originally-planned, test of the
-GiGSL distillation mechanism itself.
+8/8 — corrected from an originally-reported 4/8, see `ROADMAP.md`'s
+"Task 3.5 re-audit" entry, 2026-07-19) and the new d20-48mm-with-geometry
+checkpoint as its two frozen specialists — a real, if narrower-than-
+originally-planned, test of the GiGSL distillation mechanism itself.
 
 ## `franka_checkpoint_review.py`'s settle-detection flatness-window
 heuristic may have undercounted true positives in already-reported
-d8-big/d10-big/d12-big numbers (2026-07-19)
+d8-big/d10-big/d12-big numbers (2026-07-19) — RE-AUDITED, CLOSED (2026-07-19)
 
 Found while executing the d20-big-geom gate task above: the settle-
 detection mechanism committed in `977a748` (a forward scan for the first
@@ -168,20 +169,37 @@ confirmed and fixed for the d20-big-geom gate task's own 3 seeds (see
 mechanism and fix - replaced with a MIN-over-a-fixed-early-window
 approach in `scripts/franka_checkpoint_review.py`).
 
-**Not chosen here: re-auditing Task 3.5's own already-reported
+**Originally not chosen: re-auditing Task 3.5's own already-reported
 d8-big/d10-big/d12-big grid (d8 0/3, d10 0/3, d12 1/3-partial) against the
-fixed script.** Out of this task's explicit scope (dispatch brief said do
-not attempt d8/d10, and this task's own remit was the d20 retrain, not a
-Task 3.5 re-audit). Flagged here as a real, non-trivial risk rather than
+fixed script.** Out of that task's explicit scope (dispatch brief said do
+not attempt d8/d10, and that task's own remit was the d20 retrain, not a
+Task 3.5 re-audit). Flagged as a real, non-trivial risk rather than
 silently left alone: the old flatness-window approach was never observed
 to work reliably for ANY env cfg checked so far in this whole experiment
 (it failed for d20-big-geom in two successive ways, at both the original
-5e-5m tolerance and a first-attempt-loosened 2e-3m tolerance) - it is
+5e-5m tolerance and a first-attempt-loosened 2e-3m tolerance) - it was
 plausible, not just theoretical, that some of d8-big/d10-big's reported
-0/8 nulls and/or d12-big's reported 4/8 (not 8/8) partial are themselves
-undercounts of the same kind. If d8/d10 are ever picked back up (per this
-same file's "narrow to d12+d20, defer d8/d10" entry above), or if Task 4's
-own results ever hinge on the exact d12-big number, re-run
-`franka_checkpoint_review.py` (now fixed) against those checkpoints'
-already-saved raw `.npy`/GCS artifacts before trusting the old numbers
-further.
+0/8 nulls and/or d12-big's reported 4/8 (not 8/8) partial were themselves
+undercounts of the same kind.
+
+**Re-audit done (2026-07-19), closing this risk.** Pure offline
+reanalysis (no new GPU rollout — confirmed the fixed settle-detection
+logic needs only the already-downloaded raw `.npy` + existing summary
+JSON's `episode_length_steps` field, both unaffected by the bug) against
+all 9 already-synced (seed, shape) runs. Result: **d8-big/d10-big
+confirmed 0/3 seeds each, with wide safety margin (max height gain
+0.003-0.009m against the 0.04m threshold — not close calls). d12-big
+seed123 corrected from 4/8 to 8/8** — the previously-uncredited 4 envs
+were shown, via raw-trajectory shape analysis (matching rise-onset
+timing across all 8 envs) plus direct video-frame confirmation, to be
+genuine lifts the old algorithm's shared/poisoned `post_settle_start`
+window and per-env plateau-mistaken-for-rest bug had hidden, not
+artifacts. d12-big seed42/seed7 confirmed 0/8. Full mechanism, corrected
+grid, and root-cause trace: `ROADMAP.md`'s "Task 3.5 re-audit" entry.
+**Does not change `BACKLOG.md`'s own "Task 4 scope decision" above at
+the shape-inclusion level** (d8/d10 still fully null, still deferred;
+d12 still the only partial, still in scope) — it does strengthen d12's
+own specialist-quality characterization (now a full-completeness echo of
+d20's pattern, not a half one), relevant context for Task 4 given that
+task already earmarks this exact d12 seed123 checkpoint as a frozen
+teacher.

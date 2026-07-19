@@ -3133,7 +3133,18 @@ sustained lift / 8 envs per seed):
 |--------------|---------|----------|--------|----------------------|
 | d8-big       | 0/8     | 0/8      | 0/8    | 0/3                  |
 | d10-big      | 0/8     | 0/8      | 0/8    | 0/3                  |
-| d12-big      | 0/8     | **4/8**  | 0/8    | 1/3                  |
+| d12-big      | 0/8     | ~~4/8~~ **8/8** | 0/8    | 1/3          |
+
+**d12-big seed123 corrected from 4/8 to 8/8 (2026-07-19 re-audit, see
+"Task 3.5 re-audit" entry below)** — the number as originally measured in
+this task (below) was itself a measurement artifact of the
+settle-detection bug fixed in the d20-big-geom gate task; all other 8
+cells in this grid were re-audited against the fixed method and confirmed
+unchanged. The rest of this Task 3.5 entry is left as originally written
+(the historical record of what was measured/reasoned at the time,
+including the now-superseded "4/8, wedged/stuck" reading below) — see the
+dedicated re-audit entry for the corrected numbers, root cause, and video
+confirmation.
 
 Compared against the asset-bisect ladder's own undiluted-48mm baselines
 (`docs/superpowers/plans/2026-07-12-asset-bisect-report.md`): cube 3/3
@@ -3251,6 +3262,125 @@ given this grid (2 of 4 candidate shapes still fully null at 48mm parity,
 1 partial, d20 itself still gated on Task 3's own open ambiguity) is a
 controller decision, not made here.**
 
+## Task 3.5 re-audit against the fixed settle-detection method (2026-07-19): d12-big seed123 corrected 4/8 → 8/8, d8/d10 confirmed unchanged
+
+The d20-big-geom gate task above found and fixed a real bug in
+`franka_checkpoint_review.py`'s settle-detection heuristic (the
+`977a748` flatness-window scan, replaced with the current MIN-over-
+early-window approach — see that task's own entry for the full
+mechanism) that predates all of Task 3.5's own d8-big/d10-big/d12-big
+runs. This left an explicit open risk, flagged in `BACKLOG.md`'s
+"settle-detection flatness-window heuristic may have undercounted true
+positives" entry: Task 3.5's reported grid was measured with the buggy
+version and never re-checked. This task closes that gap.
+
+**Method: pure offline reanalysis, no new GPU rollout.** Confirmed by
+reading `franka_checkpoint_review.py`'s current source first (per this
+task's own dispatch instruction) that everything downstream of
+`height_history` (the raw per-step object-z array already saved to each
+run's `heights_*.npy`) is plain numpy/torch math with no dependency on
+Isaac Sim or the live env object — `episode_length_steps` (the one other
+input the fixed logic needs) is also already recorded in each run's
+existing summary JSON, itself unaffected by the settle-detection bug.
+Downloaded all 9 already-synced `heights_*.npy`/`.json` pairs from
+`gs://rl-manipulation-hks-runs/unified-multi-die-specialists/eval-
+artifacts/joint-die-{d8,d10,d12}-big/seed{42,123,7}/` and re-ran a
+line-for-line numpy port of the current fixed logic
+(`EARLY_SETTLE_START=10`, `EARLY_SETTLE_END=45`, MIN-over-window
+resting_z, `SUSTAINED_LIFT_STEPS=25` @ `LIFT_HEIGHT_THRESHOLD_M=0.04`)
+directly against them — committed as `scripts/_diag_settle_reaudit_task35.py`
+(plain Python + numpy, no `isaaclab`/`torch` dependency, runs on the Pi
+directly) for reproducibility/future re-audits.
+
+**Result: 8 of 9 cells unchanged, all with large safety margin (max
+height gain 0.003-0.009m against the 0.04m sustained-lift threshold —
+not close calls).** d8-big and d10-big are confirmed 0/8 in all 3 seeds
+each under the fixed method — matches Task 2's independent raw-data
+confirmation that these shapes are genuinely motionless at this scale,
+consistent with there being no "wrong later plateau" for the settle-bug
+to lock onto when the object never moves. d12-big seed42/seed7 are also
+confirmed 0/8 (max gains 0.003-0.007m, noise-floor level).
+
+**d12-big seed123 changes from 4/8 to 8/8 — a real, substantive
+correction, not a rounding/edge-case artifact.** Root cause, read
+directly off the original (pre-fix) JSON's per-env `settle_step`/
+`resting_z` fields: the old flatness scan mistook 3 of the 4
+previously-"non-lifting" envs' own held-elevated plateau for their
+*resting* state (env 2: `resting_z_m=0.1088` — its actual held height,
+not the true ~0.0175m table-rest; env 3: `0.1116`; env 4: `0.2415`), so
+their real lift-and-hold registered as "already resting, zero further
+gain." The 4th ("env 0"), had an approximately-correct `resting_z`
+(0.0175, because by coincidence this env's die had already fallen back
+to the table by the time the scan locked onto its plateau) but the old
+code's single *shared* `post_settle_start` across all 8 envs was
+`max(settle_step across all envs)=196` — driven by envs 2/3/4's own
+bad, late detections — which excluded env 0's entire rise-and-fall event
+(steps ~40-115) from the analysis window entirely.
+
+Re-derived and independently confirmed all 4 newly-corrected envs are
+real physical lifts, not measurement noise: all 8 envs (not just the
+originally-credited 1/5/6/7) show the *same* smooth, monotonic rise
+starting within a 5-step window of each other (steps 38-43), reaching
+their plateau by steps 54-71, with comparable max single-step deltas
+(0.0135-0.0205m, no teleports) — i.e. one consistent policy behavior
+firing near-identically across all 8 parallel envs of this seed, not 4
+real lifts plus 4 unrelated artifacts. 7 of the 8 (envs 1-7) hold their
+elevated position through to the end of the episode, matching the
+already-confirmed pattern for envs 1/5/6/7. **Env 0 is qualitatively
+different and worth flagging on its own: a genuine lift-then-drop, not
+a lift-and-hold** — it rises smoothly to ~0.111m by step ~68, holds
+(satisfying the 25-consecutive-step sustained-lift bar with margin,
+37 steps), then descends smoothly (no teleport) back down to the true
+table-rest height (0.0175m) by ~step 115 and stays there for the rest
+of the episode. Directly video-confirmed (env_0 is the one env this
+script's fixed camera actually shows): extracted frames at steps
+10/40/50/65/82/95/110/150/249 from
+`franka_checkpoint_review_joint-die-d12-big_model_1499-step-0.mp4` —
+step 10 shows the die resting on the table next to the closed gripper;
+step 65 (zoomed crop) shows a small white sphere elevated near/above the
+gripper, consistent with the ~0.111m reading at that step; step 95 shows
+the die back down near table level, consistent with the trajectory's
+smooth descent back to ~0.021m by that point. This is a real, if
+less-complete, positive — it meets the project's own operational
+"sustained lift" bar (`mdp.object_is_lifted` threshold held ≥0.5s) even
+though it doesn't carry to end-of-episode like the other 7.
+
+**Corrected grid:**
+
+| shape (48mm) | seed 42 | seed 123 | seed 7 | seeds-with-discovery |
+|--------------|---------|----------|--------|----------------------|
+| d8-big       | 0/8     | 0/8      | 0/8    | 0/3                  |
+| d10-big      | 0/8     | 0/8      | 0/8    | 0/3                  |
+| d12-big      | 0/8     | **8/8**  | 0/8    | 1/3                  |
+
+**Decision-relevance, flagged explicitly rather than silently folded in:
+this correction does NOT change which shapes show real discovery** — d8
+and d10 remain fully, robustly null (0/3 seeds each, confirmed with wide
+safety margin, not close calls) across every size regime tested to date
+(Task 2's real ~16-18mm size, Task 3.5's 48mm parity); d12 remains the
+only one of the two "deferred" candidates with any discovery, still in
+exactly 1 of its 3 seeds. **`BACKLOG.md`'s "Task 4 scope decision"
+(narrow to d12+d20, defer d8/d10) is unaffected at the shape-inclusion
+level** — nothing here reopens the case for including d8/d10 in Task 4,
+and nothing here removes d12 from consideration. What *does* change is
+the characterization of d12's own specialist quality: it was reported as
+a "weaker echo" of d20's pattern (half its lucky seed's envs vs. d20's
+full 8/8); it is now a *matching* echo — d12's lucky seed (123) gets the
+same full 8/8 within-seed completeness as d20's own lucky seeds, the
+same clean pattern this project's asset-bisect/d20-big-geom lineage has
+seen before. Since `BACKLOG.md` already earmarks this exact checkpoint
+(`joint-die-d12-big/seed123/2026-07-19_06-37-16/model_1499.pt`) as one
+of Task 4's two frozen specialist teachers, this is relevant context for
+that task even though it doesn't change which shapes are in scope —
+flagged here for the controller, not acted on unilaterally.
+
+No new bugs found in the fixed settle-detection method itself or in this
+task's own offline re-derivation script during this re-audit (cross-
+checked step-for-step against the current `franka_checkpoint_review.py`
+source, and the 8 unchanged cells all show wide safety margins rather
+than borderline flips, which would be the more likely symptom of a
+subtle bug in the re-derivation itself).
+
 ## d20-big-geom gate task: undiluted-48mm d20 retrain closes Task 3's
 dilution ambiguity — result STRONGER than the falsifiable expectation
 (2026-07-19)
@@ -3300,7 +3430,10 @@ Reported exactly as observed, per this task's own explicit instruction not
 to adjust the framing to match the a priori expectation. This is a
 materially STRONGER result than the asset-bisect ladder's original
 d20-at-48mm baseline (1/3 seeds, seed123, full 8/8) and than Task 3.5's
-own d12-big echo (1/3 seeds, seed123, 4/8 partial) — supports "population
+own d12-big echo as reported at the time (1/3 seeds, seed123, 4/8
+partial — corrected to 8/8 by the "Task 3.5 re-audit" entry above; this
+comparison predates that correction and is left as originally written)
+— supports "population
 dilution was Task 3's real confound" more decisively than the falsified
 weaker form of that hypothesis: not only does undiluted-48mm d20 recover
 discovery, it recovers it in *more* seeds and at *higher* per-seed
@@ -3346,7 +3479,10 @@ its two forms) was used, unquestioned, for Task 3.5's own already-reported
 d8-big/d10-big/d12-big grid — those numbers were not re-audited here (out
 of this task's scope) but may also undercount true positives, since the
 old approach was never reliable for any env cfg checked so far, not just
-this one.
+this one. **Closed 2026-07-19 by the "Task 3.5 re-audit" entry above:**
+d12-big seed123 was indeed undercounted (4/8 → corrected to 8/8);
+d8-big/d10-big and d12-big's other 2 seeds were confirmed unchanged with
+wide safety margin.
 
 **Checkpoints for Task 4** (both fully valid, either usable as the frozen
 d20 specialist teacher — seed123 kept as the nominal default per this

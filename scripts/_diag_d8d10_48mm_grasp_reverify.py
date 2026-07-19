@@ -109,13 +109,30 @@ is treated here as the same caution for two live `InteractiveScene`s.
 Never pass --headless - a display exists (DISPLAY=:1) and the user wants
 to watch (CLAUDE.md's Environment conventions).
 
+**2026-07-19 follow-up task (d10 perception-bypass re-verify)**: d8 passed
+this re-verification cleanly (242.6mm z-gain); d10 failed, but at
+`select_target_detection` (0 detections for class `d10`), before the
+scripted grasp controller ever ran - the grasp mechanism itself was never
+exercised for d10. Two things were added to fix this, per
+BACKLOG.md's 2026-07-19 "d8/d10 demo-warmstart Task 0" decision entry:
+  3. `--gt-xy-bypass` (see its own argparse help above) - reuses
+     `dice_pick_demo.py`'s own `--gt-xy-bypass` mechanism/precedent (d4
+     rung-1) to source target_xy from a fresh ground-truth measurement
+     instead of the detector, isolating the grasp mechanism from the
+     perception gap.
+  4. `recapture_camera_frame` (see its own docstring) - a real bug found
+     alongside (3): the detector subprocess was reading a STALE real-size
+     camera frame captured before the rescale, for every prior run of
+     this diagnostic (both d8 and d10), not a genuine 48mm-scale image.
+     Fixed unconditionally (applies with or without `--gt-xy-bypass`).
+
 .. code-block:: bash
 
     flock -o /tmp/rl_isaac_sim.lock -c "PYTHONUNBUFFERED=1 \\
         /home/saps/IsaacLab/isaaclab.sh -p scripts/_diag_d8d10_48mm_grasp_reverify.py --shape d8"
 
     flock -o /tmp/rl_isaac_sim.lock -c "PYTHONUNBUFFERED=1 \\
-        /home/saps/IsaacLab/isaaclab.sh -p scripts/_diag_d8d10_48mm_grasp_reverify.py --shape d10"
+        /home/saps/IsaacLab/isaaclab.sh -p scripts/_diag_d8d10_48mm_grasp_reverify.py --shape d10 --gt-xy-bypass"
 """
 
 import argparse
@@ -144,6 +161,30 @@ _parser.add_argument(
     help=(
         "Seed for the randomized 5-die layout. A single seed is sufficient for this mechanical "
         "transfer check (Task 1's own capture is where 5-seeds-per-shape matters)."
+    ),
+)
+_parser.add_argument(
+    "--gt-xy-bypass",
+    action="store_true",
+    default=False,
+    help=(
+        "Grasp-mechanism-isolation bypass - REUSES dice_pick_demo.py's own --gt-xy-bypass "
+        "mechanism/precedent (d4 rung-1, "
+        "docs/superpowers/specs/2026-07-15-d4-rung1-pad-geometry-design.md's 'Addendum: "
+        "ground-truth XY-bypass'; see also BACKLOG.md's 2026-07-19 'd8/d10 demo-warmstart Task 0' "
+        "entry, which decided this diagnostic needed the same fix). Default OFF: byte-identical "
+        "to pre-flag behavior - target_xy sourced only from the detector, select_target_detection's "
+        "raise on a miss is fatal (uncaught), same as before this flag existed. When set: the "
+        "detector subprocess still runs unconditionally (diagnostic detector-vs-GT comparison "
+        "preserved either way, per the precedent's own design); a detector miss for the commanded "
+        "shape is caught rather than fatal; target_xy is always sourced from a FRESH live "
+        "ground-truth measurement of the die's own post-rescale, post-resettle position "
+        "(measure_settled_position_m) rather than the detector's - NOT from spawn_scene_and_settle's "
+        "pre-rescale `results` dict, since this diagnostic's own post-hoc rescale can shift the die's "
+        "x/y (not just z) during re-settle, same staleness concern as the rgb.png bug fixed in "
+        "recapture_camera_frame below. A bypassed PASS means only 'the grasp mechanism works at this "
+        "scale', NOT 'the perception-driven demo can find this die at this scale' - must not be "
+        "represented as the latter."
     ),
 )
 own_args, _unknown_args = _parser.parse_known_args()
@@ -257,6 +298,27 @@ def override_die_scale(sim, scene, die_type: str, scale: float) -> None:
     print(f"[OVERRIDE] re-settled {die_prim_path} for {resettle_steps} steps ({_RESETTLE_SECONDS}s sim time) after rescale")
 
 
+def measure_settled_position_m(scene, die_type: str) -> tuple[float, float, float]:
+    """Live-measured settled world-frame (x, y, z) meters of `die_{die_type}`'s
+    root position, in the env-local frame - read directly off the scene
+    (`scene.env_origins`-subtracted, matching `spawn_scene_and_settle`'s own
+    read pattern). Extended (this task, --gt-xy-bypass work) from the
+    z-only `measure_settled_rest_height` this function now backs, so the
+    SAME "measure it directly after re-settle, do not assume" discipline
+    already applied to grasp height also covers x/y: this diagnostic's own
+    post-hoc rescale (`override_die_scale`) can shift the die's x/y, not
+    just z, during its re-settle loop (denser contact/rolling under the
+    larger footprint) - so `spawn_scene_and_settle`'s own pre-rescale
+    `results[die_type]["x"/"y"]` is stale for the same reason its saved
+    rgb.png is stale (see `recapture_camera_frame`'s bug-fix note). Used for
+    grasp height (z) unconditionally, and for target_xy (x, y) only when
+    `--gt-xy-bypass` is active."""
+    die = scene[f"die_{die_type}"]
+    pos_w = die.data.root_pos_w[0].cpu().numpy()
+    pos = pos_w - scene.env_origins[0].cpu().numpy()
+    return float(pos[0]), float(pos[1]), float(pos[2])
+
+
 def measure_settled_rest_height(scene, die_type: str) -> float:
     """Live-measured settled world-frame z (meters) of `die_{die_type}`'s
     root position - read directly off the scene AFTER `override_die_scale`'s
@@ -267,11 +329,85 @@ def measure_settled_rest_height(scene, die_type: str) -> float:
     independently, at the NEW 48mm scale, rather than assumed to scale
     linearly with the die's spawn-scale ratio from the real-size constant
     (this task's own explicit "measure it directly, do not assume"
-    requirement - see plan/spec)."""
-    die = scene[f"die_{die_type}"]
-    pos_w = die.data.root_pos_w[0].cpu().numpy()
-    pos = pos_w - scene.env_origins[0].cpu().numpy()
-    return float(pos[2])
+    requirement - see plan/spec). Thin wrapper over
+    `measure_settled_position_m`, kept as its own named function since every
+    existing caller already spells it this way."""
+    return measure_settled_position_m(scene, die_type)[2]
+
+
+def recapture_camera_frame(sim, scene, out_dir: str) -> None:
+    """Re-renders and OVERWRITES `rgb.png`/`depth.npy`/`camera_params.json`
+    in `out_dir` from the LIVE scene's current camera state - mirrors
+    `dice_pick_demo.spawn_scene_and_settle`'s own "Camera capture" block
+    (that function's `rgb`/`depth`/`intrinsics`/`cam_pos_w`/`cam_quat_w_ros`
+    read-and-save code) byte-for-byte in what it writes, minus the ground
+    truth/arm-camera bookkeeping that block also does (not needed here -
+    this diagnostic has its own GT path, see `measure_settled_position_m`).
+
+    **Real bug found and fixed in this task (2026-07-19)**: before this
+    function existed, `run_shape_reverify` called
+    `dpd.run_detector_subprocess(out_dir)` directly after
+    `override_die_scale`. `run_detector_subprocess` does NOT render
+    anything itself - by design (confirmed by direct read of
+    `dice_pick_demo.py`'s own Gate V comment: "run_detector_subprocess
+    reads its own saved rgb.png from spawn_scene_and_settle, not this local
+    var" - correct for Gate G/V, which never rescale mid-run) it only reads
+    whatever `rgb.png`/`depth.npy` already sit in `out_dir`. Those files
+    were last written by `spawn_scene_and_settle`, BEFORE this diagnostic's
+    own `override_die_scale` ever rescales the die to 48mm - so every prior
+    run of this diagnostic's detector step (both the d8 PASS and the d10
+    FAIL that motivated this task) actually ran object detection against
+    the ORIGINAL REAL-SIZE frame, not a genuine 48mm-scale image. This is a
+    real, reportable problem with the prior "d10 fails perception at 48mm
+    scale" diagnosis: that 0-detections result was measured against a
+    real-size frame, and d10 is independently already known to detect fine
+    at real size (`kb/wiki/experiments/dice-pick-demo.md`: 239.3mm z-gain
+    baseline). Fixed here: re-render and overwrite the camera frame from the
+    LIVE (post-rescale, post-resettle) scene before the detector subprocess
+    ever runs, using the same RTX-convergence-frame count (40 steps)
+    `spawn_scene_and_settle` uses after its own settle loop - a rescale is
+    as large a visual change as an initial spawn, so convergence needs
+    re-earning here too, not assumed carried over from `override_die_scale`'s
+    physics-settle steps alone (those already render each step, but for
+    physics equilibrium, not RTX visual convergence)."""
+    import numpy as np
+    from PIL import Image
+
+    sim_dt = sim.get_physics_dt()
+    for _ in range(40):
+        scene.write_data_to_sim()
+        sim.step()
+        scene.update(sim_dt)
+
+    camera = scene["camera"]
+    rgb = camera.data.output["rgb"][0, ..., :3].cpu().numpy().astype(np.uint8)
+    depth = camera.data.output["distance_to_image_plane"][0, ..., 0].cpu().numpy()
+    intrinsics = camera.data.intrinsic_matrices[0].cpu().numpy()
+    cam_pos_w = camera.data.pos_w[0].cpu().numpy()
+    cam_quat_w_ros = camera.data.quat_w_ros[0].cpu().numpy()
+
+    rgb_path = os.path.join(out_dir, "rgb.png")
+    depth_path = os.path.join(out_dir, "depth.npy")
+    params_path = os.path.join(out_dir, "camera_params.json")
+
+    Image.fromarray(rgb).save(rgb_path)
+    np.save(depth_path, depth)
+    with open(params_path, "w") as f:
+        json.dump(
+            {
+                "intrinsic_matrix": intrinsics.tolist(),
+                "pos_w": cam_pos_w.tolist(),
+                "quat_w_ros": cam_quat_w_ros.tolist(),
+                "width": int(camera.data.output["rgb"].shape[2]),
+                "height": int(camera.data.output["rgb"].shape[1]),
+            },
+            f,
+            indent=2,
+        )
+    print(
+        f"[REVERIFY] BUG FIX: re-captured camera frame post-rescale (overwriting the stale "
+        f"real-size frame spawn_scene_and_settle wrote): {rgb_path}, {depth_path}, {params_path}"
+    )
 
 
 def run_shape_reverify(shape: str, seed: int) -> dict:
@@ -289,6 +425,13 @@ def run_shape_reverify(shape: str, seed: int) -> dict:
     scale = _SCALE_48MM[shape]
     override_die_scale(sim, scene, shape, scale)
 
+    # BUG FIX (2026-07-19, see recapture_camera_frame's own docstring for the
+    # full finding): must happen BEFORE run_detector_subprocess below, and
+    # before the rest-height measurement (an extra 40 render-convergence
+    # steps happen inside it, so measuring after gives the truly final
+    # settled state, not a mid-convergence one).
+    recapture_camera_frame(sim, scene, out_dir)
+
     measured_rest_height_m = measure_settled_rest_height(scene, shape)
     real_size_rest_height_m = dpd._DIE_REST_HEIGHT_M[shape]
     print(
@@ -304,20 +447,57 @@ def run_shape_reverify(shape: str, seed: int) -> dict:
     for det in detections:
         print(f"  class={det['class']:<8} conf={det['confidence']:.3f} world_pos={det['world_pos']}")
 
-    # select_target_detection fails LOUDLY (raises, uncaught here) if the
-    # detector cannot find the commanded die - same "never falls back to
-    # ground truth" contract as Gate G's own non-bypass path. Left uncaught
-    # deliberately (matching Gate G, which does not wrap this call either):
-    # a detector miss at 48mm scale (trained on real-size dice imagery) is
-    # itself a real, reportable failure mode for this task, not something
-    # to route around.
-    target_det = dpd.select_target_detection(detections, shape)
-    det_x, det_y, det_z = target_det["world_pos"]
-    target_xy = (float(det_x), float(det_y))
-    print(
-        f"[REVERIFY] target detection for '{shape}': class={target_det['class']} "
-        f"conf={target_det['confidence']:.3f} world_pos=({det_x:.4f}, {det_y:.4f}, {det_z:.4f})"
-    )
+    # Ground-truth XY-bypass (--gt-xy-bypass, OFF by default) - REUSES the
+    # exact mechanism dice_pick_demo.py's own Gate G/V already built for this
+    # (see this module's own --gt-xy-bypass argparse help above for the full
+    # precedent citation), rather than inventing a new bypass pattern.
+    # select_target_detection still fails LOUDLY (raises) on a miss - that
+    # contract is UNCHANGED; only THIS CALLER catches the raise, and only
+    # when the bypass is active (mirroring dice_pick_demo.py's run_gate_g
+    # exactly, including its 2026-07-15 "catch only when bypass is on, and
+    # only around this call" fix for the bug where a TOTAL miss used to
+    # propagate before the bypass branch could ever run). Default OFF means
+    # d8's already-passing non-bypass path is byte-identical to before this
+    # task's changes (aside from the frame-recapture bug fix above, which
+    # applies unconditionally).
+    target_det = None
+    det_x = det_y = det_z = None
+    try:
+        target_det = dpd.select_target_detection(detections, shape)
+        det_x, det_y, det_z = target_det["world_pos"]
+        print(
+            f"[REVERIFY] target detection for '{shape}': class={target_det['class']} "
+            f"conf={target_det['confidence']:.3f} world_pos=({det_x:.4f}, {det_y:.4f}, {det_z:.4f})"
+        )
+    except RuntimeError as e:
+        if not own_args.gt_xy_bypass:
+            raise
+        print(
+            f"[REVERIFY] detector FAILED to find '{shape}' ({e}) - continuing because "
+            f"--gt-xy-bypass is active; target_xy will be sourced from ground truth below, "
+            f"detector-vs-GT diagnostic print skipped (nothing to compare against)."
+        )
+
+    gt_x, gt_y, _gt_z = measure_settled_position_m(scene, shape)
+    if own_args.gt_xy_bypass:
+        target_xy = (gt_x, gt_y)
+        print(
+            f"[REVERIFY] target_xy SOURCED FROM GROUND TRUTH (bypass active) for '{shape}': "
+            f"({target_xy[0]:.4f}, {target_xy[1]:.4f}) - grasp-mechanism isolation only, NOT a "
+            f"perception result."
+        )
+        if target_det is not None:
+            xy_err_mm = ((gt_x - det_x) ** 2 + (gt_y - det_y) ** 2) ** 0.5 * 1000.0
+            print(
+                f"[REVERIFY] detector-vs-GT xy offset for '{shape}' [DIAGNOSTIC ONLY, not used for "
+                f"grasp]: {xy_err_mm:.1f}mm (gt=({gt_x:.4f},{gt_y:.4f}), det=({det_x:.4f},{det_y:.4f}))"
+            )
+    else:
+        target_xy = (float(det_x), float(det_y))
+        print(
+            f"[REVERIFY] target_xy sourced from DETECTOR for '{shape}': "
+            f"({target_xy[0]:.4f}, {target_xy[1]:.4f})"
+        )
 
     pick_sequence_error = None
     try:
@@ -374,10 +554,16 @@ def run_shape_reverify(shape: str, seed: int) -> dict:
         "real_size_rest_height_m": real_size_rest_height_m,
         "demo_scene_die_mass_kg": _DEMO_SCENE_DIE_MASS_KG,
         "rl_env_die_mass_kg": _RL_ENV_DIE_MASS_KG,
-        "detected_class": target_det["class"],
-        "detection_confidence": target_det["confidence"],
-        "detector_world_pos": [float(det_x), float(det_y), float(det_z)],
+        "gt_xy_bypass_active": bool(own_args.gt_xy_bypass),
+        # target_det is None only when --gt-xy-bypass caught a total
+        # detector miss (see the try/except above) - guard against that
+        # here rather than crashing on the verdict-JSON write.
+        "detected_class": target_det["class"] if target_det is not None else None,
+        "detection_confidence": target_det["confidence"] if target_det is not None else None,
+        "detector_world_pos": [float(det_x), float(det_y), float(det_z)] if target_det is not None else None,
+        "gt_xy_m": [gt_x, gt_y],
         "target_xy": target_xy,
+        "target_xy_source": "ground_truth" if own_args.gt_xy_bypass else "detector",
         "waypoint_status": waypoint_status,
         "pick_sequence_error": pick_sequence_error,
         "verdict_table": verdict_table,

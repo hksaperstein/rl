@@ -3499,3 +3499,73 @@ synced to
 preemptions, $0.361/hr compute + ~$0.05 boot-disk overhead), well under
 the ~$12.04 remaining allotment. Full teardown verified via
 `scripts/check_cloud_state.sh`: zero instances/disks/snapshots remain.
+
+## Task 5 (real distillation run) attempted, BLOCKED on an Isaac Lab
+architectural limit — no distilled checkpoint yet (2026-07-19)
+
+Dispatched the real (non-`--dry-run`) run of `scripts/distill_specialists.py`
+against Task 4's two real frozen teachers (d20 `joint-die-big/seed123`, d12
+`joint-die-d12-big/seed123`) on the desktop GPU. Two real bugs found under
+real execution, neither caught by Task 4's own `--dry-run` (stub envs have
+no notion of a simulation context):
+
+**Bug 1, fixed and verified:** the real-run driver originally built BOTH
+teacher envs before the DAgger loop, matching `tasks/franka/distillation.py`'s
+own "two rollout environments run side by side" design — crashed
+immediately with `RuntimeError: Simulation context already exists.` (Isaac
+Lab's `SimulationContext` is a process-wide singleton; a second
+`ManagerBasedRLEnv` cannot be constructed while a first is open). Fixed by
+extracting a new `regress_on_pooled_batches` helper out of
+`run_dagger_iteration`'s regression-step tail (identical logic, still
+unit-tested) and rewriting the real-run driver to collect each shape's
+rollout **sequentially** (open → `collect_rollout` → `close`, per shape,
+per iteration) before calling the shared regression step on both
+already-collected batches — never two envs open at once.
+`run_dagger_iteration` itself is unchanged and still exercises the
+simultaneous-stub-envs path for `--dry-run`/unit tests. Re-verified: 28/28
+unit tests pass, `--dry-run`'s BC loss curve unchanged
+(1.93→1.54→1.05 over 3 iterations).
+
+**Bug 2, NOT fixable within this task — genuine architectural blocker:**
+redispatching with the sequential-reopen fix, the job hung with zero log
+output for 20+ minutes building the run's SECOND `ManagerBasedRLEnv` (the
+first, d20's, built and closed cleanly in 8.5s) — CPU pinned ~104% on one
+thread, all `carb.tasking*` workers idle, GPU 1% util, no error, no
+progress. Independently confirmed with a minimal isolated repro
+(`num_envs=16`, build→close→build, no distillation code at all): first env
+1.44s, second env never returns (9m11s CPU time, zero output) — rules out
+"just slow at num_envs=4096," this is inherent to reconstructing a
+`ManagerBasedRLEnv` in-process after a prior `.close()`, in this Isaac Lab
+installation. Both the real run and the repro were killed cleanly; full
+teardown independently re-verified both times (`check_gpu_availability.sh`
+AVAILABLE, `systemd-inhibit --list` clear of `rl-gpu-job`/
+`rl-gpu-job-auto-detect`, `nvidia-smi --query-compute-apps` empty,
+`/tmp/rl_isaac_sim.lock` free).
+
+**Why this stops here rather than being worked around:** Task 4's own
+foundational design ("two rollout environments side by side") is broken
+under BOTH readings (simultaneous or sequential-reopen) in this real
+installation. The two remaining fixes are both genuine new architecture,
+not bug fixes — (a) two persistent per-shape Isaac Sim processes
+exchanging student weights/rollout data via disk each iteration (keeps
+Task 1's observation-schema contract untouched, but is new distributed-
+training infra), or (b) one single mixed-population env splitting
+`num_envs` between d12/d20 via the already-proven
+`MultiAssetSpawnerCfg(random_choice=False)` mechanism
+(`FrankaDieLiftJointMixedEnvCfg`'s own precedent), which needs
+`object_shape_class_onehot`/`object_geometry_descriptor` extended from a
+single per-cfg-constant broadcast to a per-env-aware read of the actually-
+spawned asset — a real change to an established observation-term contract.
+Flagged to the controller rather than picked unilaterally; full detail,
+evidence, and this task's own (non-binding) lean toward option (b):
+`BACKLOG.md`'s "Task 5 ... BLOCKED" entry.
+
+**State:** no distilled checkpoint exists yet. Code changes committed:
+`franka_checkpoint_review.py`'s `load_optimizer=False` fix (needed for the
+eventual eval step, found while preparing for it, independent of the
+blocker above) and the `regress_on_pooled_batches` refactor + (currently
+non-functional, blocked) sequential-reopen real-run driver in
+`scripts/distill_specialists.py`/`tasks/franka/distillation.py`. No cloud
+spend (desktop-only, both dispatches torn down cleanly with zero waste).
+Task 6 (RL fine-tune) cannot proceed until Task 5 actually produces a
+checkpoint.

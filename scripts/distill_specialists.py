@@ -81,10 +81,13 @@ from tasks.franka.distillation import (  # noqa: E402
     MultiShapeTeacherRouter,
     actor_inference_fn,
     build_student_actor_critic,
+    collect_rollout,
     compute_shape_onehot_offset,
     dagger_beta_schedule,
     inspect_checkpoint_shapes,
     load_frozen_teacher,
+    mix_actions,
+    regress_on_pooled_batches,
     run_dagger_iteration,
     save_student_checkpoint,
 )
@@ -293,11 +296,25 @@ def main(args_cli: argparse.Namespace) -> None:
     d20_teacher = load_frozen_teacher(args_cli.d20_checkpoint, obs_dim, num_actions, device, args_cli.checkpoint_cache_dir)
     d12_teacher = load_frozen_teacher(args_cli.d12_checkpoint, obs_dim, num_actions, device, args_cli.checkpoint_cache_dir)
 
-    envs = {
-        "d20": build_real_env("d20", args_cli.num_envs, device, args_cli.seed),
-        "d12": build_real_env("d12", args_cli.num_envs, device, args_cli.seed),
-    }
-    shape_onehot_start, shape_onehot_dim = compute_shape_onehot_offset(envs["d20"])
+    # REAL BUG found under this task's own first real dispatch (2026-07-19,
+    # not caught by --dry-run's stub envs): Isaac Lab's SimulationContext is
+    # a process-wide singleton - constructing two ManagerBasedRLEnv objects
+    # at once (one per teacher's own single-shape env, as originally written
+    # here and as tasks/franka/distillation.py's run_dagger_iteration
+    # assumes) raises "RuntimeError: Simulation context already exists."
+    # Fixed by never holding both envs open at once: each DAgger iteration
+    # opens shape A's env, collects its rollout, closes it, then does the
+    # same for shape B, THEN pools+regresses on both already-collected
+    # (and now env-free) batches via regress_on_pooled_batches - the same
+    # statistical procedure (mixture-policy rollout against the CURRENT
+    # student in each shape's own env, pooled+shuffled before one regression
+    # step), just sequenced instead of parallel. See
+    # tasks/franka/distillation.py's run_dagger_iteration docstring for the
+    # full trace; that function itself is unchanged and still used by
+    # --dry-run (whose stub envs have no simulation-context constraint).
+    probe_env = build_real_env("d20", args_cli.num_envs, device, args_cli.seed)
+    shape_onehot_start, shape_onehot_dim = compute_shape_onehot_offset(probe_env)
+    probe_env.close()
 
     router = MultiShapeTeacherRouter(
         {"d20": actor_inference_fn(d20_teacher), "d12": actor_inference_fn(d12_teacher)},
@@ -307,20 +324,30 @@ def main(args_cli: argparse.Namespace) -> None:
     )
     student = build_student_actor_critic(obs_dim, num_actions, device)
     optimizer = torch.optim.Adam(student.actor.parameters(), lr=args_cli.learning_rate)
+    student_action_fn = actor_inference_fn(student)
 
     for it in range(args_cli.num_iterations):
         beta = dagger_beta_schedule(it, args_cli.num_iterations, args_cli.beta_start, args_cli.beta_end)
-        mean_loss = run_dagger_iteration(
-            envs, student, router, optimizer, args_cli.rollout_steps, args_cli.batch_size, args_cli.num_epochs_per_iteration, beta, device, generator
+
+        def _mixture_action_fn(obs: torch.Tensor) -> torch.Tensor:
+            student_actions = student_action_fn(obs)
+            teacher_actions = router.relabel(obs)
+            return mix_actions(student_actions, teacher_actions, beta, generator=generator)
+
+        per_shape_batches = []
+        for shape in ("d20", "d12"):
+            env = build_real_env(shape, args_cli.num_envs, device, args_cli.seed)
+            per_shape_batches.append(collect_rollout(env, _mixture_action_fn, args_cli.rollout_steps, device=device))
+            env.close()
+
+        mean_loss = regress_on_pooled_batches(
+            per_shape_batches, student, router, optimizer, args_cli.batch_size, args_cli.num_epochs_per_iteration, generator
         )
         print(f"iteration {it}/{args_cli.num_iterations}: beta={beta:.3f} mean_bc_loss={mean_loss:.6f}")
         if (it + 1) % args_cli.save_interval == 0 or it == args_cli.num_iterations - 1:
             out_path = os.path.join(args_cli.output_dir, f"model_{it}.pt")
             save_student_checkpoint(student, out_path, it)
             print(f"saved checkpoint: {out_path}")
-
-    for env in envs.values():
-        env.close()
 
 
 if __name__ == "__main__":

@@ -472,37 +472,23 @@ def behavior_cloning_loss(student_action_mean: torch.Tensor, teacher_action_mean
     return F.mse_loss(student_action_mean, teacher_action_mean)
 
 
-def run_dagger_iteration(
-    envs: dict[str, object],
+def regress_on_pooled_batches(
+    per_shape_batches: list[torch.Tensor],
     student: ActorCritic,
     router: MultiShapeTeacherRouter,
     optimizer: torch.optim.Optimizer,
-    rollout_steps: int,
     batch_size: int,
     num_epochs: int,
-    beta: float,
-    device: str = "cpu",
     generator: torch.Generator | None = None,
 ) -> float:
-    """One full DAgger iteration: roll out the current beta-mixture policy
-    in every shape's own env, relabel every visited state with its own
-    teacher, pool+shuffle across shapes, and run `num_epochs` passes of
-    minibatch BC regression over the pooled buffer. Returns the mean loss
-    across all regression steps this iteration (for logging/plateau
-    checks). This is the single function this task's own unit tests
-    exercise end-to-end against stub envs + stub/loaded teachers - see
-    tests/test_distillation_data_collection.py."""
-    student_action_fn = actor_inference_fn(student)
-    per_shape_batches = []
-    for _shape, env in envs.items():
-
-        def _mixture_action_fn(obs: torch.Tensor) -> torch.Tensor:
-            student_actions = student_action_fn(obs)
-            teacher_actions = router.relabel(obs)
-            return mix_actions(student_actions, teacher_actions, beta, generator=generator)
-
-        per_shape_batches.append(collect_rollout(env, _mixture_action_fn, rollout_steps, device=device))
-
+    """Pools+shuffles already-collected per-shape observation batches,
+    relabels the pooled batch with each row's own teacher, and runs
+    `num_epochs` passes of minibatch BC regression over it. Returns the mean
+    loss across all regression steps. Extracted out of `run_dagger_iteration`
+    (2026-07-19, Task 5's real-run bug fix - see that function's own updated
+    docstring for why) so a real-run driver can call rollout collection and
+    this regression step separately, with env open/close in between, without
+    duplicating the regression logic or its own test coverage."""
     pooled_obs = pool_and_shuffle(per_shape_batches, generator=generator)
     teacher_labels = router.relabel(pooled_obs)
 
@@ -521,6 +507,67 @@ def run_dagger_iteration(
             optimizer.step()
             losses.append(loss.item())
     return sum(losses) / len(losses)
+
+
+def run_dagger_iteration(
+    envs: dict[str, object],
+    student: ActorCritic,
+    router: MultiShapeTeacherRouter,
+    optimizer: torch.optim.Optimizer,
+    rollout_steps: int,
+    batch_size: int,
+    num_epochs: int,
+    beta: float,
+    device: str = "cpu",
+    generator: torch.Generator | None = None,
+) -> float:
+    """One full DAgger iteration: roll out the current beta-mixture policy
+    in every shape's own env, relabel every visited state with its own
+    teacher, pool+shuffle across shapes, and run `num_epochs` passes of
+    minibatch BC regression over the pooled buffer. Returns the mean loss
+    across all regression steps this iteration (for logging/plateau
+    checks). This is the function this task's own unit tests exercise
+    end-to-end against stub envs + stub/loaded teachers (which CAN stay
+    open simultaneously, unlike a real Isaac Lab env - see
+    tests/test_distillation_data_collection.py) and `--dry-run` exercises
+    with the same stub envs.
+
+    REAL-RUN CAVEAT, found under Task 5's first actual training run
+    (2026-07-19, not caught by --dry-run's stub env, which has no notion of
+    a simulation context): this function assumes BOTH envs in `envs` can be
+    alive/open at once. A real Isaac Lab `ManagerBasedRLEnv` cannot -
+    `SimulationContext` is a process-wide singleton and constructing a
+    second `ManagerBasedRLEnv` while a first one is still open raises
+    `RuntimeError: Simulation context already exists.` (confirmed by direct
+    source read, isaaclab/envs/manager_based_env.py's `__init__`, and by
+    hitting this for real on this task's first real dispatch). This
+    function is therefore NOT used for the real (non-dry-run) run -
+    `scripts/distill_specialists.py`'s real-run branch instead opens each
+    shape's env one at a time (`collect_rollout`, then `env.close()`,
+    before opening the next), collects both shapes' batches sequentially,
+    and calls `regress_on_pooled_batches` (extracted from this function's
+    own tail, unchanged logic) once both are collected and both envs are
+    closed - achieving the identical statistical procedure (mixture-policy
+    rollout against the CURRENT student in each shape's own env, both
+    shapes' visited states pooled+shuffled before one regression step) with
+    no envs ever open concurrently. This function itself is kept unchanged
+    (still correct and tested for the stub/dry-run case, and still the
+    simplest description of the intended mechanism) rather than deleted or
+    forced into the sequential shape - `--dry-run`'s own stub envs have no
+    simulation-context constraint, so exercising this exact function is
+    still the right verification for that mode."""
+    student_action_fn = actor_inference_fn(student)
+    per_shape_batches = []
+    for _shape, env in envs.items():
+
+        def _mixture_action_fn(obs: torch.Tensor) -> torch.Tensor:
+            student_actions = student_action_fn(obs)
+            teacher_actions = router.relabel(obs)
+            return mix_actions(student_actions, teacher_actions, beta, generator=generator)
+
+        per_shape_batches.append(collect_rollout(env, _mixture_action_fn, rollout_steps, device=device))
+
+    return regress_on_pooled_batches(per_shape_batches, student, router, optimizer, batch_size, num_epochs, generator)
 
 
 # =====================================================================

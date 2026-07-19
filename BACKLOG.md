@@ -203,3 +203,121 @@ own specialist-quality characterization (now a full-completeness echo of
 d20's pattern, not a half one), relevant context for Task 4 given that
 task already earmarks this exact d12 seed123 checkpoint as a frozen
 teacher.
+
+## Task 5 (real distillation run) BLOCKED — Isaac Lab cannot re-create a
+`ManagerBasedRLEnv` in-process after `.close()`, in this installation
+(2026-07-19)
+
+Dispatched to run `scripts/distill_specialists.py` for real (no
+`--dry-run`) against the two real Task 4 frozen teachers (d20
+`joint-die-big/seed123`, d12 `joint-die-d12-big/seed123`), on the desktop
+GPU (confirmed AVAILABLE via `check_gpu_availability.sh` at dispatch
+time). **Two real, sequentially-discovered bugs, the second of which is
+a genuine architectural blocker, not a fixable pipeline defect:**
+
+**Bug 1 (fixed, verified): two simultaneous `ManagerBasedRLEnv`s.**
+`scripts/distill_specialists.py`'s `main()` (real-run branch) originally
+built BOTH teacher envs (`build_real_env("d20", ...)` and
+`build_real_env("d12", ...)`) before starting the DAgger loop, exactly as
+`tasks/franka/distillation.py`'s own module docstring describes ("Two
+ROLLOUT environments run side by side, one per teacher's own single-shape
+env"). This crashed immediately: `RuntimeError: Simulation context
+already exists. Cannot create a new one.` — confirmed by direct source
+read, `isaaclab/envs/manager_based_env.py`'s `ManagerBasedEnv.__init__`:
+`SimulationContext` is a process-wide singleton, and Isaac Lab explicitly
+refuses to construct a second `ManagerBasedRLEnv` while a first is still
+open, outside extension mode. Not caught by Task 4's own `--dry-run`
+(its stub envs have no notion of a simulation context at all). **Fixed**
+by extracting `run_dagger_iteration`'s regression-step tail into a new
+`regress_on_pooled_batches` helper (`tasks/franka/distillation.py`,
+identical logic, unit-tested unchanged) and rewriting the real-run driver
+to collect each shape's rollout **sequentially** — open shape A's env,
+`collect_rollout`, `env.close()`, then shape B, then call
+`regress_on_pooled_batches` on both already-collected (env-free) batches
+— never holding two envs open at once. `run_dagger_iteration` itself is
+untouched and still exercised by `--dry-run`/unit tests (their stub envs
+have no simulation-context constraint, so simultaneous stub envs are
+still the right test for that code path). Re-verified: 28/28 unit tests
+still pass, `--dry-run`'s BC loss curve reproduces unchanged
+(1.93→1.54→1.05 over 3 iterations).
+
+**Bug 2 (NOT fixable within this task's scope — a real blocker):**
+redispatching with the sequential-reopen fix, the run hung with ZERO log
+output for 20+ minutes (log file byte-for-byte unchanged, main thread
+pinned at ~104% CPU on a single core, all `carb.tasking*` worker threads
+idle at 0%, GPU utilization 1%, no error) while constructing the
+**second** `ManagerBasedRLEnv` of the run (the very first shape's env,
+`d20`, built and closed in 8.5s with no issue — it's specifically the
+env built *after* a prior `.close()` in the same process that never
+completes). **Independently confirmed via a minimal, isolated repro**
+(`num_envs=16`, no distillation logic at all, just `build → close →
+build` on `FrankaDieLiftJointBigEnvCfg`): first env built in 1.44s,
+closed in 0.22s; the second `ManagerBasedRLEnv(cfg=...)` call never
+returned — still running, single-threaded, 9m11s CPU time, zero progress,
+no output — after the diagnostic script's own env builder normally prints
+a completion line within ~1-2s. This rules out "just slow at
+num_envs=4096"; the hang is present and reproduces at trivial scale, so
+it's inherent to constructing a second `ManagerBasedRLEnv` in-process
+after a first one's `.close()`, in this specific Isaac Lab installation —
+not something a bigger timeout would have ridden out. Both the real run
+and the repro were killed (`kill -TERM`); full teardown independently
+verified both times via `check_gpu_availability.sh` (AVAILABLE again),
+`systemd-inhibit --list` (no `rl-gpu-job`/`rl-gpu-job-auto-detect` guard),
+`nvidia-smi --query-compute-apps` (empty), and `lsof
+/tmp/rl_isaac_sim.lock` (free) — no leftover desktop state.
+
+**Why this is a blocker, not a bug for this task to fix unilaterally:**
+this invalidates Task 4's own foundational design premise — "two rollout
+environments run side by side" — under BOTH of its two possible readings
+(simultaneous, or sequential-with-reopen) in this actual Isaac Lab
+installation. The two remaining ways to get two teachers' rollout data in
+one training loop are both genuine new engineering, not bug fixes, and
+each has real tradeoffs:
+  (a) **Two-process orchestration**: one persistent Isaac Sim process per
+      teacher shape, each holding its own env open for the entire run,
+      exchanging the current student weights + collected rollout
+      observations every DAgger iteration via disk/IPC. Keeps Task 1's
+      observation-schema contract (`object_shape_class_onehot` reading a
+      single per-cfg `die_shape_class` constant) completely unchanged,
+      but is real new distributed-training infrastructure (checkpoint
+      I/O every iteration, process lifecycle/failure handling) with its
+      own new failure modes.
+  (b) **One mixed-population env**: split `num_envs` between d12 and d20
+      within a SINGLE `ManagerBasedRLEnv`, via `MultiAssetSpawnerCfg(...,
+      random_choice=False)` — an already-validated, already-used
+      per-env-fixed-assignment mechanism in this exact codebase
+      (`FrankaDieLiftJointMixedEnvCfg`'s own multi-*size* population,
+      confirmed by direct source read to NOT have the unresolved
+      per-episode-resampling risk that `random_choice=True` has). Simpler
+      and reuses proven Isaac Lab mechanics, but **requires extending
+      `object_shape_class_onehot`/`object_geometry_descriptor`**
+      (`tasks/franka/mdp.py`) from their current "single per-cfg constant
+      broadcast to every env" semantics to read each env's own actually-
+      spawned asset identity — a real change to an established
+      observation-term contract Task 1 built and every downstream task
+      (2, 3, 3.5, 4) was told would be "consumed unchanged."
+
+Both are legitimate, but substantively different, architectural choices
+(new distributed infra vs. changing a public observation-term contract) —
+outside a senior-engineer dispatch's own discretion per this repo's
+"Do NOT make cross-cutting architectural decisions... changing a public
+interface" boundary. Flagged to the controller rather than picked
+unilaterally. **This senior engineer's own read, offered as input, not a
+decision:** (b) looks more robust and lower-total-new-surface-area, since
+it reuses an already-proven mechanism instead of building new
+cross-process orchestration from scratch — but the observation-contract
+change needs a real design pass (at minimum: how does a per-env-aware
+shape observation read the spawned asset back off the USD stage/spawner
+state cleanly, and does `object_geometry_descriptor` need the same
+treatment), not a quick patch.
+
+**State at handoff:** no distilled checkpoint exists yet. Task 4's
+pipeline code (`scripts/distill_specialists.py`,
+`tasks/franka/distillation.py`) is updated with the `regress_on_pooled_
+batches` refactor + the (currently blocked, not working) sequential-
+reopen real-run driver, both committed; the `franka_checkpoint_review.py`
+`load_optimizer=False` fix (needed for the eventual eval step, found
+while preparing for it) is committed separately. 28/28 Task 4 unit tests
+and `--dry-run` still pass/reproduce unchanged. No cloud spend incurred
+(desktop-only); wall-clock cost: two failed desktop dispatches, both
+cleanly torn down, no wasted cloud budget.

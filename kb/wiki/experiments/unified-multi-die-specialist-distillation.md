@@ -333,3 +333,58 @@ Files: `scripts/distill_specialists.py`, `tasks/franka/distillation.py`,
 later cloud-GPU dispatch) runs the real distillation training against
 these two real checkpoints and reports real discovery-rate numbers —
 nothing in this task constitutes a result yet.
+
+## Task 5: real distillation run attempted — BLOCKED on an Isaac Lab
+architectural limit, no checkpoint yet (2026-07-19)
+
+Dispatched to the desktop GPU (confirmed AVAILABLE at dispatch time).
+Found two real bugs under real execution, neither caught by Task 4's own
+`--dry-run` (stub envs have no notion of a simulation context):
+
+1. **Fixed:** the real-run driver originally held BOTH teacher envs open
+   at once, exactly matching `tasks/franka/distillation.py`'s own "two
+   rollout environments run side by side" design — crashed immediately,
+   `RuntimeError: Simulation context already exists.` (Isaac Lab's
+   `SimulationContext` is a process-wide singleton). Fixed by extracting
+   a `regress_on_pooled_batches` helper out of `run_dagger_iteration`'s
+   tail and collecting each shape's rollout **sequentially**
+   (open→`collect_rollout`→`close`, per shape, per iteration) instead of
+   concurrently. `run_dagger_iteration` itself is unchanged (still used
+   by `--dry-run`, whose stub envs have no such constraint). Re-verified:
+   28/28 unit tests pass, `--dry-run` loss curve unchanged.
+2. **NOT fixable as a bug fix — a real architectural blocker.**
+   Redispatched with the sequential-reopen fix: hung with zero log output
+   for 20+ minutes constructing the run's SECOND `ManagerBasedRLEnv` (the
+   first built/closed cleanly in 8.5s). Independently confirmed via an
+   isolated `num_envs=16` repro (build→close→build, no distillation code
+   at all): first env 1.44s, second env never returns after 9m11s CPU
+   time. Reconstructing a `ManagerBasedRLEnv` in-process after a prior
+   `.close()` does not work in this Isaac Lab installation — not a
+   slowness issue, reproduces at trivial scale. Both hung runs killed
+   cleanly; full desktop teardown independently re-verified both times
+   (GPU-status server, `systemd-inhibit --list`, `nvidia-smi`, lock file
+   all clear).
+
+**This invalidates Task 4's own foundational design premise** ("two
+rollout environments side by side") under both readings (simultaneous or
+sequential-reopen). The two remaining fixes are genuine new architecture,
+not bug fixes, so this was flagged to the controller rather than decided
+unilaterally: (a) two persistent per-shape Isaac Sim processes exchanging
+student weights/rollout data via disk each iteration (new distributed
+infra, keeps Task 1's observation-schema contract untouched), or (b) one
+mixed-population env splitting `num_envs` between d12/d20 via the
+already-proven `MultiAssetSpawnerCfg(random_choice=False)` mechanism
+(`FrankaDieLiftJointMixedEnvCfg`'s own precedent), which needs
+`object_shape_class_onehot`/`object_geometry_descriptor` extended from a
+single per-cfg-constant broadcast to a per-env-aware read of the actually-
+spawned asset. Full evidence and reasoning: `BACKLOG.md`'s "Task 5 ...
+BLOCKED" entry and `ROADMAP.md`'s matching entry.
+
+**State:** no distilled checkpoint exists. Committed: the
+`franka_checkpoint_review.py` `load_optimizer=False` fix (needed for the
+eventual eval step — `save_student_checkpoint` intentionally writes an
+empty `optimizer_state_dict`, which crashes rsl_rl's default
+`load_optimizer=True`), and the `regress_on_pooled_batches` refactor +
+the (currently non-functional, blocked) sequential-reopen real-run driver.
+No cloud spend (desktop-only, both dispatches torn down cleanly). Task 6
+cannot proceed until Task 5 actually produces a checkpoint.

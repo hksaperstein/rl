@@ -3706,3 +3706,169 @@ checkpoint.
 
 **RESOLVED 2026-07-19 — see the "Task 5 ... BLOCKER RESOLVED" entry above
 this one for the real fix and real result.**
+
+## Task 6 (RL fine-tune) + FINAL VERDICT: unified d12/d20 policy fully
+recovers to 8/8 BOTH shapes — matches each frozen specialist exactly, no
+gap (2026-07-19)
+
+**This closes the unified-multi-die-specialist-distillation experiment.**
+PPO-fine-tuned Task 5's distilled checkpoint (4/8 d20, 1/8 d12 pre-
+fine-tune, a real BC/DAgger closed-loop-transfer regression) against
+`FrankaDieLiftJointD12D20MixedEnvCfg` — the same one-env, deterministic-
+round-robin d12/d20 mixed-population env Task 5's own distillation
+training ran against.
+
+**Two real bugs found and fixed before training, both re-verified before
+trusting the real run:**
+1. `scripts/train_franka.py` had never been wired for
+   `FrankaDieLiftJointD12D20MixedEnvCfg` at all — Task 5 built this env
+   directly in its own driver code, but the class was never added to this
+   script's `--variant` choices. Added `--variant joint-die-d12-d20-mixed`.
+2. `scripts/train_franka.py`'s `--checkpoint` resume path called
+   `runner.load(args_cli.checkpoint)` with rsl_rl's default
+   `load_optimizer=True` — unconditionally calls
+   `self.alg.optimizer.load_state_dict(loaded_dict["optimizer_state_dict"])`,
+   which would crash with a `KeyError` on Task 5's distilled checkpoint
+   (`save_student_checkpoint` intentionally writes an EMPTY
+   `optimizer_state_dict`, since a BC optimizer's Adam moments have
+   nothing to do with PPO's — see Task 5's own entry). This is the exact
+   same failure class already fixed in `franka_checkpoint_review.py`
+   during Task 5. Fixed by adding a new `--policy_only_checkpoint` flag
+   (passes `load_optimizer=False` when set, leaves the default
+   `load_optimizer=True` behavior unchanged for a genuine same-run
+   SPOT-preemption-recovery resume, where restoring Adam's own state is
+   the whole point). Verified with a bounded 3-iteration smoke test
+   (`--num_envs 64 --max_iterations 1502`) on the desktop before
+   dispatching the real run — loaded cleanly, ran 3 iterations, no crash.
+   Both fixes committed (`f836dae`) and pushed before the real run.
+   `scripts/sync_run_to_gcs.py`'s `VARIANT_MAP` was also missing the new
+   variant's log-dir-name mapping (`train_franka_jointdied12d20mixed` ->
+   `joint-die-d12-d20-mixed`) — would have raised `KeyError` on the first
+   sync attempt; fixed in the same pass (`a55d2c8`).
+
+**Budget: 1500 PPO iterations** (this project's standard from-scratch
+convention — used directly rather than guessing a smaller number, per
+this task's own instruction to default to the established convention when
+unsure of how much fine-tuning a distilled starting point needs).
+Mechanically, this required `--max_iterations 2999`, not `1500`: Task 5's
+`save_student_checkpoint` wrote its own DAgger loop's iteration counter
+(1499) into the checkpoint's `"iter"` field in the same format
+`rsl_rl.OnPolicyRunner.save()` uses, so `--checkpoint`'s existing
+resume-arithmetic (`num_learning_iterations = max_iterations - resumed_at`)
+carries that number forward as a bookkeeping/TensorBoard-step offset
+(cosmetic only — this is a different training process, PPO fine-tuning a
+BC-initialized policy, not a continuation of the DAgger run itself). The
+smoke test confirmed this arithmetic directly: "Resumed from ... at
+iteration 1499; running 3 more iteration(s) to reach the absolute target
+1502." The real run used `--max_iterations 2999` (1499 + 1500) to get a
+true 1500-iteration PPO budget, ending at `model_2998.pt`.
+
+**Real run:** desktop GPU (confirmed AVAILABLE via
+`scripts/check_gpu_availability.sh` before dispatch), non-headless
+(`DISPLAY=:1`), `--num_envs 4096` (~2048/shape via the mixed env's own
+round-robin, matching Task 5's own split), `flock -o`-guarded. Completed
+in 27m54s wall-clock (iteration 1499->2998), ~1.1-1.2s/iteration
+throughout, no preemptions/crashes (this is desktop, not cloud SPOT).
+
+**Real per-shape eval** (`scripts/franka_checkpoint_review.py`, the
+IDENTICAL mechanism/variants Task 5 and every specialist baseline used —
+`joint-die-big` for d20, `joint-die-d12-big` for d12, `num_envs=8`,
+undiluted 48mm, video + instrumented per-step height JSON):
+
+| shape | variant | pre-fine-tune (Task 5) | **post-fine-tune (Task 6)** | specialist baseline | verdict |
+|---|---|---|---|---|---|
+| d20 | `joint-die-big` | 4/8 | **8/8** | 8/8 | **PASS — zero gap** |
+| d12 | `joint-die-d12-big` | 1/8 | **8/8** | 8/8 | **PASS — zero gap** |
+
+**Falsification check against the spec's pre-registered bar ("not
+meaningfully below its own specialist"), reported exactly as observed per
+this experiment's own no-softening discipline:** both shapes PASS, and
+not narrowly — the fine-tuned unified policy matches each frozen
+specialist's own 8/8 EXACTLY, a full recovery, not a partial one. RL
+fine-tuning fully closed the real BC/DAgger closed-loop-transfer
+regression Task 5 found and reported honestly rather than papering over.
+
+**Not a measurement artifact — checked past the summary JSON, per this
+experiment's own repeated verification discipline (Tasks 3/3.5's own
+settle-detection bugs are exactly why this matters here):** every env's
+`max_height_gain` is large and decisive (d20: 0.412-0.478m; d12:
+0.386-0.427m — both roughly 10x the 0.04m lift threshold, not a marginal
+call) and `max_consecutive_lifted_steps` is 211-219 out of a ~239-step
+analysis window (the lift holds for essentially the entire episode, not a
+brief threshold-crossing blip). Extracted and directly viewed real video
+frames (not just the JSON) for env_0 of both shapes: a rest-pose frame
+(step 5) shows the die genuinely sitting on the table before the arm
+moves; a peak frame (step 57-62, matching each env's own recorded
+argmax-height step) shows the arm in a visibly different, raised elbow
+pose with a small object visibly gripped between the closed jaws —
+physically consistent with a real grasp-lift, not a wedge/contact
+artifact (Experiment 16's own precedent for why this check matters).
+
+**Checkpoint:**
+`gs://rl-manipulation-hks-runs/unified-multi-die-specialists/joint-die-d12-d20-mixed/seed42/2026-07-19_12-53-35/model_2998.pt`.
+Eval artifacts (video/heights json+npy) synced to
+`gs://rl-manipulation-hks-runs/unified-multi-die-specialists/eval-artifacts/finetuned-d12-d20/{joint-die-big,joint-die-d12-big}/`.
+
+**Cost: $0 for this task** (desktop-only — both the fine-tune training
+and both eval runs). **Cumulative cost across the whole experiment's
+cloud-touching tasks (Tasks 2+3+3.5, the d20-big-geom gate task, Task 5,
+Task 6) ≈ $5.87 of the plan's original $15 cap**: Tasks 2+3+3.5 ≈$4.96
+(ROADMAP's Task 3.5 entry), the d20-big-geom gate task +$0.91 (this
+ROADMAP's own entry above), Task 5 +$0 (desktop-only), Task 6 +$0
+(desktop-only). Well under the cap; no controller notification needed.
+
+**Full teardown verified**: `nvidia-smi --query-compute-apps` empty,
+`tmux ls` shows no server running, `systemd-inhibit --list` clear of any
+`rl-gpu-job*` guard, `scripts/check_gpu_availability.sh` reports
+AVAILABLE — all checked directly after the run, not assumed.
+
+**Code changes:** `scripts/train_franka.py` (`--variant
+joint-die-d12-d20-mixed`, `--policy_only_checkpoint`, commit `f836dae`),
+`scripts/sync_run_to_gcs.py` (`VARIANT_MAP` fix, commit `a55d2c8`). No
+env-cfg or observation-schema changes needed — Task 5 already built
+everything Task 6 needed to consume.
+
+---
+
+### FINAL VERDICT — unified-multi-die-specialist-distillation experiment (Tasks 0-6, 2026-07-16 -> 2026-07-19)
+
+**The experiment's original 4-shape goal (d8/d10/d12/d20) narrowed to a
+2-shape goal (d12/d20) partway through, on real evidence, not a scope
+retreat of convenience:** d8 and d10 are genuinely, robustly null at
+every size/geometry-conditioning combination tested (Task 2's real
+~16-18mm size AND Task 3.5's 48mm-parity anchor, 0/9 and 0/6
+respectively, wide safety margins, independently re-derived from raw
+trajectories twice) — shape itself is a real barrier for these two
+specific die geometries at the Franka gripper's absolute scale, not a
+population-dilution or measurement confound. d12 and d20 both cleared an
+undiluted-48mm-population bar (Task 3.5's re-audited d12 8/8, the
+d20-big-geom gate task's 2/3-seeds-at-8/8) once Task 3's real confound —
+population dilution across a randomized-size env, not shape — was
+isolated and controlled for.
+
+**With that narrowed 2-shape scope, the full specialist -> distill ->
+RL-fine-tune pipeline (UniDexGrasp++'s GiGSL pattern) worked end to end,
+including surfacing and recovering from a real, literature-predicted
+failure mode along the way:** naive behavior-cloning/DAgger distillation
+of two 8/8 frozen specialists converged to a very low imitation loss
+(Task 5) but did NOT preserve real closed-loop discovery — 4/8 (d20),
+1/8 (d12), a genuine regression this project reported honestly rather
+than treating the converged loss curve as sufficient evidence (this
+project's own Experiment 15 precedent: a converging shaped scalar does
+not guarantee real behavior transfers). The RL fine-tune step Task 6
+exists specifically to close (per GiGSL's own iterate-distillation-and-RL
+design) did exactly that: **both shapes recovered to their frozen
+specialists' own 8/8 EXACTLY, a full, not partial, recovery.**
+
+**Bottom line:** a single unified policy that grasps-and-lifts either a
+commanded d12 or d20 die, indistinguishable in closed-loop discovery rate
+from two separate single-shape specialists, is real and checkpointed
+(`gs://rl-manipulation-hks-runs/unified-multi-die-specialists/joint-die-d12-d20-mixed/seed42/2026-07-19_12-53-35/model_2998.pt`).
+d8/d10 remain open, unsolved shapes for a future experiment (not this
+one) to pick up, with a documented, evidence-backed reason (real
+shape-specific discoverability barrier, not a fixable pipeline defect) to
+start from rather than re-litigating from scratch. Total cost across the
+whole experiment: ≈$5.87 of the original $15 cloud-spend cap, roughly
+61% under budget. No further work planned under this experiment; see
+`kb/wiki/experiments/unified-multi-die-specialist-distillation.md` for
+the compiled cross-referenced write-up.

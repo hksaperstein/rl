@@ -154,19 +154,15 @@ see the coverage boundary note below.)*
   discoverability; the staged-anneal arm does prove the transfer
   mechanism itself works, yielding the project's first confirmed d20
   lift+carry at the real 30.3mm target size (seed 123, 8/8).
-- [[unified-multi-die-specialist-distillation]] (started 2026-07-16) —
-  per-shape specialist + distillation approach to a single policy that
-  grasps a commanded die among {d8, d10, d12, d20}. Task 3.5's 48mm-parity
-  grid (complete 2026-07-19, re-audited against a settle-detection fix same
-  day): d8/d10 fully null even at 48mm parity (shape itself is the
-  barrier), d12 shows one genuine partial positive (1/3 seeds, full 8/8
-  envs within that seed — corrected from an originally-reported 4/8, same
-  lucky seed as d20's own bisect discovery).
-  d20's own dilution ambiguity closed 2026-07-19 (d20-big-geom gate task):
-  undiluted-48mm-with-geometry-conditioning retrain scored 2/3 seeds at
-  full 8/8, stronger than expected. Task 4 (distillation) scoped to d12 +
-  d20 only (d8/d10 deferred per BACKLOG.md), proceeding with those two
-  frozen specialists.
+- [[unified-multi-die-specialist-distillation]] (2026-07-16 -> 2026-07-19,
+  COMPLETE) — per-shape specialist + distillation + RL-fine-tune pipeline
+  for a single policy that grasps a commanded die. Narrowed to d12/d20
+  (d8/d10 genuinely null at every size/geometry tested, a real
+  shape-specific barrier, not a confound). Final result: RL fine-tuning
+  fully recovered a real BC/DAgger distillation regression (4/8 d20, 1/8
+  d12) to an exact 8/8 match with each frozen specialist, both shapes —
+  a working unified 2-shape policy, checkpointed. ≈$5.87 of the $15 cloud
+  cap spent.
 
 ### Concepts
 

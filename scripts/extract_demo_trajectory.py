@@ -36,14 +36,30 @@ finding - reused here, not re-decided)**: Task 0 found d8 PASSes WITHOUT
 `--gt-xy-bypass` (242.6mm z-gain, detector finds d8 fine at 48mm) and d10
 needs `--gt-xy-bypass` to even reach the grasp mechanism (detector finds
 ZERO d10 detections at 48mm scale - a perception gap, not a grasp-mechanism
-failure). This script's own Step 7 real captures therefore run d8 WITHOUT
-the flag and d10 WITH it, for all 5 seeds each - the same per-shape
-configuration Task 0 already validated PASSes the underlying grasp
-mechanism, rather than re-deciding this question. `--gt-xy-bypass` only
+failure). Task 1's own real captures ran d8 WITHOUT the flag and d10 WITH
+it, for all 5 seeds each - the same per-shape configuration Task 0 already
+validated PASSes the underlying grasp mechanism. `--gt-xy-bypass` only
 changes where `target_xy` is SOURCED from (ground truth vs. detector); it
 does not change the pick sequence's own joint-position/gripper-target
 control flow at all, so it has no bearing on this capture's own logged
 trajectory data quality once a valid `target_xy` is in hand.
+
+**Task 3 deviation, cloud dispatch (2026-07-19)**: Task 1's original
+captures (`data/franka_demo_trajectories/`, gitignored) turned out to be
+unrecoverable for Task 3's own execution - they were captured desktop-side
+and the desktop became off-limits to this workstream mid-session, with no
+copy in git/GCS/anywhere else reachable. Task 3 therefore re-captures a
+smaller trajectory set directly on the cloud dispatch instance, using
+`--gt-xy-bypass` for BOTH d8 and d10 (not just d10) - `capture_trajectory`
+was also changed (see its own "REAL BUG found and fixed" comment) to skip
+`run_detector_subprocess` ENTIRELY when `--gt-xy-bypass` is set, since a
+fresh cloud instance has neither `vision/.venv` nor
+`vision/models/runs/s_plus_r/weights/best.pt` (19MB, gitignored, desktop-
+only) and the detector's result is provably unused on the bypass path per
+this docstring's own paragraph above. d8's non-bypass path (detector-
+sourced) is unchanged and still the one Task 0 validated; the bypass path
+is used for d8 here purely as a cloud-infra accommodation, not because d8's
+own detector path stopped working.
 
 Output: `data/franka_demo_trajectories/{shape}/seed{N}.pt` (`torch.save` of
 a plain dict - `data/` is gitignored per this repo's public-repo-since-
@@ -169,27 +185,57 @@ def capture_trajectory(shape: str, seed: int, gt_xy_bypass: bool) -> dict:
         f"(48mm-parity scale={scale})"
     )
 
-    detection_output = dpd.run_detector_subprocess(out_dir)
-    detections = detection_output["detections"]
-    print(f"[CAPTURE] perception subprocess returned {len(detections)} detections")
-
-    # Ground-truth XY-bypass - identical mechanism/precedent to
-    # _diag_d8d10_48mm_grasp_reverify.py's own (see that file's own
-    # --gt-xy-bypass argparse help for the full citation chain back to the
-    # d4 rung-1 precedent).
+    # REAL BUG found and fixed (2026-07-19, Task 3's own real cloud dispatch of
+    # this script - docs/superpowers/plans/2026-07-19-d8-d10-demo-warmstart-
+    # implementation.md): the original code below called
+    # dpd.run_detector_subprocess(out_dir) UNCONDITIONALLY, even when
+    # gt_xy_bypass is True and its result is only used for a diagnostic
+    # detector-vs-GT print (_diag_d8d10_48mm_grasp_reverify.py's own
+    # run_shape_reverify has the identical unconditional-call pattern, by
+    # deliberate design there - that diagnostic script's whole point is
+    # comparing detector output to ground truth). run_detector_subprocess
+    # shells out to vision/.venv/bin/python vision/scripts/detect_for_sim.py,
+    # which loads vision/models/runs/s_plus_r/weights/best.pt - a 19MB,
+    # gitignored (vision/.gitignore) ultralytics weights file that, as of
+    # this task's real dispatch, exists ONLY on the desktop
+    # (saps@home.local), which this task's own dispatch instructions declare
+    # off-limits (mid-session user decision to stop all desktop GPU/machine
+    # use for this workstream). A fresh cloud instance shipped via `git
+    # archive` has neither the weights file nor a vision/.venv, so the
+    # unconditional call would hard-fail (ultralytics YOLO(weights) raises on
+    # a missing weights path, non-zero subprocess exit -> RuntimeError here)
+    # before gt_xy_bypass's own fallback branch below ever gets a chance to
+    # matter. Per this module's own docstring ("--gt-xy-bypass only changes
+    # where target_xy is SOURCED from ... it does not change the pick
+    # sequence's own joint-position/gripper-target control flow at all, so it
+    # has no bearing on this capture's own logged trajectory data quality"),
+    # the detector's result is provably unused for capture correctness once
+    # gt_xy_bypass is active - so THIS capture script (unlike the diagnostic,
+    # which legitimately wants the comparison print) now skips the detector
+    # subprocess call ENTIRELY when gt_xy_bypass is set, rather than making an
+    # unconditional call to a subprocess/dependency this environment may not
+    # have, for a return value that gets discarded anyway. The non-bypass
+    # path (d8's own already-passing, detector-sourced capture) is completely
+    # unchanged - same call, same failure semantics (raises loudly on a
+    # detector miss).
     target_det = None
     det_x = det_y = det_z = None
-    try:
+    if gt_xy_bypass:
+        print(
+            f"[CAPTURE] --gt-xy-bypass active for '{shape}': skipping run_detector_subprocess entirely "
+            "(no vision/.venv or vision/models/.../best.pt dependency needed for this capture - see the "
+            "REAL BUG comment immediately above)."
+        )
+    else:
+        detection_output = dpd.run_detector_subprocess(out_dir)
+        detections = detection_output["detections"]
+        print(f"[CAPTURE] perception subprocess returned {len(detections)} detections")
         target_det = dpd.select_target_detection(detections, shape)
         det_x, det_y, det_z = target_det["world_pos"]
         print(
             f"[CAPTURE] target detection for '{shape}': class={target_det['class']} "
             f"conf={target_det['confidence']:.3f} world_pos=({det_x:.4f}, {det_y:.4f}, {det_z:.4f})"
         )
-    except RuntimeError as e:
-        if not gt_xy_bypass:
-            raise
-        print(f"[CAPTURE] detector FAILED to find '{shape}' ({e}) - continuing because --gt-xy-bypass is active")
 
     gt_x, gt_y, _gt_z = diag48.measure_settled_position_m(scene, shape)
     if gt_xy_bypass:

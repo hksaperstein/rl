@@ -426,7 +426,29 @@ def main() -> None:
 
     env = ManagerBasedRLEnv(cfg=env_cfg, render_mode="rgb_array")
 
-    checkpoint_name = os.path.splitext(os.path.basename(args_cli.checkpoint))[0]
+    # REAL BUG found and fixed (2026-07-20, d8/d10 demo-warmstart H1 run,
+    # docs/superpowers/plans/2026-07-19-d8-d10-demo-warmstart-implementation.md
+    # Task 3): checkpoint_name used to be JUST the checkpoint file's own
+    # basename (e.g. "model_1519"), with no path context - since every
+    # rsl_rl checkpoint in this repo is named `model_<iter>.pt` and this
+    # H1 run's 3 seeds per shape all trained to the SAME max_iterations
+    # (only the seed differs), all 3 seeds' final checkpoints are literally
+    # both named "model_1519.pt" (d8) / "model_1517.pt" (d10), living in
+    # DIFFERENT timestamped run directories
+    # (logs/train_franka_jointdied8big/<timestamp>/model_1519.pt). The old
+    # checkpoint_name collided across all 3 seeds, so each seed's eval
+    # SILENTLY overwrote the previous seed's video/heights.npy/summary.json
+    # under the exact same output paths - confirmed directly: only the
+    # last-run seed's (seed=7's) eval artifacts survived after running all
+    # 3 seeds sequentially; seed=42 and seed=123's outputs were gone with
+    # no error or warning. Fixed by folding the checkpoint's own PARENT
+    # DIRECTORY basename (the training run's unique timestamp, e.g.
+    # "2026-07-20_04-50-36") into checkpoint_name - this is exactly the
+    # already-unique identity `sync_run_to_gcs.py`'s own bucket layout
+    # already relies on (`<experiment>/<variant>/seed<K>/<timestamp>/...`),
+    # reused here rather than inventing a new uniqueness scheme.
+    checkpoint_run_dir = os.path.basename(os.path.dirname(os.path.abspath(args_cli.checkpoint)))
+    checkpoint_name = f"{checkpoint_run_dir}_{os.path.splitext(os.path.basename(args_cli.checkpoint))[0]}"
     # run_tag folds --eval_target_shape into every output filename when set - otherwise two eval runs of
     # the same --variant + --checkpoint (one per pinned target shape, the whole reason --eval_target_shape
     # exists for the target-selection-clutter variants) would silently overwrite each other's video/

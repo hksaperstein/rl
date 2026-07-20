@@ -85,14 +85,18 @@ Usage:
     # physics-free stub env stand in for the real captured data / real env):
     /home/saps/IsaacLab/_isaac_sim/python.sh scripts/bc_pretrain_demo_warmstart.py --dry-run
 
-    # Real run (Task 2 Step 5): BC-pretrains both d8 and d10 against their
-    # own 5 real captured trajectories, sequentially (one shape's env open/
-    # replay/close before the next - this Isaac Lab installation cannot hold
-    # two ManagerBasedRLEnvs open at once, tasks/franka/distillation.py's own
-    # module docstring). Non-headless per CLAUDE.md's standing "the user
-    # wants to watch" instruction.
+    # Real run (Task 2 Step 5): BC-pretrains each shape against its own 5
+    # real captured trajectories - ONE SHAPE PER PROCESS INVOCATION (see the
+    # real-run branch's own "REAL BUG found and fixed" comment: building a
+    # second ManagerBasedRLEnv in-process after closing the first one hangs
+    # this Isaac Lab installation for 45+ minutes without crashing, a
+    # confirmed real-dispatch finding, not just distillation.py's own
+    # already-documented crashing case). Non-headless per CLAUDE.md's
+    # standing "the user wants to watch" instruction. Run once per shape:
     flock -o /tmp/rl_isaac_sim.lock -c \\
-      "PYTHONUNBUFFERED=1 /home/saps/IsaacLab/isaaclab.sh -p scripts/bc_pretrain_demo_warmstart.py"
+      "PYTHONUNBUFFERED=1 /home/saps/IsaacLab/isaaclab.sh -p scripts/bc_pretrain_demo_warmstart.py --shapes d8"
+    flock -o /tmp/rl_isaac_sim.lock -c \\
+      "PYTHONUNBUFFERED=1 /home/saps/IsaacLab/isaaclab.sh -p scripts/bc_pretrain_demo_warmstart.py --shapes d10"
 
     # Handoff smoke test (Task 2 Step 6) - NOT this script, a bounded
     # scripts/train_franka.py resume against the checkpoint this script just
@@ -502,7 +506,18 @@ def build_arg_parser(app_launcher_cls) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="BC-pretrain a fresh student policy from Task 1's captured demonstration trajectories, per shape."
     )
-    parser.add_argument("--shapes", type=str, default="d8,d10", help="Comma-separated shapes to BC-pretrain (default both).")
+    parser.add_argument(
+        "--shapes",
+        type=str,
+        default="d8,d10",
+        help=(
+            "Comma-separated shapes to BC-pretrain. --dry-run accepts multiple (stub envs have no "
+            "single-simulation-context constraint). A REAL run REJECTS more than one - this Isaac Lab "
+            "installation hangs building a second ManagerBasedRLEnv in-process even after closing the first "
+            "(confirmed real-dispatch finding, see the real-run branch's own comment) - run this script once "
+            "per shape instead."
+        ),
+    )
     parser.add_argument("--trajectory-dir", type=str, default=DEFAULT_TRAJECTORY_DIR, help="Root dir of captured trajectories (data/franka_demo_trajectories).")
     parser.add_argument("--output-dir", type=str, default=DEFAULT_OUTPUT_DIR, help="Directory to write BC-pretrained checkpoint(s) to.")
     parser.add_argument("--num-envs", type=int, default=1, help="Parallel envs for the replay env - 1 (deterministic open-loop tracking), per the plan.")
@@ -559,6 +574,42 @@ def main(args_cli: argparse.Namespace) -> None:
         return
 
     # Real run (Task 2 Step 5).
+    #
+    # REAL BUG found and fixed (2026-07-19, this task's own second real-GPU
+    # dispatch): running BOTH shapes sequentially in ONE process (build d8's
+    # env, replay+BC-train, env.close(), then build d10's env the same way)
+    # does not crash, but hangs the SECOND env's construction/use for 45+
+    # minutes of severely degraded (~35% CPU, ~9% GPU) but non-zero activity
+    # - confirmed reproducible across two independent real dispatches, and
+    # confirmed NOT shape-specific: a FRESH single-shape process (`--shapes
+    # d10` alone) replays all 5 trajectories in ~25s each, no stall at all.
+    # This is the SAME underlying Isaac Lab installation limitation this
+    # project already found and documented for the crashing case -
+    # `tasks/franka/distillation.py`'s own module docstring: "a second
+    # `ManagerBasedRLEnv` cannot be constructed in-process after a first one
+    # is built, either simultaneously OR AFTER `.close()`" (Task 5 of the
+    # prior unified-multi-die-specialist-distillation experiment hit this as
+    # a hard `RuntimeError: Simulation context already exists.` crash; here
+    # it manifests as a silent, non-crashing, near-total stall instead of an
+    # exception - the same root constraint, a different failure mode). This
+    # plan's own Task 2 Files section anticipated the close-before-reopen
+    # pattern would be safe ("build one shape's env, use it, close it,
+    # before the other shape's env if both run in the same process") - real
+    # dispatch evidence shows it is NOT safe in this installation, so this
+    # guard enforces exactly one shape per real-run process invocation
+    # (matching `scripts/extract_demo_trajectory.py`'s own established
+    # one-shape-per-process convention for the identical reason), rather
+    # than silently hanging a future real dispatch for 45+ minutes with no
+    # indication anything is wrong.
+    if len(shapes) > 1:
+        raise ValueError(
+            f"bc_pretrain_demo_warmstart.py: real (non-dry-run) runs must process exactly ONE shape per process "
+            f"invocation, got --shapes {args_cli.shapes!r} ({shapes}) - see this branch's own comment for why "
+            f"(a confirmed, reproducible Isaac Lab installation hang when building a second ManagerBasedRLEnv "
+            f"in-process, even after closing the first). Run this script once per shape instead, e.g. "
+            f"'--shapes d8' then a separate invocation '--shapes d10'."
+        )
+
     device = args_cli.device
     for shape in shapes:
         traj_dir = os.path.join(args_cli.trajectory_dir, shape)

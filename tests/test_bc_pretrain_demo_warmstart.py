@@ -19,12 +19,15 @@ from __future__ import annotations
 import pytest
 import torch
 
+import argparse
+
 from scripts.bc_pretrain_demo_warmstart import (
     bc_pretrain_shape,
     bc_pretrain_until_plateau,
     build_replay_action_fn,
     demo_trajectory_to_raw_actions,
     get_default_arm_joint_pos,
+    main,
     pool_trajectory_batches,
     replay_trajectory_to_paired_batch,
     required_episode_length_s,
@@ -271,6 +274,44 @@ class TestBcPretrainUntilPlateau:
         optimizer = torch.optim.Adam(student.actor.parameters(), lr=0.01)
         with pytest.raises(ValueError):
             bc_pretrain_until_plateau(torch.randn(4, OBS_DIM), torch.randn(4, NUM_ACTIONS), student, optimizer, batch_size=2, epochs_per_round=1, max_rounds=0)
+
+
+class TestMainRejectsMultiShapeRealRun:
+    """Regression guard for a real bug found on this task's own second real-
+    GPU dispatch: running d8 then d10 sequentially in ONE process (build
+    env, replay+BC-train, close, build the next shape's env the same way)
+    doesn't crash but hangs the SECOND shape's env for 45+ minutes of
+    severely degraded activity - the same underlying Isaac Lab
+    single-simulation-context limitation `tasks/franka/distillation.py`'s
+    own module docstring already documents as a crash for the
+    simultaneous-envs case. `main`'s real (non-dry-run) branch must reject
+    more than one shape immediately, before ever touching Isaac Sim, rather
+    than silently hanging a future dispatch."""
+
+    def _namespace(self, **overrides):
+        defaults = dict(
+            shapes="d8,d10",
+            dry_run=False,
+            seed=0,
+            output_dir="/tmp/does-not-matter",
+            trajectory_dir="/tmp/does-not-matter",
+            device="cpu",
+        )
+        defaults.update(overrides)
+        return argparse.Namespace(**defaults)
+
+    def test_real_run_with_multiple_shapes_raises_before_touching_isaac_sim(self, tmp_path):
+        args = self._namespace(shapes="d8,d10", output_dir=str(tmp_path))
+        with pytest.raises(ValueError, match="exactly ONE shape"):
+            main(args)
+
+    def test_real_run_with_single_shape_does_not_raise_this_particular_error(self, tmp_path):
+        """Single-shape real runs must get past the guard (and fail later,
+        for the mundane reason that no real trajectory dir/Isaac Sim exists
+        in this CPU-only test environment - NOT the multi-shape guard)."""
+        args = self._namespace(shapes="d8", output_dir=str(tmp_path), trajectory_dir=str(tmp_path / "nonexistent"))
+        with pytest.raises(FileNotFoundError):
+            main(args)
 
 
 class TestBcPretrainShape:

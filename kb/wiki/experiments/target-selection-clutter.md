@@ -1,13 +1,15 @@
 # Target-selection-among-distractor-dice experiment (2026-07-19 -> in progress)
 
-**Status: Stage SO internal sanity gate PASSED (2026-07-19, corrected
-result) — d12 8/8, d20 7/8, both clearing the ≥7/8 gate.** The
-originally-reported 0/8-both-shapes from-scratch result below was
-confounded (see "Task 4 corrected" section) and has been superseded by a
-partial-weight warm-started retrain that isolates the question the gate
-was actually meant to answer. Stage D1/D2 (plan Tasks 5/6) can now
-proceed on this corrected result. This is still an interim entry (Task 4
-of the plan only); the closing verdict lands at the plan's Task 7.
+**Status: Stage SO gate PASSED (d12 8/8, d20 7/8) and Stage D1 (1 active
+distractor) also PASSED cleanly — d12 8/8, d20 8/8 (2026-07-19).** The
+originally-reported Stage SO 0/8-both-shapes from-scratch result below
+was confounded (see "Task 4 corrected" section) and has been superseded
+by a partial-weight warm-started retrain that isolates the question the
+gate was actually meant to answer. Stage D1, resumed from that corrected
+Stage SO checkpoint, cleared its own eval at 8/8 for both shapes — see
+"Task 5" section below. Stage D2 (plan Task 6, the primary falsification
+check) is next. This is still an interim entry (plan Tasks 4-5 only); the
+closing verdict lands at the plan's Task 7.
 
 **Goal:** extend [[unified-multi-die-specialist-distillation]]'s finished
 single-object d12/d20 policy (`model_2998.pt`, 8/8 both shapes with
@@ -207,6 +209,82 @@ scene/observation-schema wiring itself was never broken, exactly as the
 "no code bug found on investigation" note above already suspected. Stage
 D1/D2 (plan Tasks 5/6) are unblocked to proceed from this corrected
 checkpoint.
+
+## Task 5: Stage D1 (1 active distractor), resumed from Stage SO — PASSED, d12 8/8, d20 8/8 (2026-07-19)
+
+Resumed `FrankaDieLiftJointD12D20TargetSelectionD1EnvCfg` (1 active
+distractor, drawn per-env from `{d12,d20}` via
+`MultiAssetSpawnerCfg(random_choice=True)`; `distractor_2` still parked)
+directly from Stage SO's real, passing checkpoint —
+`gs://rl-manipulation-hks-runs/target-selection-clutter-stageso-warmstart/joint-die-target-selection-so/seed42/2026-07-19_22-52-41/model_3297.pt`
+(the corrected/warm-started run above, NOT the original confounded
+from-scratch attempt) — via a normal same-dimensionality PPO resume
+(`--checkpoint ... `, no `--policy_only_checkpoint`; both the 43-dim
+schema and the optimizer state carry over unchanged from Stage SO to D1).
+`train_franka.py` printed `Resumed from .../model_3297.pt at iteration
+3297`, confirming the checkpoint's own recorded iteration count directly
+rather than assuming it from the filename.
+
+**Iteration budget (judgment call, not the plan's default 1500):** chose
+801 additional iterations (`--max_iterations 4098`, final checkpoint
+`model_4097.pt`) — a deliberate middle ground between Stage SO's 300 (an
+inert, mathematically-guaranteed-identical-output warm start needing no
+real exploration) and this project's usual 1500 from-scratch default (for
+genuinely novel behavior from random init). Reasoning: Stage D1 is not a
+cold start — the base grasp/lift skill is already at 8/8 coming in, and
+target identity is still structurally given (`scene["object"]` is always
+the commanded die by construction, unchanged from Stage SO) — but it is
+also not a no-op like Stage SO's inert zero-padded dims: the distractor
+is now a real, physically-present, per-episode-varying nearby object for
+the first time, so the policy genuinely has something new to adapt to
+(tolerating a real nonzero `distractor_distance_summary` signal,
+not colliding with/being distracted by a nearby die during reach). 801
+iterations was chosen as enough real adaptation time for that narrower
+adaptation without paying for a full from-scratch budget. The streamed
+reward curve, watched live during the run, supports this choice after
+the fact: `Episode_Reward/lifting_object` rose from ~11.27 (iteration
+~3603) to ~12.9 by the run's end, `Episode_Reward/object_goal_tracking`
+rose from ~6.5 to ~11.2, `Episode_Reward/reaching_object` stayed flat
+near its ceiling (~0.77-0.78) throughout, and `Episode_Termination/
+object_dropping` stayed low (~0.7-1.2%) the whole run — genuine,
+sustained improvement with no divergence/collapse, and a visible (if not
+fully flat) plateau forming by the final ~150 iterations, not a curve cut
+off mid-climb.
+
+Instrumented eval (`franka_checkpoint_review.py --eval_target_shape
+{d12,d20}`, num_envs=8, full 3-die topology, `distractor_1` real/active,
+`distractor_2` still parked, checkpoint `model_4097.pt`):
+
+| shape | envs_with_sustained_lift | max_height_gain (typical) | max_consecutive_lifted_steps |
+|-------|---------------------------|----------------------------|-------------------------------|
+| d12   | **8/8**                   | ~365-457mm                 | 215-222 (of ~239 post-settle steps) |
+| d20   | **8/8**                   | ~409-440mm                 | 217-222 (of ~239 post-settle steps) |
+
+This equals or exceeds the single-object 8/8-both-shapes baseline
+(`model_2998.pt`) and exceeds Stage SO's own d20 result (7/8) — Stage D1
+shows no discovery degradation at 1 active distractor. Both eval videos
+were downloaded and inspected directly (frames extracted via `ffmpeg`,
+not just the JSON summary read): every inspected frame shows the gripper
+holding the target die clearly elevated above the table while the
+distractor die sits undisturbed and ungrasped in its own reset region —
+visually confirming the height-based "sustained lift" numbers reflect a
+real, clean single-target grasp, not a wedge/contact artifact or an
+accidental distractor grab.
+
+Checkpoint: `gs://rl-manipulation-hks-runs/target-selection-clutter/joint-die-target-selection-d1/seed42/2026-07-19_23-58-28/model_4097.pt`.
+Eval artifacts: `gs://rl-manipulation-hks-runs/target-selection-clutter/eval-artifacts/joint-die-target-selection-d1/`.
+Cost: ~$0.36 (cloud — desktop was busy with a concurrent
+`bc_pretrain_demo_warmstart.py` workstream at dispatch time, confirmed
+live via `scripts/check_gpu_availability.sh` reporting `TARGET=cloud`/
+BUSY before provisioning; `g2-standard-4`+L4 SPOT, ~57min instance
+existence), full teardown verified (`scripts/check_cloud_state.sh`
+clean, zero instances/disks/snapshots). Combined Task 4+5 total: ~$1.19
+of the plan's $5 cap for Tasks 4-6 — ~$3.81 remains for Task 6 (Stage D2,
+the primary falsification check).
+
+No code bug found or fixed during this task — Task 1-3's wiring (scene
+topology, observation term, `--variant`/`--eval_target_shape` plumbing)
+worked exactly as built for the D1 variant with no changes needed.
 
 ## Open, not yet decided
 

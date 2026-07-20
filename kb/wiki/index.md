@@ -164,17 +164,21 @@ see the coverage boundary note below.)*
   a working unified 2-shape policy, checkpointed. ≈$5.87 of the $15 cloud
   cap spent. Distractors/target-selection follow-on: see
   [[target-selection-clutter]].
-- [[target-selection-clutter]] (2026-07-19, IN PROGRESS — Stage SO gate
-  FAILED, stopped) — 3-die clutter curriculum (SO: 0 active distractors ->
-  D1: 1 -> D2: 2) built on the above's finished single-object checkpoint.
-  Stage SO (internal sanity gate, trained fully from scratch — new 43-dim
-  schema incompatible with the 41-dim baseline checkpoint) got 0/8 both
-  shapes, well below the >=7/8 gate; plan execution stopped before Stage
-  D1/D2 per its own pre-registered discipline. No code bug found; the
-  likely explanation is a confound between "did the new scene/observation
-  code break something" (what the gate targets) and "does plain
-  from-scratch PPO ever discover d12/d20 grasps without a distillation
-  bootstrap" (a separate, pre-existing difficulty) — not yet resolved.
+- [[target-selection-clutter]] (2026-07-19, COMPLETE — hypothesis PASSES)
+  — 3-die clutter curriculum (SO: 0 active distractors -> D1: 1 -> D2: 2)
+  built on the above's finished single-object checkpoint, testing whether
+  curriculum + a new fixed-size zero-padded distractor-distance
+  observation term (DexSinGrasp's `d_t^S`) preserves discovery under
+  clutter with the reward function unchanged. Stage SO's original
+  from-scratch attempt got a confounded 0/8 both shapes (indistinguishable
+  from this project's own pre-existing cold-start difficulty, not a real
+  defect); a lossless partial-weight warm start from the single-object
+  checkpoint resolved the confound and passed cleanly (d12 8/8, d20 7/8).
+  Stage D1 (1 active distractor) then Stage D2 (2 active distractors, the
+  primary falsification check) both passed cleanly — **d12 8/8, d20 8/8
+  at Stage D2**, comfortably above the pre-registered 6/8 bar, no
+  wrong-die grasp observed in any inspected video frame. ≈$1.35 of the
+  $5 cloud-spend cap for Tasks 4-6.
 
 ### Concepts
 

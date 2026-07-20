@@ -1,15 +1,22 @@
-# Target-selection-among-distractor-dice experiment (2026-07-19 -> in progress)
+# Target-selection-among-distractor-dice experiment (2026-07-19, COMPLETE)
 
-**Status: Stage SO gate PASSED (d12 8/8, d20 7/8) and Stage D1 (1 active
-distractor) also PASSED cleanly — d12 8/8, d20 8/8 (2026-07-19).** The
-originally-reported Stage SO 0/8-both-shapes from-scratch result below
-was confounded (see "Task 4 corrected" section) and has been superseded
+**FINAL VERDICT: hypothesis PASSES.** Stage SO gate PASSED (d12 8/8, d20
+7/8), Stage D1 (1 active distractor) PASSED cleanly (d12 8/8, d20 8/8),
+and Stage D2 — the primary falsification check, 2 active distractors, the
+real target configuration — also PASSED cleanly: **d12 8/8, d20 8/8**,
+both comfortably above the pre-registered 6/8 (75%) bar, and no
+grasped-the-wrong-die episode observed in any inspected env/frame for
+either shape. Curriculum + a fixed-size zero-padded distractor-distance
+observation term (DexSinGrasp's own `d_t^S` mechanism), with the reward
+function and target-identification mechanism left completely unchanged,
+is sufficient to preserve the single-object 8/8 discovery rate under
+2-distractor clutter for both d12 and d20. See "FINAL VERDICT" section at
+the bottom for the full closing writeup across all 3 stages.
+
+The originally-reported Stage SO 0/8-both-shapes from-scratch result
+below was confounded (see "Task 4 corrected" section) and was superseded
 by a partial-weight warm-started retrain that isolates the question the
-gate was actually meant to answer. Stage D1, resumed from that corrected
-Stage SO checkpoint, cleared its own eval at 8/8 for both shapes — see
-"Task 5" section below. Stage D2 (plan Task 6, the primary falsification
-check) is next. This is still an interim entry (plan Tasks 4-5 only); the
-closing verdict lands at the plan's Task 7.
+gate was actually meant to answer.
 
 **Goal:** extend [[unified-multi-die-specialist-distillation]]'s finished
 single-object d12/d20 policy (`model_2998.pt`, 8/8 both shapes with
@@ -286,13 +293,272 @@ No code bug found or fixed during this task — Task 1-3's wiring (scene
 topology, observation term, `--variant`/`--eval_target_shape` plumbing)
 worked exactly as built for the D1 variant with no changes needed.
 
+## Task 6: Stage D2 (2 active distractors), resumed from Stage D1 — PRIMARY FALSIFICATION CHECK PASSED, d12 8/8, d20 8/8 (2026-07-19)
+
+Resumed `FrankaDieLiftJointD12D20TargetSelectionD2EnvCfg` (both
+`distractor_1`/`distractor_2` now real/active, each its own independent
+`MultiAssetSpawnerCfg(random_choice=True)` population drawn from
+`{d12,d20}`) directly from Stage D1's own checkpoint —
+`gs://rl-manipulation-hks-runs/target-selection-clutter/joint-die-target-selection-d1/seed42/2026-07-19_23-58-28/model_4097.pt`
+— via a normal same-dimensionality PPO resume (`--checkpoint`, no
+`--policy_only_checkpoint`). `train_franka.py` printed `Resumed from
+.../model_4097.pt at iteration 4097`, confirming the checkpoint's own
+recorded iteration count directly (matching the filename, but verified
+via the printed message rather than assumed) before committing to an
+iteration budget.
+
+**Execution backend (real friction, worth recording):** `check_gpu_availability.sh`
+reported the desktop BUSY at dispatch time (a concurrent
+`bc_pretrain_demo_warmstart.py` workstream), so this task started on
+cloud (`g2-standard-4`+L4 SPOT, `us-central1-a`, instance
+`rl-franka-clutter-d2`) per the desktop-first/cloud-fallback policy. The
+install completed cleanly, but the instance hit a genuine SPOT
+preemption (confirmed via `gcloud compute operations list` showing a
+real `compute.instances.preempted` system event) ~19 minutes after
+creation, before training started. On restart attempt, the same zone
+stocked out (`ZONE_RESOURCE_POOL_EXHAUSTED`); investigating further
+surfaced a real, previously-undocumented constraint: **this project's
+GCP `GPUS_ALL_REGIONS` quota is 1, project-wide** — and a *different*
+concurrent Senior workstream (the exploration-bonus experiment) already
+held that single GPU slot with its own live cloud instance
+(`rl-franka-exploration-bonus`, `us-east1-c`), so a fresh instance could
+not be created in any zone until that other workstream's instance was
+released. Rather than wait on or touch another workstream's resource,
+this task rechecked `scripts/check_gpu_availability.sh` and found the
+desktop had freed up in the meantime — switched to desktop dispatch for
+the remainder of the task (a fresh, isolated `git clone` at
+`~/projects/rl-target-selection-d2` on the desktop, deliberately NOT the
+shared `~/projects/rl` checkout there, which had uncommitted changes
+belonging to the concurrent d8/d10 demo-warmstart workstream at the
+time). The aborted cloud instance was fully deleted (zero
+instances/disks/snapshots left from this task's own cloud usage,
+`scripts/check_cloud_state.sh` confirmed clean of this task's own
+resources afterward). **Cross-cutting infra note for the controller:** a
+project-wide GPU quota of 1 means at most one Senior workstream can use
+cloud GPU dispatch at a time; this is a real, currently-undocumented
+constraint on this project's "genuinely parallel workstreams" model that
+the controller may want to raise (a quota increase request, Console-UI
+only, same as the earlier `GPUS_ALL_REGIONS` grant) — not decided or
+requested here, out of this task's own scope.
+
+**Iteration budget (judgment call):** chose 1000 additional iterations
+(`--max_iterations 5097`, final checkpoint `model_5096.pt`) — somewhat
+more than Stage D1's own 801, per this plan's own guidance ("D2
+introduces a second simultaneous distractor, a further real step up in
+difficulty from D1's one, so probably needs somewhat more than D1's 801
+iterations"). Reasoning: Stage D1 already demonstrated the base
+grasp/lift skill tolerates one real, physically-present distractor at
+8/8; Stage D2 asks the same skill to tolerate two simultaneous
+distractors (more collision-avoidance/reach-path complexity, and the
+`distractor_distance_summary` observation now carries two genuinely
+nonzero, independently-varying values instead of one), a real but
+bounded increment, not a new skill from scratch — 1000 iterations gives
+real room for that increment without approaching a full from-scratch
+budget. The reward curve, watched live during the run, supports this
+choice after the fact: at the very first logged iteration (4097),
+`Episode_Reward/lifting_object` was already 0.12 (a fresh-resume
+transient, matching the same pattern seen at the start of every prior
+resume in this experiment) and had already recovered to 12.80 by
+iteration 4269 (172 iterations in) — essentially Stage D1's own final
+value — then continued a slow, healthy climb to a stable plateau around
+13.0 (`Episode_Reward/reaching_object` flat at its ceiling ~0.78-0.79
+throughout, `Episode_Reward/object_goal_tracking` climbing from ~11.3 to
+~12.2, `Episode_Termination/object_dropping` low and stable at 0.5-1.3%
+the whole run). No divergence, no plateau cut off mid-climb — the curve
+had clearly leveled off well before the 1000-iteration budget ran out.
+Training took ~24.5 minutes wall-clock on the desktop's dedicated
+(uncontended) L4.
+
+Instrumented eval (`franka_checkpoint_review.py --eval_target_shape
+{d12,d20}`, num_envs=8, full 3-die topology, both distractors
+real/active, checkpoint `model_5096.pt`):
+
+| shape | envs_with_sustained_lift | falsification bar (>=6/8) | max_height_gain | max_consecutive_lifted_steps |
+|-------|---------------------------|----------------------------|------------------|-------------------------------|
+| d12   | **8/8**                   | PASS                       | 308.3-480.8mm    | 216-223 (of 249 analysis-window steps) |
+| d20   | **8/8**                   | PASS                       | 334.3-481.2mm    | 217-222 (of 249 analysis-window steps) |
+
+**Primary falsification check (pre-registered in the spec): both shapes
+independently clear the 6/8 bar at 8/8 (100%)** — comfortably above the
+75% floor, matching (not just barely clearing) the single-object 8/8
+baseline and Stage D1's own 8/8/8/8 result. The hypothesis is NOT
+falsified for either shape.
+
+**Video inspection — both target-shape eval videos downloaded and
+inspected frame-by-frame (`ffmpeg`-extracted stills at 2fps plus zoomed
+crops around the gripper, not just the JSON summary), per this project's
+verification standard and matching Stage D1's own practice:** across
+every inspected timestamp for both the d12-target and d20-target runs,
+the two distractor dice remain visibly in their fixed reset positions on
+the table, completely undisturbed, while the gripper carries the
+(white-on-white, visually hard to distinguish from the gripper itself at
+this camera distance, but ground-truth-confirmed via the height
+instrumentation) target die through a large elevation arc. **No episode
+in any inspected frame showed the gripper grasping or disturbing a
+distractor die** — this is a distinct, explicitly-checked-for failure
+mode (a "lifted the wrong die" outcome would be a materially different,
+more concerning result than a simple discovery-rate shortfall) and it
+was not observed. Note also a structural (not just visual) guarantee
+worth recording: `franka_checkpoint_review.py`'s height instrumentation
+reads `scene["object"]`'s own root position directly — `scene["object"]`
+is structurally always the commanded target (a cfg-construction-time
+scene-topology property, not a runtime-reassignable flag), a physically
+separate rigid body from either distractor slot. A policy that grasped a
+distractor instead of the target could not produce an inflated
+`max_height_gain` reading for the target — so the 8/8 sustained-lift
+metric itself already rules out "lifted a distractor, left the target
+behind" as an explanation for these results, independent of the video
+check; the video check confirms the complementary case (no distractor
+disturbance alongside a correct target grasp), which the height metric
+alone cannot see.
+
+**Checkpoint:**
+`gs://rl-manipulation-hks-runs/target-selection-clutter/joint-die-target-selection-d2/seed42/2026-07-19_21-08-07/model_5096.pt`.
+Eval artifacts (videos + heights JSON, both shapes):
+`gs://rl-manipulation-hks-runs/target-selection-clutter/eval-artifacts/joint-die-target-selection-d2/`.
+
+**Cost:** ~$0.16 (the aborted cloud attempt — install completed but no
+training ran before the SPOT preemption + quota contention forced a
+switch to desktop; `scripts/check_cloud_state.sh` confirmed zero
+instances/disks/snapshots left from this task afterward) + $0 (desktop —
+both training and both eval runs). Desktop teardown verified:
+`nvidia-smi --query-compute-apps` empty, no `tmux` server running,
+`systemd-inhibit --list` clear of any `rl-gpu-job` guard,
+`scripts/check_gpu_availability.sh` reports AVAILABLE. **Combined Task
+4+5+6 total: ≈$1.35 of the plan's $5 cap for Tasks 4-6** — well under,
+no controller notification needed per the plan's own cost-cap clause.
+
+No code bug found or fixed during this task — Task 1-3's wiring worked
+exactly as built for the D2 variant with no changes needed, matching
+Stage D1's own finding.
+
+## FINAL VERDICT — target-selection-among-distractor-dice experiment (Tasks 0-6 / Stages SO/D1/D2, 2026-07-19)
+
+**The pre-registered falsifiable hypothesis PASSES for both shapes at the
+primary bar.** Starting from the finished single-object unified d12/d20
+policy (`model_2998.pt`, 8/8 both shapes with exactly one die in the
+scene), extending it with (a) two new always-present distractor scene
+entities plus one new additive `distractor_distance_summary` observation
+term (DexSinGrasp's `d_t^S` mechanism, K=2, hard-zero-padded per
+curriculum stage) and (b) a 3-stage distractor-count curriculum (SO: 0 ->
+D1: 1 -> D2: 2 active distractors, each stage checkpoint-resumed from the
+prior stage), while leaving the reward function and target-identification
+mechanism (the existing, unchanged `object_position` term) completely
+untouched, **preserved the single-object 8/8 discovery rate for both d12
+and d20 all the way through the full 2-active-distractor target
+configuration** — not just above the pre-registered 6/8 floor, but an
+exact, undegraded match to the single-object baseline.
+
+**Per-stage results, reported exactly as observed (not averaged, not
+just the final headline number), each shape separately:**
+
+| stage | active distractors | d12 | d20 | gate/bar | verdict |
+|---|---|---|---|---|---|
+| SO (original, from-scratch) | 0 (parked) | 0/8 | 0/8 | >=7/8 internal sanity gate | FAIL — confounded, see below |
+| SO (corrected, warm-started from `model_2998.pt`) | 0 (parked) | 8/8 | 7/8 | >=7/8 internal sanity gate | PASS |
+| D1 | 1 (real) | 8/8 | 8/8 | intermediate data point, no formal bar | matches/exceeds single-object 8/8 baseline |
+| D2 (primary falsification check) | 2 (real, both slots) | **8/8** | **8/8** | >=6/8 (75%) primary bar | **PASS — hypothesis NOT falsified** |
+
+**The Stage SO from-scratch confound and its resolution is itself a real
+finding, not just a false start:** the plan's own design forced a
+from-scratch (not resumed) Stage SO, since the new 43-dim observation
+schema is incompatible with the 41-dim `model_2998.pt` checkpoint and no
+cross-dimensionality warm-start mechanism existed in this codebase before
+this experiment. That from-scratch run got 0/8 both shapes — a
+"reach but never grasp" pattern indistinguishable from this project's
+own long-documented d12/d20 cold-start grasp-*discovery* difficulty (the
+exact barrier the specialist -> distill -> RL-fine-tune pipeline in
+[[unified-multi-die-specialist-distillation]] exists to route around),
+confounding "did the schema extension break something" with "does plain
+from-scratch PPO ever discover these grasps at all." The fix — a
+weight-surgery script
+(`scripts/extend_checkpoint_observation_dims.py`) that extends
+`model_2998.pt`'s 41-dim first-layer weights to 43 dims by copying the
+41 existing columns unchanged and randomly initializing only the 2 new
+(always-zero-at-Stage-SO) columns — is mathematically guaranteed
+lossless at Stage SO specifically, and was verified bit-for-bit identical
+(0.0 max abs diff) against the real checkpoint before any training spend,
+with a negative-control check (nonzero values in the new columns) that
+did produce a large diff, confirming the verification wasn't vacuous.
+This resolved the confound cleanly: the corrected, warm-started Stage SO
+passed cleanly (d12 8/8, d20 7/8), confirming the schema/scene extension
+itself was never broken — the original 0/8 result really was the
+pre-existing cold-start difficulty, not a new defect.
+
+**Not measurement artifacts — checked past the summary numbers at every
+stage, per this project's own repeated settle-detection-bug discipline:**
+every stage's eval used the current (post-`977a748`) MIN-over-fixed-
+early-window settle-detection logic; `max_height_gain` was large and
+decisive at every passing stage (SO: ~363-439mm; D1: ~365-457mm; D2:
+308.3-481.2mm — all far above the 40mm lift threshold) and
+`max_consecutive_lifted_steps` held for the large majority of each
+analysis window (D1: 215-222/239; D2: 216-223/249) at every stage, not a
+brief threshold-crossing blip. Eval videos were downloaded and inspected
+frame-by-frame at D1 and D2 (not just the JSON) — D1 confirmed a clean
+single-target grasp with the distractor undisturbed; **D2 additionally
+and explicitly checked for, and did not find, any "grasped the wrong
+die" episode** across either target shape's full eval video, the
+specific additional failure mode this final stage's real 2-distractor
+configuration made newly possible to observe.
+
+**Cost:** ≈$1.35 total across Tasks 4/5/6 (SO's two attempts ≈$0.83 +
+D1 ≈$0.36 + D2 ≈$0.16 aborted-cloud/desktop-completed), of the plan's
+$5 cap for these three tasks combined — well under, matching this
+project's now-consistent pattern of desktop dispatch bringing real cloud
+spend close to $0 whenever the desktop is actually available.
+
+**Checkpoints (final, per stage):**
+- SO (corrected, warm-started): `gs://rl-manipulation-hks-runs/target-selection-clutter-stageso-warmstart/joint-die-target-selection-so/seed42/2026-07-19_22-52-41/model_3297.pt`
+- D1: `gs://rl-manipulation-hks-runs/target-selection-clutter/joint-die-target-selection-d1/seed42/2026-07-19_23-58-28/model_4097.pt`
+- D2 (final, this experiment's own end state): `gs://rl-manipulation-hks-runs/target-selection-clutter/joint-die-target-selection-d2/seed42/2026-07-19_21-08-07/model_5096.pt`
+
+**Bottom line:** a single unified policy that grasps-and-lifts a
+commanded d12 or d20 die when 2 other dice (independently drawn from the
+same 2-shape population, same-shape and cross-shape pairings both pooled)
+are simultaneously present in the scene, with no degradation from the
+single-object 8/8 baseline and no evidence of the policy ever grasping
+the wrong entity, is real and checkpointed. Curriculum + a fixed-size
+zero-padded distractor-distance observation term, transplanted from
+DexSinGrasp's own state-based-teacher formulation despite that paper's
+materially different setting (dexterous multi-finger hand, heaped/
+occluding clutter, vs. this project's parallel-jaw gripper, flat
+non-occluding tabletop), was sufficient on its own — no
+distractor-avoidance reward term was needed, and this experiment
+deliberately did not add one, per its own scope. Since the primary bar
+passed cleanly (not falsified), the escalation path this project's own
+spec pre-registered for a falsification (a Deep-Sets/attention
+architecture over distractor state, or a distractor-avoidance reward
+term) is not needed and was not attempted.
+
 ## Open, not yet decided
 
-Was: whether to warm-start Stage SO from `model_2998.pt` despite the
-dimensionality mismatch, accept the from-scratch difficulty as the
-explanation, or find some other approach. **Decided and executed above
-(option (a), partial-weight warm start) — nothing open on this question
-anymore.**
+- Was: whether to warm-start Stage SO from `model_2998.pt` despite the
+  dimensionality mismatch, accept the from-scratch difficulty as the
+  explanation, or find some other approach. **Decided and executed above
+  (option (a), partial-weight warm start) — nothing open on this question
+  anymore.**
+- **d8/d10 as distractors or targets** — still gated on those shapes ever
+  achieving real single-object discovery first (unresolved, per
+  [[unified-multi-die-specialist-distillation]]'s own FINAL VERDICT); out
+  of scope for any follow-on to this experiment until that's resolved.
+- **3+ distractors, heaped/occluding arrangements, or any singulation
+  mechanism** — this experiment only tested flat, non-overlapping,
+  at-most-2-distractor clutter; whether the same curriculum+observation
+  mechanism scales further, or whether singulation-specific techniques
+  become necessary once occlusion is possible, is a genuinely open
+  question for a future follow-on, not assumed either way by this
+  experiment's own clean pass.
+- **Multi-seed replication** — this experiment used a single seed
+  (seed42) throughout, matching the checkpoint it started from; the
+  spec's own scope explicitly deferred multi-seed replication to a
+  follow-on now that the single-seed result is positive and (per the
+  spec's own stated condition) warrants confirming its robustness.
+- **A project-wide `GPUS_ALL_REGIONS` GCP quota of 1** was discovered
+  during Task 6 (see that section above) — a real, previously-
+  undocumented constraint on how many Senior workstreams can use cloud
+  GPU dispatch simultaneously. Flagged to the controller, not resolved
+  here (a Console-UI-only quota increase request, same mechanism as the
+  original grant).
 
 ## Gripper actuator low-pass-filtering check (2026-07-19) — ruled out
 

@@ -1,10 +1,10 @@
-# d8 antipodal/force-closure grasp-quality reward (2026-07-20, dual action-space test — H_joint FALSIFIED, H_taskspace CONFIRMED)
+# d8 antipodal/force-closure grasp-quality reward (2026-07-20, dual action-space test — H_joint FALSIFIED, H_taskspace CONFIRMED, CLOSED)
 
-**Status: both conditions now complete and reported here (H_joint below;
-H_taskspace in its own section further down). The closing 5-row-outcome-
-matrix classification and combined verdict are Task 5's own job, not
-written here — this article records each condition's own real result and
-evidence only.**
+**Status: CLOSED. Both conditions complete (H_joint below; H_taskspace in
+its own section further down); the closing 5-row-outcome-matrix
+classification and combined synthesis are in the "Closing verdict" section
+at the bottom of this article. See `ROADMAP.md`'s matching entry for the
+same synthesis in the project-status ledger.**
 
 **Goal:** test whether porting AR4's antipodal/force-closure grasp-quality
 reward (`tasks/ar4/mdp.py:902-940`), refit to Franka's real `mu=0.5`
@@ -384,6 +384,157 @@ and seed 123, and the raw tfevents-derived numbers for all 3 seeds, were
 downloaded locally during this task's own verification pass before
 teardown and are the basis for every number reported in this section.
 
+## Closing verdict (Task 5, 2026-07-20): outcome-matrix Row 2 — a real cross-platform confirmation, not a clean win
+
+**Outcome-matrix classification (design spec's own 5-row table): Row 2 — H_joint
+falsified, H_taskspace confirmed.** Per the spec's pre-registered rule (each
+hypothesis falsified only if *both* its own bars fail across all 3 seeds):
+H_joint's mechanism bar is exactly `0.0` in all 3 seeds and its behavioral
+bar is a clean 0/24 — both bars fail, H_joint is falsified. H_taskspace's
+behavioral bar succeeds in seed 123 (8/8) and its mechanism bar passes in
+seeds 42 and 123 — neither bar fails in all 3 seeds, so H_taskspace is
+confirmed, not falsified.
+
+**Reading, per the spec's own table for this exact row: "exact replay of
+the AR4-era Experiment 10→11 pattern: action-space precision is the real
+gate; the antipodal mechanism itself is validated once precision is
+available."** This is a real, notable finding, stated directly: the
+specific action-space-dependent behavior of a classical antipodal/
+force-closure reward — regressing to exact zero under joint-space control,
+becoming learnable under task-space/IK control — was previously observed
+on exactly one platform (AR4, Experiments 9-11). This experiment
+reproduces that same pattern on a structurally different robot (Franka),
+a different object (d8 die vs. cube), and a from-scratch pure-`torch`/
+`ContactSensorCfg` reimplementation of the mechanism (not a copy of AR4's
+own code) — a genuine cross-platform transfer of a mechanistic finding,
+which is exactly the kind of methodology-generalizes-across-morphology
+result [CLAUDE.md](../../../CLAUDE.md)'s own North Star cares about, found
+here on its own empirical merits rather than assumed.
+
+**But Row 2's classification should not be read as "task-space + antipodal
+solves d8," and this synthesis does not overstate it as one.** Unlike
+Experiment 11's own single-seed AR4 report (a robust nonzero signal in
+91.6% of iterations on the one seed run), this experiment's 3-seed design
+exposes real heterogeneity the AR4-era arc never had occasion to observe
+under this mechanism: seed 123 is a full, clean 8/8 grasp+lift with a
+strong, durable mechanism signal and independent physical confirmation (a
+constant ≈0.10m hand-to-object offset sustained across ~120 steps while
+both rise together — a genuine held grasp, verified beyond video review
+alone); seed 42 gets a marginal, barely-above-threshold mechanism signal
+with zero behavioral payoff — the same mechanism-fires/behavior-doesn't
+shape as [[exploration-bonus-grasp-discovery]]'s own SPLIT result, at the
+single-seed level; seed 7 gets nothing at all, indistinguishable from
+H_joint's own uniform null. Task-space control is confirmed *necessary*
+for this mechanism to ever produce a usable signal on Franka/d8 (H_joint's
+hard zero vs. H_taskspace's real positive rate proves that unambiguously)
+but is not by itself *sufficient* for reliable discovery — 2 of 3 seeds
+under the identical task-space condition still failed behaviorally. The
+accurate reading: task-space control is necessary for the antipodal
+mechanism to ever become learnable on Franka/d8, and sufficient for
+discovery in at least one seed, but not yet a reliable from-scratch recipe
+across seeds.
+
+### Relation to the exploration-bonus SPLIT result's own forward pointer
+
+[[exploration-bonus-grasp-discovery]] named "verifying actual
+finger-object contact/antipodal alignment at the moment of closure" as the
+next candidate direction after its own SPLIT (reliable closure attempts
+near the object, 0/24 lift, all under joint-space control — the same
+action space as this experiment's H_joint condition). H_joint's result
+**complicates that forward pointer taken literally, but confirms its
+underlying diagnosis once combined with a second change**: adding the
+antipodal-quality signal under the *same* joint-space control the
+exploration-bonus experiment used does not merely fail to produce a lift
+(as exploration-bonus's own bonus term did) — it fails to even make the
+antipodal signal learnable at all, a harder failure than
+exploration-bonus's own SPLIT. The forward pointer's implicit framing
+(grasp-quality/antipodal alignment as *the* missing ingredient, addressable
+on its own) was incomplete — it required an action-space change as a
+co-requisite, not identified as necessary until this experiment's
+dual-condition design surfaced it. Once that second change (task-space
+control) is added, the forward pointer's underlying diagnosis is
+vindicated in seed 123 specifically: the exact mechanism the
+exploration-bonus result pointed toward is what closes the gap between
+"reliable closure attempt" and "completed lift," producing this project's
+first-ever sustained-lift discovery on d8 driven by an antipodal/
+force-closure reward term. Combined honest reading: the exploration-bonus
+forward pointer correctly identified antipodal alignment as the
+mechanistically relevant next axis, but the fix that actually worked
+needed both that reward term *and* a switch to task-space control together
+— neither alone was sufficient here (joint-space + antipodal = hard zero;
+task-space alone with no antipodal term is untested by this experiment and
+a different question).
+
+### Relation to d8's own H2 success — two independently-valid, non-competing mechanisms
+
+[[d8-d10-demo-warmstart]]'s own H2 (checkpoint warm-start from the
+converged d12 specialist) already solved d8 cleanly — **3/3 seeds, a full
+24/24 sweep** — using `FrankaDieLiftJointD8BigEnvCfg`'s plain default
+joint-space recipe, with no antipodal reward term at all. d8 is now
+solvable via at least two structurally different, independently-verified
+routes: H2's warm-start (24/24) and this experiment's task-space+antipodal
+combination (8/24, seed 123 only). This is worth addressing directly
+rather than skated over, because on its face it looks like a confusing
+juxtaposition — two "fixes" for the same null, of very different apparent
+strength. The honest synthesis is that **both are real, independently
+valid findings that don't need to be reconciled into one story**, because
+they answer genuinely different questions:
+
+- **H2 answers a practical/engineering question**: given this project's
+  existing dice-family curriculum (a converged specialist checkpoint for a
+  geometrically similar shape already exists), how do you reliably get PPO
+  to discover d8's grasp at all? Answer: seed initialization near an
+  already-solved basin, with no reward or action-space change whatsoever.
+  This is the more reliable, cheaper, currently-production-ready recipe for
+  d8 specifically — but it is a shape-family-specific bootstrapping trick:
+  it presupposes another shape's specialist already exists, and says
+  nothing about *why* cold-start joint-space training fails, nor anything
+  that obviously transfers to a genuinely new shape/arm with no nearby
+  specialist to warm-start from.
+- **This experiment answers a mechanistic question**: does a real,
+  physically-grounded antipodal/force-closure signal matter for grasp
+  discovery at all, and if so, under what conditions does it become
+  learnable? Answer: yes, mechanistically — but it is gated on
+  action-space precision exactly as the AR4-era arc found, and even once
+  unlocked, is not yet seed-reliable from scratch. This result is weaker
+  in practical seed-reliability than H2's warm-start, but it is the more
+  fundamental explanation of *why* from-scratch joint-space training fails
+  here (imprecise positioning prevents antipodal contact from ever
+  becoming learnable, independent of whether a warm start is available),
+  and it is further evidence in favor of task-space/Cartesian action
+  formulations — the action-space family the North Star already favors
+  for cross-arm/cross-task generalization, on grounds independent of this
+  specific result.
+
+Neither mechanism supersedes the other, and this article does not force a
+ranking between them. If the practical goal is "get d8 working today,"
+H2's warm-start is the stronger, cheaper, more reliable recipe. If the
+goal is "understand why the mechanism fails/succeeds in a way likely to
+transfer to a new shape or arm with no existing specialist to warm-start
+from," this experiment's task-space+antipodal result is the more
+diagnostic finding — action-space-family-general rather than
+shape-family-specific — even though it is not yet reliable enough on its
+own to be a recommended default.
+
+### Honest next candidate direction
+
+This result is not the dispositive "both falsified" row that would close
+Direction 1 (contact/antipodal grasp verification) for Franka/d8 — it is a
+genuine, if heterogeneous, confirmation that the mechanism matters and
+transfers cross-platform once action-space precision is available. The
+next well-motivated step, if this axis is revisited, is investigating
+*why* 2 of H_taskspace's 3 seeds still fail even with both fixes present
+(task-space control + antipodal reward) — whether the surviving failure
+mode is itself an exploration problem (the same shape as the
+exploration-bonus SPLIT, now one level further in), a residual
+positioning-precision gap even under task-space/IK control, or something
+else — rather than assuming task-space+antipodal is now a solved recipe
+just because it produced this project's first positive antipodal-driven
+d8 lift. Not decided or started here, per this plan's own explicit
+"do not start any new experiment" constraint on this closing task — a
+decision for Principal on whether/how to pursue that residual-seed
+question is a separate, later call.
+
 ## Related
 
 [[experiment-09-antipodal-grasp-bonus]],
@@ -399,6 +550,11 @@ conditions were built to test — this experiment's own real result is
 direct, if seed-heterogeneous, evidence in that axis's favor),
 [[exploration-bonus-grasp-discovery]] (the sibling SPLIT result on this
 identical env cfg — H_taskspace's own seed 42 shows the same
-mechanism-fires/behavior-doesn't shape at the single-seed level),
-[[reach-grasp-lift-gap]], [[ppo-critic-divergence]] (Experiment 11's own
-AR4-era failure mode, watched for and not observed here).
+mechanism-fires/behavior-doesn't shape at the single-seed level, and whose
+own forward pointer this experiment's H_joint condition complicates and
+whose H_taskspace condition ultimately vindicates), [[d8-d10-demo-warmstart]]
+(H2's own independent, non-antipodal, non-task-space solution to this same
+d8 null — see "Relation to d8's own H2 success" above for why the two
+don't need reconciling into one story), [[reach-grasp-lift-gap]],
+[[ppo-critic-divergence]] (Experiment 11's own AR4-era failure mode,
+watched for and not observed here).

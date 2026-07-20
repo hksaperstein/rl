@@ -209,6 +209,27 @@ see the coverage boundary note below.)*
   freeze). Independently re-derived from raw arrays and confirmed by
   frame-by-frame video review. No code bug found. ≈$1.2 of the $3
   cloud-spend cap.
+- [[d8-antipodal-grasp-quality]] (2026-07-20, dual action-space test,
+  CLOSED — H_joint FALSIFIED, H_taskspace CONFIRMED) — tests
+  exploration-bonus-grasp-discovery's own forward pointer: does porting
+  AR4's antipodal/force-closure grasp reward (refit to Franka's real
+  μ=0.5) onto d8's 0/24 null unlock sustained-lift discovery, under
+  joint-space control (H_joint) and, separately, task-space/IK control
+  (H_taskspace). **Result: H_joint's mechanism-level signal regresses to
+  exact `0.0` in all 3 seeds and 0/24 behaviorally — an exact
+  cross-platform replay of the AR4-era Experiment 10 regression. H_taskspace
+  is confirmed, not falsified, but genuinely seed-heterogeneous: 1/3 seeds
+  (123) a full, physically-verified 8/8 clean sweep; 1/3 (42) a marginal
+  mechanism-only signal with no lift; 1/3 (7) a clean null.** Outcome-matrix
+  Row 2 (falsified/confirmed) — the first cross-platform transfer of the
+  AR4-era "action-space precision gates the antipodal mechanism" finding,
+  but not a clean win: task-space control is necessary for the mechanism to
+  ever become learnable on Franka/d8, not yet sufficient for reliable
+  from-scratch discovery across seeds. d8 is now solvable via two
+  independent, non-competing mechanisms — this result and
+  [[d8-d10-demo-warmstart]]'s H2 warm-start (24/24, no antipodal reward at
+  all) — that answer different questions (mechanistic vs. practical) and
+  are not reconciled into one story. ≈$3.2 of the $6 cloud-spend cap.
 
 ### Concepts
 

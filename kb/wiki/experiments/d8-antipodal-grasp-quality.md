@@ -1,9 +1,10 @@
-# d8 antipodal/force-closure grasp-quality reward (2026-07-20, dual action-space test — H_joint COMPLETE, FALSIFIED)
+# d8 antipodal/force-closure grasp-quality reward (2026-07-20, dual action-space test — H_joint FALSIFIED, H_taskspace CONFIRMED)
 
-**Status: H_joint (Condition A / joint-space) complete and reported here.
-H_taskspace (Condition B / task-space-IK) is a separate task, run
-independently and not gated on this result — this article's closing
-5-row-outcome-matrix verdict is deferred until that lands too.**
+**Status: both conditions now complete and reported here (H_joint below;
+H_taskspace in its own section further down). The closing 5-row-outcome-
+matrix classification and combined verdict are Task 5's own job, not
+written here — this article records each condition's own real result and
+evidence only.**
 
 **Goal:** test whether porting AR4's antipodal/force-closure grasp-quality
 reward (`tasks/ar4/mdp.py:902-940`), refit to Franka's real `mu=0.5`
@@ -189,11 +190,215 @@ instance/disk, not this task's, is untouched). Checkpoints (`model_1499.pt`
 + tfevents, all 3 seeds) synced to
 `gs://rl-manipulation-hks-runs/d8-antipodal-grasp-quality/joint-die-d8-big-antipodal/seed{42,123,7}/`.
 
+---
+
+## H_taskspace real run (Task 4): 3 seeds, 1500 iterations each, both falsification bars
+
+**Condition B** (`FrankaDieLiftD8BigTaskspaceAntipodalEnvCfg`, `--variant
+die-d8-big-taskspace-antipodal`): identical scene/rewards/PPO recipe to
+Condition A, but `self.actions.arm_action` re-asserted to task-space/
+relative-differential-IK (`DifferentialInverseKinematicsActionCfg`,
+`action_dim=6`, confirmed live via the action-manager check noted at Tasks
+1-2's own completion) instead of Condition A's inherited
+`JointPositionActionCfg`.
+
+**Dispatch:** GCP cloud (desktop unreachable this session, confirmed via
+`scripts/check_gpu_availability.sh` → `TARGET=cloud`/exit 2, UNKNOWN).
+First instance provisioned SPOT on the first zone attempt
+(`us-central1-a`) with no queueing needed (H_joint's own Task 3 dispatch
+had not yet claimed the shared `GPUS_ALL_REGIONS=1` quota at that exact
+moment). All 3 training seeds completed their first attempt in a single
+sitting with no divergence; the friction came later, during post-training
+diagnostics: **two further genuine SPOT preemptions** (`gcloud compute
+operations list` confirmed `compute.instances.preempted` system events,
+one after only ~17s of a freshly-recreated instance's uptime — a cluster
+matching `docs/cloud/dispatch-checklist.md`'s documented "repeated
+preemptions can occur in bursts" gap), each recovered via the
+snapshot-and-recreate-in-a-different-zone technique
+(`us-central1-a` → `us-west1-a` → `us-east1-b`), plus one real
+checkpoint-corruption hit (seed 7's `model_1400.pt` was a 0-byte
+truncated write from the first preemption — caught by a `torch.load`
+validity check before trusting it, not assumed from the filename alone;
+recovered by resuming from the next-oldest valid checkpoint,
+`model_1350.pt`). After the second preemption recurred within a very
+short window, switched the instance to on-demand provisioning
+(`gcloud compute instances set-scheduling --no-preemptible
+--provisioning-model=STANDARD`) per this project's own documented
+"reasonable when repeated preemption clusters exceed the earlier norm,
+provided remaining work is small" judgment call — no further preemptions
+after that. This task's own dispatch also held the shared
+`GPUS_ALL_REGIONS=1` quota during part of the window the concurrent
+H_joint/Task 3 workstream was itself queued and waiting (see that
+section's own "Dispatch" note above) — genuine two-way contention on the
+single project-wide slot, not a one-sided block.
+
+| seed | mechanism-level (`Episode_Reward/antipodal_grasp_quality`, final-100-iter mean, re-derived from raw tfevents) | behavioral (`envs_with_sustained_lift`) | `max_height_gain_m` |
+|------|------|------|------|
+| 42   | **0.00023876** (passes the `1e-4` bar, ~2.4x) | 0/8 | 0.008847-0.008848 (uniform, no-grasp baseline signature) |
+| 123  | **0.83944721** (passes overwhelmingly; sustained ~0.84-0.86 for the entire final several hundred iterations, not a transient spike) | **8/8** (clean sweep) | **0.306-0.403** (all 8 envs) |
+| 7    | **0.00000012** (fails the bar) | 0/8 | 0.008847-0.008848 (identical no-grasp baseline signature to seed 42) |
+
+**Mechanism-level bar** (falsified only if `< 1e-4` in all 3 seeds): **2
+of 3 seeds (42, 123) exceed the bar** — seed 42 only marginally (2.4x),
+seed 123 overwhelmingly and durably. **Mechanism-level bar: NOT
+FALSIFIED.**
+
+**Behavioral bar** (falsified only if 0/8 in all 3 seeds, 0/24 total):
+**seed 123 alone contributes a full 8/8** — a clean, uniform sweep (every
+env's `max_height_gain_m` in the 0.31-0.40m range, no partial/spurious
+lift), matching this project's own repeated "0 or full-8/8-within-seed"
+discovery pattern rather than a fluke single-env result. Seeds 42/7 are
+both a clean 0/8 with the exact same ≈0.0088m no-grasp baseline signature
+seen throughout this env cfg's history. **Behavioral bar: NOT FALSIFIED
+(8/24 total).**
+
+**H_taskspace verdict, per the spec's own explicit rule (falsified only if
+BOTH bars fail across all 3 seeds): H_taskspace is CONFIRMED, not
+falsified.** Unlike H_joint's clean, uniform falsification, H_taskspace's
+own real result is genuinely heterogeneous across seeds — worth
+preserving explicitly, not rounding to a single number: seed 123 is a full
+clean success on both bars; seed 42 shows a real (re-derived from raw
+data, not noise) but marginal mechanism-only signal that never
+translates into behavioral lift, a seed-level pattern with the same shape
+as this identical env cfg's own immediately-prior exploration-bonus SPLIT
+result; seed 7 is a clean, total null on both bars, indistinguishable
+from H_joint's own uniform result. Whether this 1-full/1-marginal/1-null
+split constitutes a condition-level "SPLIT" or "CONFIRMED" in Task 5's own
+5-row outcome matrix is that task's classification to make — this section
+records the real, seed-level heterogeneity so that classification isn't
+made from a collapsed summary number.
+
+## Critic-divergence contingency (Experiment 11's own AR4-era risk): NOT triggered
+
+Watched `Loss/value_function` live throughout all 3 seeds' full
+1500-iteration runs, specifically for Experiment 11's own AR4-era
+signature (exploding from ~0 to ~5e23 within a handful of iterations,
+~95% of policy updates driven by a diverged critic). **Not observed in any
+seed.** Seed 42's max was 0.0600 (bounded throughout). Seed 7's max was
+0.0381 (bounded throughout, plus a further bounded 0.0576 max in its
+resumed 150-1499 segment after checkpoint-recovery). Seed 123 showed a
+real, larger rise (max 5.6484 around iteration ~270, up from a ~0.0006
+baseline) — genuinely elevated relative to the other two seeds, and
+watched closely as a candidate divergence in progress — but it **plateaued
+and then declined** (iterations 260-274 oscillating 2.83-3.25, iterations
+386-400 oscillating 2.9-3.7, iterations 594-603 back down to ~3.0-3.7,
+iterations 816-820 down to 1.8-2.5, iterations 1033-1247 stable at
+1.3-1.5), never approaching Experiment 11's astronomic blowup and fully
+recovering to a low, stable value by training's end. **This is ordinary
+elevated-but-bounded PPO value-loss variance, not the AR4-era divergence
+bug — the plan's documented `clip_actions=5.0` contingency
+(`Ar4PickPlaceTaskspacePPORunnerCfg`-style scoped `PPORunnerCfg` fix,
+Experiment 11's own recipe) was not needed and was not built.** No change
+to `train_franka.py`'s variant dispatch beyond what Task 2 already
+shipped.
+
+## Independent verification
+
+- **Mechanism bar** re-derived directly from the raw tfevents scalar trace
+  for all 3 seeds (`tensorboard.backend.event_processing.event_accumulator`
+  against the actual `events.out.tfevents.*` files, not a pre-computed
+  summary) — confirms the table above to full precision, including that
+  seed 123's signal is genuinely sustained (not a single-point artifact)
+  across its own final 100 logged iterations.
+- **Behavioral bar** re-derived for seed 123 (the positive result) and
+  seed 42 (a null) from the raw `heights_*.npy` via a from-scratch
+  reimplementation of `franka_checkpoint_review.py`'s post-`977a748`
+  settle-detection algorithm — matched the production script's own
+  `envs_with_sustained_lift`/`max_height_gain_m`/`max_consecutive_lifted_steps`
+  numbers exactly for both seeds on the first attempt (no bug found in
+  this reimplementation this time).
+- **Live physics diagnostic, beyond the plan's own minimum bar**: seed
+  123's eval video (env_0, the built-in viewer camera anchored per-env at
+  a static `eye=(1.8,1.8,1.1)`/`lookat=(0.4,0,0.35)`) shows the arm's
+  reach-down-then-return-to-hover pose subtly enough at a handful of
+  sampled frames that a first-pass visual read genuinely could not
+  distinguish "held and lifted" from "static/glitched" by eye alone — a
+  real ambiguity, not a rhetorical one, and worth recording as a concrete
+  instance of this project's own standing "don't trust a proxy, verify
+  directly" discipline. Resolved with a dedicated live rollout of this
+  checkpoint (`env.scene["object"].data.root_pos_w` vs.
+  `env.scene["robot"].data.body_pos_w[panda_hand]`, printed every step):
+  the object's position tracks the `panda_hand` frame with a **constant
+  ≈0.1001m offset in both X, Y, and Z, sustained across ~120 consecutive
+  steps (steps 32-149) while both rise together from ≈0.10m to ≈0.46m** —
+  the exact rigid-body signature of a genuine held grasp, not a
+  contact-solver launch artifact (which would not maintain a constant
+  offset) or an index/tensor-slicing bug (which would not track a
+  physically plausible ≈10cm hand-to-object-center offset this
+  consistently). A quantitative pixel-diff between the eval video's own
+  rest frame and peak-height frame (env_0's own region only, excluding the
+  neighboring env visible at the frame edge) confirms real, non-trivial
+  visual change (~7% of pixels differ by >15 intensity levels, spanning
+  nearly the full vertical extent of the arm's own silhouette) — the
+  motion is real and visible, just more subtle in this specific camera
+  framing than a first glance suggested, not evidence of a rendering or
+  instrumentation bug.
+- **Frame-by-frame video review**, seed 123: rest frame shows the gripper
+  open, die visible on the table to the gripper's side. By ~0.6-0.9s in
+  (steps 30-45) the gripper has closed and the die is no longer visible on
+  the table (occluded within the closed fingers, consistent with a
+  successful grasp) or anywhere else in frame (ruling out a "die knocked
+  away" alternative). The arm holds a materially similar overall silhouette
+  for the rest of the episode — confirmed by the physics diagnostic above
+  to be the arm returning close to its own pre-reach hover height while
+  still holding the object at a fixed offset, not a static freeze.
+
+## No code bug found (beyond Task 2's own already-shipped mechanism)
+
+No new production-code defect surfaced. The one real gap found and worked
+around in the same pass was operational, not a code bug in Tasks 1-2's
+mechanism: `scripts/franka_checkpoint_review.py` requires `--headless`
+when run on a display-less cloud instance despite already setting
+`args_cli.enable_cameras = True` internally — omitting it produces
+`RuntimeError: Cannot render 'rgb_array' when the simulation render mode
+is 'NO_GUI_OR_RENDERING'`. This is a cloud-dispatch operational detail
+(the existing `--headless` cloud convention already documented in
+`docs/cloud/dispatch-checklist.md` for training, just not yet called out
+for the eval/review script specifically), not a defect in this plan's own
+antipodal-grasp mechanism — noted here so a future cloud eval dispatch
+doesn't have to rediscover it.
+
+## Cost
+
+Task 4 (H_taskspace) alone: ≈2.55hr SPOT `g2-standard-4`+`nvidia-l4`
+instance-uptime across 3 segments (2.01hr initial training run,
+0.54hr second segment before its own preemption, ~17s negligible third
+segment before switching to on-demand) + ≈0.1-0.15hr on-demand uptime for
+the post-training diagnostic work. Estimated compute cost (duration ×
+published-SKU-rate estimate, this project's standing methodology, no
+BigQuery billing export exists): **≈$1.1** (≈$0.92 SPOT compute + ≈$0.1
+on-demand compute, on-demand estimated at ~2x the documented SPOT rate
+per this project's own stated heuristic, no live billing-catalog lookup
+performed this task + ≈$0.1 disk proration across ≈4.5hr elapsed wall
+time). Combined with Task 3's own reported ≈$1.6 and Tasks 1-2's smoke
+tests (≈$0.5 estimated in the plan), running total ≈$3.2 of the plan's
+shared $6 cap — not exceeded. Full teardown verified
+(`scripts/check_cloud_state.sh`: zero instances/disks/snapshots after
+final deletion). Checkpoints (`model_1499.pt` + tfevents, all 3 seeds) and
+eval artifacts (video/`heights_*.npy`/summary JSON, all 3 seeds) exist
+only on the now-deleted cloud instance's boot disk — **not synced to
+GCS** (this task's own dispatch did not run `sync_run_to_gcs.py`, matching
+the immediately-prior exploration-bonus task's own same "cloud-local, not
+GCS-synced" precedent); the eval `heights_*.npy`/JSON/video for seed 42
+and seed 123, and the raw tfevents-derived numbers for all 3 seeds, were
+downloaded locally during this task's own verification pass before
+teardown and are the basis for every number reported in this section.
+
 ## Related
 
 [[experiment-09-antipodal-grasp-bonus]],
 [[experiment-10-antipodal-threshold-action-scale-solver]],
-[[experiment-11-taskspace-ik]] (the AR4-era arc this experiment tests
-transfer of), [[grasp-mechanics-antipodal-vs-magnitude]],
-[[action-space-design]], [[exploration-bonus-grasp-discovery]] (the
-sibling SPLIT result on this identical env cfg), [[reach-grasp-lift-gap]].
+[[experiment-11-taskspace-ik]] (the AR4-era arc both conditions test
+transfer of — H_joint replays Experiment 10's own regression-to-zero
+exactly; H_taskspace's seed 123 replays Experiment 11's own "task-space
+unlocks the first genuine sustained antipodal signal" finding, though with
+seed-level heterogeneity Experiment 11's own single-seed AR4 report did
+not have occasion to observe), [[grasp-mechanics-antipodal-vs-magnitude]],
+[[action-space-design]] (the joint-space-vs-task-space axis both
+conditions were built to test — this experiment's own real result is
+direct, if seed-heterogeneous, evidence in that axis's favor),
+[[exploration-bonus-grasp-discovery]] (the sibling SPLIT result on this
+identical env cfg — H_taskspace's own seed 42 shows the same
+mechanism-fires/behavior-doesn't shape at the single-seed level),
+[[reach-grasp-lift-gap]], [[ppo-critic-divergence]] (Experiment 11's own
+AR4-era failure mode, watched for and not observed here).

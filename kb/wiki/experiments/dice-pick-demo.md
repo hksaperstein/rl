@@ -102,6 +102,116 @@ detector/pick pipeline survive them? (`--colored-dice` +
   fuzzy `pgrep|tail` PID match on a stale process — match the full
   command line with `ps aux` instead.
 
+## Natural-language command demo: move/roll primitives (2026-07-20) — code complete, live verification BLOCKED
+
+Follow-on task: extend the scripted pick demo with a "move" primitive
+(carry + place at a table-frame target) and a "roll" primitive (a genuine
+post-grasp reorientation), plus a natural-language command interface
+(`--command "pick up and roll the d20"`) that dispatches to whichever
+primitive was asked for, on whichever die was named — combining this
+project's existing classical-IK control stack with a task-specification
+layer closer to the VLM/LLM-driven frontier the user asked about.
+
+**What was built** (all in `scripts/dice_pick_demo.py` unless noted,
+additive-only — every existing Gate A/G/V call site is untouched,
+`post_action` defaults to `"none"`):
+
+- **Move primitive**: `run_pick_sequence`'s new `post_action="move"`
+  branch continues past the existing stage-4 lift into carry → descend →
+  release → retract → settle, landing the die at a commanded table-frame
+  (x, y). The target region (`_MOVE_TARGET_XY_DEFAULT = (0.50, 0.22)`)
+  deliberately reuses this repo's own validated goal-region convention —
+  `tasks/franka/lift_env_cfg.py`'s `CommandsCfg.object_pose`
+  (`UniformPoseCommandCfg.Ranges(pos_x=(0.4,0.6), pos_y=(-0.25,0.25))`,
+  the RL env's own randomized cube-goal-sampling range for this exact
+  robot+table) — rather than inventing new geometry, per this task's own
+  ask to check for reusable conventions first. y=0.22 sits inside that
+  range but clearly outside the dice-layout sampling region
+  (`_REGION_Y=(-0.15,0.15)`), so a successful move is visibly distinct
+  from "stayed where it started." Verified via `_compute_move_verdict`:
+  real measured final die xy within 5cm of the commanded target, real
+  measured final z still a plausible on-table height, every other die
+  still undisturbed (shared `_other_dice_status` helper).
+- **Roll primitive**: `post_action="roll"` lifts the grasped die 10cm
+  higher than a normal pick-lift, twists the held orientation 90° about
+  world Z (a visible "rotate the wrist" flourish), releases, and settles
+  for 3s before reading the die's final orientation. **Chose a physical
+  tumble-drop over a literal rolling-contact motion**: these five dice
+  (d4/d8/d10/d12/d20) are all irregular polyhedra with no shared rolling
+  axis, so "lift higher, release, let gravity + contact reorient it"
+  generalizes across shapes with zero per-die geometry, unlike a
+  wheel-style roll — matches the North Star's cross-shape-generalization
+  preference and this task's own brief, which flagged the drop as
+  "probably more reliable and more visually 'die-like'." **Real
+  before/after verification, not just "the action ran"**: the die's
+  pre-grasp settled quaternion (`results[choice]["quat_wxyz"]`, already
+  captured by `spawn_scene_and_settle`) is compared via the file's
+  existing `_quat_angle_diff_rad` helper against its final post-drop
+  settled quaternion; `_compute_roll_verdict` requires this
+  orientation-change to exceed 0.35rad (~20°) — a conservative margin
+  below every one of these shapes' real face-to-face angles (d20's
+  ~41.8° is the smallest) and comfortably above ordinary settle jitter —
+  plus the die still landing on the table and not disturbing the others.
+- **Command parser**: `tasks/franka/command_parser.py`,
+  `parse_dice_command(command) -> {"action": "move"|"roll",
+  "target_shape": "d4".."d20"}`. **Rule-based, not an LLM call** — this
+  environment has no `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` and no
+  programmatic LLM API access; a local `claude` CLI exists but shelling
+  out to a full recursive agent session from inside a demo script for a
+  lightweight NLU task was judged fragile/inappropriate (auth/session
+  dependency, cost, latency, non-determinism), not a genuine substitute.
+  Pure stdlib (`re` only), word-boundary-aware shape matching (correctly
+  disambiguates "d100" from "d10"), raises `ValueError` on ambiguous
+  (both action families / multiple shapes) or missing information rather
+  than guessing. 47 unit tests (`tests/test_command_parser.py`, plain
+  `python3 -m pytest`, no Isaac Sim needed — this module has zero
+  simulation dependency) all pass; independently re-verified outside the
+  building agent's own report.
+- **Command interface**: a 5th gate, `--gate command --command "<phrase>"`,
+  added to `dice_pick_demo.py` itself rather than a separate script (the
+  task's own "your call") — a genuinely separate importable script was
+  considered and rejected: `dice_pick_demo.py`'s top-level argparse +
+  `AppLauncher` construction runs unconditionally at import time, so a
+  second script importing its functions would either re-parse the wrong
+  `sys.argv` or construct a second, conflicting `AppLauncher`/Kit process
+  in the same process — a real architectural obstacle, not a style
+  preference. Adding a new gate keeps every existing gate's behavior
+  byte-identical and reuses 100% of Gate V's proven video-capture/
+  overlay/encode pipeline. `run_gate_command` mirrors `run_gate_v`
+  line-for-line (this file's own established duplication-over-abstraction
+  convention for parallel gate flows) with the commanded die coming from
+  the parsed command instead of `--choice`.
+
+**Verification status: code complete and internally reviewed
+(`python3 -m py_compile` and `pyflakes` clean on the full file; the
+parser independently re-run and spot-checked outside its building
+agent's own claims), but NOT YET run inside a live Isaac Sim process.**
+Blocker found while provisioning cloud GPU time for the run: the trained
+dice detector's weights
+(`vision/models/runs/s_plus_r/weights/best.pt`) and the underlying
+synthetic-dataset manifests under `vision/data/raw/dice_sets_v1/` are
+both gitignored (per this repo's monorepo `data/`/`models/` policy) and
+were not present on the machine doing this task, nor found in this
+project's GCS run buckets (`gs://rl-manipulation-hks-runs/*` holds only
+RL policy checkpoints, no vision-detector weights) — meaning `git
+archive`-based cloud shipping (this project's standard cloud-dispatch
+recipe) cannot reproduce a working perception pipeline on a fresh cloud
+instance. Every gate that touches perception (G, V, and the new
+`command` gate) calls `run_detector_subprocess` unconditionally before
+any `--gt-xy-bypass`-style fallback logic runs, so a missing-weights
+crash there is unconditional — the bypass mechanism does not route
+around it. The move/roll primitives and the command parser are therefore
+verified at the code/unit-test level (parser: real pytest run; physics
+sequence: syntax + name-resolution clean, careful reuse of every already
+end-to-end-proven mechanism from the pick sequence) but **not yet
+confirmed via an actual simulated run with real before/after die state**,
+which this project's own verification standard requires before a real
+"done" claim. Next step: either a narrow one-time artifact transfer from
+wherever these weights currently live (likely the desktop, off-limits
+this session for other reasons) or a fresh detector training pass, then
+re-run `--gate command` for at least 2 shapes × {move, roll} and update
+this section with the real measured results/video paths.
+
 ## Open follow-ups
 
 - **Pick fragility (quantified 2026-07-11 post-review):** detector xy

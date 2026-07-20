@@ -29,6 +29,37 @@ around four gates:
       die was commanded and what the detector localized. Same GT verdict
       check as Gate G (must pass/fail the same way).
 
+Command interface (dice-command-demo task, 2026-07-20), a 5th gate on top
+of the four above:
+
+  command - natural-language command demo: given --command "<phrase>"
+      (e.g. "pick up and roll the d20" / "pick up and move the d12"),
+      parses it via tasks/franka/command_parser.py's rule-based parser (no
+      LLM API access confirmed available in this environment - see that
+      module's own docstring) into {action: move|roll, target_shape},
+      overriding --choice entirely. Mirrors Gate V's flow (spawn/settle ->
+      detector subprocess -> video-recorded pick sequence -> GT verdict) but
+      extends `run_pick_sequence` with a `post_action` stage beyond the
+      normal pick+lift:
+        - move: carries the grasped die to a fixed table-frame (x, y)
+          destination (--move-target-x/y, default `_MOVE_TARGET_XY_DEFAULT`
+          - see that constant's own comment for why this specific region)
+          and releases it there.
+        - roll: lifts the grasped die higher than a normal pick-lift,
+          twists the wrist a real angle while still gripped, then releases
+          - a physical tumble-drop (see `_ROLL_*` constants' own comments
+          for why a drop rather than a literal rolling-contact motion).
+      Verdict (`_compute_move_verdict`/`_compute_roll_verdict`) checks REAL
+      measured before/after state - final die xy vs. the commanded move
+      target, or measured orientation-quaternion change vs. a real
+      face-change threshold for roll - not just "the action ran without
+      erroring". Video: outputs/dice_demo/gate_command/dice_command_
+      <action>_<choice>.mp4.
+
+    flock /tmp/rl_isaac_sim.lock -c "PYTHONUNBUFFERED=1 \\
+        /home/saps/IsaacLab/isaaclab.sh -p scripts/dice_pick_demo.py --gate command \\
+        --command \"pick up and roll the d20\" --seed 42"
+
 .. code-block:: bash
 
     flock /tmp/rl_isaac_sim.lock -c "PYTHONUNBUFFERED=1 \\
@@ -69,14 +100,39 @@ from isaaclab.app import AppLauncher
 
 parser = argparse.ArgumentParser(description="Dice-pick commanded-grasp demo (gated).")
 parser.add_argument(
-    "--gate", type=str, choices=["a", "p", "g", "v", "full"], required=True, help="Which gate to run."
+    "--gate", type=str, choices=["a", "p", "g", "v", "full", "command"], required=True, help="Which gate to run."
 )
 parser.add_argument(
     "--choice",
     type=str,
     default="d20",
     choices=["d4", "d8", "d10", "d12", "d20", "d100", "d10_pct"],
-    help="Commanded die type (used by gates G/V, not Gate A). d100/d10_pct are aliases for d10.",
+    help="Commanded die type (used by gates G/V, not Gate A or Gate command - command derives it from --command).",
+)
+parser.add_argument(
+    "--command",
+    type=str,
+    default=None,
+    help=(
+        "Required for --gate command: a natural-language command string, e.g. "
+        "'pick up and roll the d20' or 'pick up and move the d12'. Parsed via "
+        "tasks/franka/command_parser.py's rule-based parser (see that module's own "
+        "docstring for why rule-based rather than an LLM call - no LLM API access in this "
+        "environment) into {action: move|roll, target_shape: d4/d8/d10/d12/d20}, which "
+        "overrides --choice entirely for this gate."
+    ),
+)
+parser.add_argument(
+    "--move-target-x",
+    type=float,
+    default=None,
+    help="--gate command, action=move only: table-frame x (m) to carry the die to. Defaults to _MOVE_TARGET_XY_DEFAULT if either this or --move-target-y is unset.",
+)
+parser.add_argument(
+    "--move-target-y",
+    type=float,
+    default=None,
+    help="--gate command, action=move only: table-frame y (m) to carry the die to. Defaults to _MOVE_TARGET_XY_DEFAULT if either this or --move-target-x is unset.",
 )
 parser.add_argument("--seed", type=int, default=42, help="Seed for the randomized dice layout.")
 parser.add_argument(
@@ -174,11 +230,16 @@ from tasks.franka.notch_fixture import (  # noqa: E402
     joint_local_pos0_m,
     joint_local_rot1_wxyz,
 )
+# Pure-stdlib rule-based command parser (tasks/franka/command_parser.py) - no isaaclab/
+# torch/numpy dependency at all, so this import has no ordering constraint relative to
+# AppLauncher; grouped here with the other tasks.franka imports purely for readability.
+from tasks.franka.command_parser import parse_dice_command  # noqa: E402
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GATE_A_DIR = os.path.join(REPO_ROOT, "outputs", "dice_demo", "gate_a")
 GATE_G_DIR = os.path.join(REPO_ROOT, "outputs", "dice_demo", "gate_g")
 GATE_V_DIR = os.path.join(REPO_ROOT, "outputs", "dice_demo", "gate_v")
+GATE_COMMAND_DIR = os.path.join(REPO_ROOT, "outputs", "dice_demo", "gate_command")
 # --colored-dice redirects every gate's output dir under here instead, so a
 # colored-dice run NEVER overwrites the white-baseline gate_a/gate_g/gate_v
 # outputs above (the report needs both, side by side, for comparison).
@@ -251,6 +312,53 @@ _MAX_STEPS_DESCEND = 400  # stage 2 budget (position-only in practice, orientati
 _MAX_STEPS_LIFT = 300  # stage 4 budget (short vertical move)
 _MAX_STEPS_REFINE = 200  # fallback XY-only refine sub-stage budget (see stage2_descend's try/except in run_pick_sequence) - only used if the tighter _GRASP_POS_TOL times out on the first attempt
 #
+# ---------------------------------------------------------------------------
+# Move/roll primitives (natural-language command demo, 2026-07-20). Both
+# extend run_pick_sequence's existing stage-4-lift end state (die grasped,
+# lifted, gripper closed) with additional stages, using the SAME
+# DifferentialIKController/bounded-relative-step mechanism already proven
+# for pick (no new control mechanism - just more waypoints of the same
+# kind). See run_pick_sequence's `post_action` param.
+# ---------------------------------------------------------------------------
+
+# Move: carries the grasped die to a fixed table-frame (x, y) destination
+# and releases it there. Target chosen by reusing this repo's OWN validated
+# goal-region convention (tasks/franka/lift_env_cfg.py's CommandsCfg.object_pose
+# UniformPoseCommandCfg.Ranges: pos_x=(0.4,0.6), pos_y=(-0.25,0.25) - the
+# RL env's own randomized cube-goal sampling range for this exact robot+table),
+# rather than inventing a new region - y=0.22 sits inside that validated
+# range but clearly OUTSIDE the dice-layout sampling region (_REGION_Y=
+# (-0.15,0.15)), so a successful move is visually/measurably distinct from
+# "stayed roughly where it started". z is NOT reused from that range (the
+# goal command's pos_z=(0.25,0.5) is a mid-air reaching-reward target, not
+# a literal tabletop placement height) - move's own place height instead
+# reuses the SAME grasp-height math as the pick sequence itself (the table
+# is flat, so a die's resting height doesn't depend on xy).
+_MOVE_TARGET_XY_DEFAULT = (0.50, 0.22)
+_MOVE_XY_SUCCESS_TOL = 0.05  # m, final die xy must land within this of the commanded target
+
+# Roll: lifts the grasped die well above its normal pick-lift height, twists
+# the wrist a real angle while still gripped, then releases - physical
+# tumble-drop (Principal's brief: "probably more reliable and more
+# visually 'die-like' than trying to roll a die like a wheel" - these dice
+# are all irregular polyhedra, not discs/wheels, so a rolling-contact motion
+# has no consistent rolling axis across shapes; a drop-and-tumble is
+# shape-agnostic and only needs "high enough to bounce/reorient on impact",
+# which generalizes across d4/d8/d10/d12/d20 without any per-shape geometry).
+_ROLL_LIFT_HAND_Z = 0.45  # m, hand-frame z for the roll's pre-release height - 0.10m higher than _STAGE4_LIFT_HAND_Z's normal pick-lift height, giving genuine extra fall/bounce on release
+_ROLL_WRIST_TWIST_RAD = 1.570796  # rad (90deg), yaw twist applied to the held orientation before release - a visible "rotate the wrist" flourish in addition to the height-drop (the primary driver of a genuine face change); kept to 90 rather than a full 180 to stay well clear of the panda wrist joint's own limits (this file's own prior "funneled into a joint-limited branch" failure mode, see run_pick_sequence's canonical-orientation history above)
+_MAX_STEPS_ROLL_TWIST = 400
+_ROLL_SETTLE_SECONDS = 3.0  # s, sim-time to let the dropped die finish bouncing/tumbling before reading its final orientation - matches spawn_scene_and_settle's own _SETTLE_SECONDS convention
+_ROLL_MAX_XY_DRIFT_M = 0.15  # m, target die may travel further than "undisturbed" (_OTHER_DIE_MAX_XY_DRIFT) during a genuine tumble, but must still land on the table, not fly off it
+# Orientation-change threshold for "the top face genuinely changed":
+# regular/near-regular polyhedron face-to-face angles for this scene's five
+# shapes are all well above this - e.g. d20 (icosahedron) adjacent-face
+# angle ~=41.8deg is the SMALLEST among these five dice - so 0.35rad
+# (~20deg) is a conservative margin: comfortably below every shape's real
+# face-change angle, comfortably above ordinary settle jitter (a few
+# degrees) measured elsewhere in this file's own settle diagnostics.
+_ROLL_ORIENTATION_CHANGE_MIN_RAD = 0.35
+
 _D4_CONTACT_FORCE_THRESHOLD_N = 0.05  # N, minimum net contact force to count as "touching" - matches this repo's
 # own precedent for the AR4 gripper-vs-sphere case (scripts/classical_grasp_contact_check.py's
 # FORCE_THRESHOLD/BILATERAL_CONTACT_THRESHOLD), not a new value invented for this task.
@@ -1033,6 +1141,8 @@ def run_pick_sequence(
     choice: str,
     on_step: "callable | None" = None,
     results: dict | None = None,
+    post_action: str = "none",
+    move_target_xy: "tuple[float, float] | None" = None,
 ) -> dict:
     """Drives the Franka arm through a staged pick sequence (joint-space
     ready-to-descend prep -> Cartesian approach -> descend -> close -> lift)
@@ -1069,11 +1179,45 @@ def run_pick_sequence(
     default), so Gate G's already-validated mechanism/timing is completely
     unchanged by this parameter's existence.
 
-    `results` is accepted for call-site compatibility with the (now
-    removed) rung-0 d4 branch's own signature - no longer read by this
-    function at all (the common straight-down path never needed the die's
-    resting orientation; only `target_xy`/`grasp_height_m`, both
-    detector/measured-height-derived, are used)."""
+    `results` was originally accepted only for call-site compatibility with
+    the (now removed) rung-0 d4 branch's own signature and was, at that
+    time, no longer read anywhere in this function. As of the
+    move/roll-primitives addition (2026-07-20, dice-command-demo task) it
+    IS read again, but only by the `post_action == "roll"` branch below
+    (for `results[choice]["quat_wxyz"]`, the die's pre-grasp settled
+    orientation - the "before" side of the roll's own before/after
+    orientation-change check) - required (raises ValueError) when
+    `post_action == "roll"`, otherwise unused exactly as before.
+
+    `post_action` (default "none", fully backward-compatible with every
+    existing Gate G/V call site, which never pass this): after the
+    existing stage 4 lift (and, for d4, its post-lift contact
+    instrumentation) completes, optionally continues the SAME staged
+    bounded-relative-step sequence (no new control mechanism, more
+    waypoints of the same kind) into one of:
+      - "move": carries the grasped die horizontally to `move_target_xy`
+        (required, else raises ValueError) at the current lift height,
+        descends to the same grasp-height math already used for stage 2,
+        opens the gripper to release, retracts, then settles - see the
+        `_MOVE_*` module constants above for the target/tolerance
+        rationale.
+      - "roll": lifts higher than the normal pick-lift height
+        (`_ROLL_LIFT_HAND_Z`), twists the held orientation by
+        `_ROLL_WRIST_TWIST_RAD` about world Z (a non-fatal best-effort
+        waypoint - a `_StageTimeoutError` here is caught and logged, not
+        raised, since the drop itself - not the twist - is the primitive's
+        real reorientation mechanism), opens the gripper to drop/release,
+        retracts, then settles for `_ROLL_SETTLE_SECONDS` before reading
+        the die's final orientation and comparing it (via
+        `_quat_angle_diff_rad`) against its pre-grasp settled orientation
+        from `results`. See the `_ROLL_*` module constants above for the
+        height/twist/threshold rationale.
+    Both branches append their own raw before/after measurements into the
+    returned `waypoint_status` dict (die positions/orientations/computed
+    deltas) - NOT a final pass/fail verdict (that stays a caller-side,
+    GT-gated computation, same "GT ALLOWED HERE ONLY" separation this
+    file's own `_compute_verdict_table`/`_compute_move_verdict`/
+    `_compute_roll_verdict` already use for the plain pick case)."""
     robot = scene["robot"]
     sim_dt = sim.get_physics_dt()
 
@@ -1592,6 +1736,137 @@ def run_pick_sequence(
         waypoint_status["post_lift_right_finger_force_n"] = post_lift_right_force_n
         waypoint_status["post_lift_bilateral_contact"] = post_lift_bilateral_contact
 
+    # --- Move/roll primitives (2026-07-20, dice-command-demo task). Both
+    # continue from stage 4's already-lifted/gripped-closed state, reusing
+    # every closure/local already set up above (canonical_down_quat_w,
+    # _go_to_pose/_hold/_hand_target_xyz, open_target/close_target,
+    # hand_body_id, stage2_hand_z/stage4_hand_z) instead of recomputing any
+    # of it - see post_action's own docstring above for what each does and
+    # why. Fully additive: post_action="none" (every existing Gate G/V call
+    # site) skips both blocks entirely, byte-identical prior behavior. ---
+    if post_action == "move":
+        if move_target_xy is None:
+            raise ValueError("run_pick_sequence: post_action='move' requires move_target_xy")
+        die = scene[f"die_{choice}"]
+        move_before_pos = die.data.root_pos_w[0].cpu().numpy() - scene.env_origins[0].cpu().numpy()
+        print(
+            f"[MOVE] carrying '{choice}' from (x={move_before_pos[0]:.4f}, y={move_before_pos[1]:.4f}) "
+            f"to commanded target (x={move_target_xy[0]:.4f}, y={move_target_xy[1]:.4f})"
+        )
+
+        def _move_target_xyz(hand_z: float) -> torch.Tensor:
+            return torch.tensor([move_target_xy[0], move_target_xy[1], hand_z], device=robot.device, dtype=torch.float32)
+
+        waypoint_status["stage5_carry"] = _go_to_pose(
+            _move_target_xyz(stage4_hand_z), canonical_down_quat_w, close_target, "stage5_carry",
+            max_steps=_MAX_STEPS_APPROACH, require_rot=True,
+        )
+        waypoint_status["stage6_descend_place"] = _go_to_pose(
+            _move_target_xyz(stage2_hand_z), canonical_down_quat_w, close_target, "stage6_descend_place",
+            max_steps=_MAX_STEPS_DESCEND, require_rot=True, pos_tol=_WAYPOINT_TOL,
+        )
+        _hold(_move_target_xyz(stage2_hand_z), canonical_down_quat_w, open_target, "stage7_release", _GRIPPER_CLOSE_HOLD_STEPS)
+        waypoint_status["stage8_retract"] = _go_to_pose(
+            _move_target_xyz(stage4_hand_z), canonical_down_quat_w, open_target, "stage8_retract",
+            max_steps=_MAX_STEPS_LIFT, require_rot=True,
+        )
+        move_settle_steps = int(3.0 / sim_dt)  # s, matches spawn_scene_and_settle's own drop-settle order of magnitude
+        for _ in range(move_settle_steps):
+            scene.write_data_to_sim()
+            sim.step()
+            scene.update(sim_dt)
+            if on_step is not None:
+                on_step()
+
+        move_after_pos = die.data.root_pos_w[0].cpu().numpy() - scene.env_origins[0].cpu().numpy()
+        move_xy_error_m = float(np.hypot(move_after_pos[0] - move_target_xy[0], move_after_pos[1] - move_target_xy[1]))
+        waypoint_status["move_target_xy"] = list(move_target_xy)
+        waypoint_status["move_before_xyz"] = move_before_pos.tolist()
+        waypoint_status["move_after_xyz"] = move_after_pos.tolist()
+        waypoint_status["move_xy_error_m"] = move_xy_error_m
+        print(
+            f"[MOVE] final '{choice}' pos={np.round(move_after_pos, 4)} target_xy={move_target_xy} "
+            f"xy_error={move_xy_error_m * 1000:.1f}mm"
+        )
+
+    elif post_action == "roll":
+        if results is None:
+            raise ValueError("run_pick_sequence: post_action='roll' requires results (needs the die's pre-grasp settled quat)")
+        die = scene[f"die_{choice}"]
+        roll_before_quat = np.array(results[choice]["quat_wxyz"])  # pre-grasp settled orientation (GT, from spawn_scene_and_settle)
+        roll_before_xy = (float(results[choice]["x"]), float(results[choice]["y"]))
+        print(
+            f"[ROLL] rolling '{choice}': lift to {_ROLL_LIFT_HAND_Z * 1000:.0f}mm hand-z, "
+            f"twist {_ROLL_WRIST_TWIST_RAD:.3f}rad, drop, settle {_ROLL_SETTLE_SECONDS}s"
+        )
+
+        waypoint_status["stage5_roll_lift"] = _go_to_pose(
+            _hand_target_xyz(_ROLL_LIFT_HAND_Z), canonical_down_quat_w, close_target, "stage5_roll_lift",
+            max_steps=_MAX_STEPS_LIFT, require_rot=True,
+        )
+
+        # Twist quat: canonical straight-down orientation further yawed by
+        # _ROLL_WRIST_TWIST_RAD about world Z, computed via this file's own
+        # rotation-matrix helpers (R_twist = R_yaw @ R_down - apply the
+        # straight-down rotation first, then further rotate by yaw in the
+        # WORLD frame, matching how these waypoints are already specified
+        # in world/root frame throughout this function).
+        r_yaw = np.array(
+            [
+                [np.cos(_ROLL_WRIST_TWIST_RAD), -np.sin(_ROLL_WRIST_TWIST_RAD), 0.0],
+                [np.sin(_ROLL_WRIST_TWIST_RAD), np.cos(_ROLL_WRIST_TWIST_RAD), 0.0],
+                [0.0, 0.0, 1.0],
+            ]
+        )
+        r_down = _quat_to_rot_matrix(np.array([0.0, 1.0, 0.0, 0.0]))
+        twisted_quat_np = _rot_matrix_to_quat(r_yaw @ r_down)
+        twisted_quat_w = torch.tensor(twisted_quat_np, device=robot.device, dtype=torch.float32)
+        try:
+            waypoint_status["stage6_wrist_twist"] = _go_to_pose(
+                _hand_target_xyz(_ROLL_LIFT_HAND_Z), twisted_quat_w, close_target, "stage6_wrist_twist",
+                max_steps=_MAX_STEPS_ROLL_TWIST, require_rot=True,
+            )
+        except _StageTimeoutError as e:
+            # Non-fatal (see post_action's docstring): the twist is a
+            # cosmetic flourish, not the roll's real reorientation
+            # mechanism (the height-drop is) - proceed to release with
+            # whatever partial twist was reached rather than aborting the
+            # whole primitive.
+            print(f"[ROLL] stage6_wrist_twist did not fully converge (non-fatal, drop still proceeds): {e}")
+            waypoint_status["stage6_wrist_twist"] = False
+
+        _hold(_hand_target_xyz(_ROLL_LIFT_HAND_Z), twisted_quat_w, open_target, "stage7_release_drop", _GRIPPER_CLOSE_HOLD_STEPS)
+        waypoint_status["stage8_retract"] = _go_to_pose(
+            _hand_target_xyz(_STAGE1_HAND_Z), canonical_down_quat_w, open_target, "stage8_retract",
+            max_steps=_MAX_STEPS_LIFT, require_rot=True,
+        )
+
+        roll_settle_steps = int(_ROLL_SETTLE_SECONDS / sim_dt)
+        for _ in range(roll_settle_steps):
+            scene.write_data_to_sim()
+            sim.step()
+            scene.update(sim_dt)
+            if on_step is not None:
+                on_step()
+
+        roll_after_pos = die.data.root_pos_w[0].cpu().numpy() - scene.env_origins[0].cpu().numpy()
+        roll_after_quat = die.data.root_quat_w[0].cpu().numpy()
+        orientation_change_rad = _quat_angle_diff_rad(roll_before_quat, roll_after_quat)
+        roll_xy_drift_m = float(np.hypot(roll_after_pos[0] - roll_before_xy[0], roll_after_pos[1] - roll_before_xy[1]))
+        waypoint_status["roll_before_quat_wxyz"] = roll_before_quat.tolist()
+        waypoint_status["roll_after_quat_wxyz"] = roll_after_quat.tolist()
+        waypoint_status["roll_orientation_change_rad"] = orientation_change_rad
+        waypoint_status["roll_after_xyz"] = roll_after_pos.tolist()
+        waypoint_status["roll_xy_drift_m"] = roll_xy_drift_m
+        print(
+            f"[ROLL] before_quat_wxyz={np.round(roll_before_quat, 4)} after_quat_wxyz={np.round(roll_after_quat, 4)} "
+            f"orientation_change={orientation_change_rad:.3f}rad ({np.degrees(orientation_change_rad):.1f}deg) "
+            f"xy_drift={roll_xy_drift_m * 1000:.1f}mm final_pos={np.round(roll_after_pos, 4)}"
+        )
+
+    elif post_action != "none":
+        raise ValueError(f"run_pick_sequence: unknown post_action={post_action!r} (expected 'none'/'move'/'roll')")
+
     return waypoint_status
 
 
@@ -1646,6 +1921,98 @@ def _compute_verdict_table(scene: InteractiveScene, results: dict, choice: str) 
             }
         )
     return verdict_table, all_ok
+
+
+def _other_dice_status(scene: InteractiveScene, results: dict, choice: str) -> tuple[list[dict], bool]:
+    """Per-die "undisturbed" check for every die EXCEPT `choice` - the same
+    xy-drift-AND-z-band definition `_compute_verdict_table` already uses
+    for its own non-target rows, factored out here so
+    `_compute_move_verdict`/`_compute_roll_verdict` (added for the
+    dice-command-demo task, 2026-07-20) can't silently diverge from it.
+    `_compute_verdict_table` itself is deliberately left untouched/
+    unrefactored (Gate G/V stay byte-identical, zero risk to already-
+    validated behavior) - this helper is new, additive-only."""
+    rows = []
+    all_ok = True
+    for die_type in DIE_TYPES:
+        if die_type == choice:
+            continue
+        die = scene[f"die_{die_type}"]
+        pos = die.data.root_pos_w[0].cpu().numpy() - scene.env_origins[0].cpu().numpy()
+        x_now, y_now, z_now = float(pos[0]), float(pos[1]), float(pos[2])
+        x_before, y_before = results[die_type]["x"], results[die_type]["y"]
+        xy_drift = float(np.hypot(x_now - x_before, y_now - y_before))
+        ok = (xy_drift < _OTHER_DIE_MAX_XY_DRIFT) and (_OTHER_DIE_MIN_Z <= z_now < _OTHER_DIE_MAX_Z)
+        if not ok:
+            all_ok = False
+        rows.append({"die": die_type, "z_now_m": z_now, "xy_drift_m": xy_drift, "ok": ok})
+    return rows, all_ok
+
+
+def _compute_move_verdict(scene: InteractiveScene, results: dict, choice: str, waypoint_status: dict) -> tuple[dict, bool]:
+    """Post-move GT verdict (GT ALLOWED HERE ONLY, same exception
+    `_compute_verdict_table` already documents for the plain pick case).
+    Target die succeeds if its final xy lands within `_MOVE_XY_SUCCESS_TOL`
+    of the commanded `move_target_xy` AND its final z is still a plausible
+    on-table resting height (reuses the same [_Z_FLOOR, _Z_CEIL) band
+    `spawn_scene_and_settle` already validates against, rather than
+    inventing a new bound). Every other die must stay `_other_dice_status`-
+    undisturbed. Reads `move_target_xy`/`move_after_xyz`/`move_xy_error_m`
+    from `waypoint_status` (populated by run_pick_sequence's own
+    post_action="move" branch) rather than re-deriving them."""
+    move_after_xyz = waypoint_status["move_after_xyz"]
+    z_now = float(move_after_xyz[2])
+    xy_error_m = float(waypoint_status["move_xy_error_m"])
+    target_ok = (xy_error_m < _MOVE_XY_SUCCESS_TOL) and (_Z_FLOOR <= z_now < _Z_CEIL)
+    other_rows, other_ok = _other_dice_status(scene, results, choice)
+    verdict = {
+        "die": choice,
+        "move_target_xy": waypoint_status["move_target_xy"],
+        "move_after_xyz": move_after_xyz,
+        "move_xy_error_m": xy_error_m,
+        "target_ok": target_ok,
+        "other_dice": other_rows,
+        "other_dice_ok": other_ok,
+    }
+    return verdict, bool(target_ok and other_ok)
+
+
+def _compute_roll_verdict(scene: InteractiveScene, results: dict, choice: str, waypoint_status: dict) -> tuple[dict, bool]:
+    """Post-roll GT verdict (GT ALLOWED HERE ONLY, same exception as
+    above). Target die succeeds if (a) it's still on the table
+    ([_Z_FLOOR, _Z_CEIL) band, same as move's own check), (b) it didn't
+    travel further than `_ROLL_MAX_XY_DRIFT_M` from its pre-grasp settled
+    position (a genuine tumble, not launched across the table), and (c)
+    its measured orientation-change (`roll_orientation_change_rad`,
+    computed by run_pick_sequence's own post_action="roll" branch via
+    `_quat_angle_diff_rad` against the die's pre-grasp settled quat from
+    `results`) exceeds `_ROLL_ORIENTATION_CHANGE_MIN_RAD` - the actual
+    "the visible top face changed" check the brief asks for, not just "the
+    action ran without erroring". Every other die must stay
+    `_other_dice_status`-undisturbed."""
+    roll_after_xyz = waypoint_status["roll_after_xyz"]
+    z_now = float(roll_after_xyz[2])
+    xy_drift_m = float(waypoint_status["roll_xy_drift_m"])
+    orientation_change_rad = float(waypoint_status["roll_orientation_change_rad"])
+    on_table_ok = _Z_FLOOR <= z_now < _Z_CEIL
+    xy_drift_ok = xy_drift_m < _ROLL_MAX_XY_DRIFT_M
+    orientation_ok = orientation_change_rad >= _ROLL_ORIENTATION_CHANGE_MIN_RAD
+    target_ok = on_table_ok and xy_drift_ok and orientation_ok
+    other_rows, other_ok = _other_dice_status(scene, results, choice)
+    verdict = {
+        "die": choice,
+        "roll_after_xyz": roll_after_xyz,
+        "roll_xy_drift_m": xy_drift_m,
+        "roll_orientation_change_rad": orientation_change_rad,
+        "roll_orientation_change_deg": float(np.degrees(orientation_change_rad)),
+        "on_table_ok": on_table_ok,
+        "xy_drift_ok": xy_drift_ok,
+        "orientation_ok": orientation_ok,
+        "target_ok": target_ok,
+        "other_dice": other_rows,
+        "other_dice_ok": other_ok,
+    }
+    return verdict, bool(target_ok and other_ok)
 
 
 def run_gate_g() -> None:
@@ -2142,6 +2509,168 @@ def run_gate_v() -> None:
         print(f"[GATE V] *** FAILED for choice={choice} - see verdict table above/verdict_{choice}.json ***")
 
 
+def run_gate_command() -> None:
+    """Gate COMMAND: natural-language command interface (dice-command-demo
+    task, 2026-07-20). Parses --command into {action, target_shape} via
+    tasks/franka/command_parser.py's rule-based parser (see that module's
+    own docstring for why rule-based, not an LLM call - no LLM API access
+    confirmed available in this environment), then mirrors Gate V's flow
+    (spawn/settle -> detector subprocess -> target select -> video-recorded
+    run_pick_sequence -> GT verdict) with two differences from Gate V: (1)
+    the commanded die comes from the PARSED command, not --choice, and (2)
+    run_pick_sequence is called with post_action=<parsed action> instead of
+    plain pick-only, so the verdict computed/saved is
+    `_compute_move_verdict`/`_compute_roll_verdict` (the actual
+    physical-state-change checks those primitives need), not
+    `_compute_verdict_table`'s plain lift check. No --gt-xy-bypass support
+    here (unlike Gate G/V) - this gate's whole point is exercising the real
+    perception-driven command pipeline end to end, so a detection miss
+    fails loudly, same as Gate G/V's own non-bypass default."""
+    if not args_cli.command:
+        raise RuntimeError("--gate command requires --command \"<natural language command>\", e.g. --command \"pick up and roll the d20\"")
+    parsed = parse_dice_command(args_cli.command)
+    action = parsed["action"]
+    choice = parsed["target_shape"]
+    print(f"[GATE COMMAND] parsed --command={args_cli.command!r} -> action={action!r} target_shape={choice!r}")
+    if choice not in DIE_TYPES:
+        raise RuntimeError(f"Parsed target_shape '{choice}' is not one of the physical dice in this scene: {DIE_TYPES}")
+
+    move_target_xy = (
+        (args_cli.move_target_x, args_cli.move_target_y)
+        if args_cli.move_target_x is not None and args_cli.move_target_y is not None
+        else _MOVE_TARGET_XY_DEFAULT
+    )
+
+    out_dir = GATE_COMMAND_DIR
+    os.makedirs(out_dir, exist_ok=True)
+
+    sim, scene, positions, results = spawn_scene_and_settle(out_dir, args_cli.seed, colored_dice=False, light_scale=1.0)
+
+    detection_output = run_detector_subprocess(out_dir)
+    detections = detection_output["detections"]
+    print(f"[GATE COMMAND] perception subprocess returned {len(detections)} detections:")
+    for det in detections:
+        print(f"  class={det['class']:<8} conf={det['confidence']:.3f} world_pos={det['world_pos']}")
+
+    # Fails loudly (RuntimeError) if the commanded die isn't detected - no
+    # bypass for this gate, see docstring.
+    target_det = select_target_detection(detections, choice)
+    det_x, det_y, det_z = target_det["world_pos"]
+    print(
+        f"[GATE COMMAND] target detection for '{choice}': class={target_det['class']} "
+        f"conf={target_det['confidence']:.3f} world_pos=({det_x:.4f}, {det_y:.4f}, {det_z:.4f})"
+    )
+    target_xy = (det_x, det_y)
+    grasp_height_m = _die_grasp_height_m(choice)
+    print(f"[GATE COMMAND] grasp_height(measured)={grasp_height_m * 1000:.1f}mm move_target_xy={move_target_xy}")
+
+    # --- Video capture setup (byte-for-byte the same pattern as run_gate_v - see that function's own comments for the full rationale) ---
+    camera = scene["arm_camera"]
+    sim_dt = sim.get_physics_dt()
+    video_frames: list[np.ndarray] = []
+    step_counter = [0]
+
+    def _on_step() -> None:
+        step_counter[0] += 1
+        if step_counter[0] % _VIDEO_FRAME_STRIDE == 0:
+            rgb = camera.data.output["rgb"][0, ..., :3].cpu().numpy().astype(np.uint8)
+            video_frames.append(rgb)
+
+    pre_pick_steps = int(_PRE_PICK_SECONDS / sim_dt)
+    for _ in range(pre_pick_steps):
+        scene.write_data_to_sim()
+        sim.step()
+        scene.update(sim_dt)
+        _on_step()
+    pre_pick_frame_count = len(video_frames)
+    print(f"[GATE COMMAND] captured {pre_pick_frame_count} pre-pick idle frames ({_PRE_PICK_SECONDS}s)")
+
+    pick_sequence_error = None
+    try:
+        waypoint_status = run_pick_sequence(
+            sim, scene, target_xy, grasp_height_m, choice, on_step=_on_step, results=results,
+            post_action=action, move_target_xy=move_target_xy if action == "move" else None,
+        )
+    except _StageTimeoutError as e:
+        pick_sequence_error = str(e)
+        waypoint_status = {"error": pick_sequence_error}
+        print(f"[GATE COMMAND] *** sequence FAILED for action={action} choice={choice}: stage timeout - {pick_sequence_error} ***")
+
+    dwell_steps = int(_POST_LIFT_DWELL_SECONDS / sim_dt)
+    for _ in range(dwell_steps):
+        scene.write_data_to_sim()
+        sim.step()
+        scene.update(sim_dt)
+        _on_step()
+    print(f"[GATE COMMAND] captured post-action dwell ({_POST_LIFT_DWELL_SECONDS}s); total frames so far={len(video_frames)}")
+
+    for _ in range(20):
+        scene.write_data_to_sim()
+        sim.step()
+        scene.update(sim_dt)
+    rgb_post = camera.data.output["rgb"][0, ..., :3].cpu().numpy().astype(np.uint8)
+    post_action_path = os.path.join(out_dir, f"post_{action}_{choice}.png")
+    Image.fromarray(rgb_post).save(post_action_path)
+    print(f"[GATE COMMAND] saved post-action frame: {post_action_path}")
+
+    if pick_sequence_error is not None:
+        verdict = None
+        all_ok = False
+    elif action == "move":
+        verdict, all_ok = _compute_move_verdict(scene, results, choice, waypoint_status)
+    elif action == "roll":
+        verdict, all_ok = _compute_roll_verdict(scene, results, choice, waypoint_status)
+    else:
+        raise RuntimeError(f"unreachable: parsed action {action!r} not in {{'move', 'roll'}}")
+
+    print(f"[GATE COMMAND] verdict (action={action} die={choice}): {'PASS' if all_ok else 'FAIL'}")
+    print(json.dumps(verdict, indent=2))
+
+    overlay_font = _load_overlay_font()
+    for i in range(pre_pick_frame_count):
+        video_frames[i] = _draw_video_overlay_frame(
+            video_frames[i], choice, target_det["class"], target_det["confidence"], overlay_font
+        )
+    print(f"[GATE COMMAND] drew detection label on {pre_pick_frame_count} opening frames")
+
+    fps = max(1, round(1.0 / (sim_dt * _VIDEO_FRAME_STRIDE)))
+    video_path = os.path.join(out_dir, f"dice_command_{action}_{choice}.mp4")
+    writer = imageio.get_writer(video_path, fps=fps, codec="libx264")
+    for frame in video_frames:
+        writer.append_data(frame)
+    writer.close()
+    print(
+        f"[GATE COMMAND] wrote video: {video_path} "
+        f"({len(video_frames)} frames @ {fps}fps, ~{len(video_frames) / fps:.1f}s)"
+    )
+
+    result = {
+        "command": args_cli.command,
+        "parsed_action": action,
+        "parsed_target_shape": choice,
+        "seed": args_cli.seed,
+        "detected_class": target_det["class"],
+        "detection_confidence": target_det["confidence"],
+        "detector_world_pos": [det_x, det_y, det_z],
+        "grasp_height_m": grasp_height_m,
+        "waypoint_status": waypoint_status,
+        "pick_sequence_error": pick_sequence_error,
+        "verdict": verdict,
+        "gate_command_pass": bool(all_ok),
+        "video_path": video_path,
+        "num_video_frames": len(video_frames),
+        "video_fps": fps,
+    }
+    verdict_path = os.path.join(out_dir, f"verdict_{action}_{choice}.json")
+    with open(verdict_path, "w") as f:
+        json.dump(result, f, indent=2)
+    print(f"[GATE COMMAND] saved verdict: {verdict_path}")
+    print("[GATE COMMAND] DONE")
+
+    if not all_ok:
+        print(f"[GATE COMMAND] *** FAILED for action={action} choice={choice} - see verdict_{action}_{choice}.json ***")
+
+
 def main() -> None:
     if args_cli.gate == "a":
         run_gate_a()
@@ -2149,8 +2678,10 @@ def main() -> None:
         run_gate_g()
     elif args_cli.gate == "v":
         run_gate_v()
+    elif args_cli.gate == "command":
+        run_gate_command()
     else:
-        sys.exit(f"--gate {args_cli.gate} not implemented in this script (only 'a', 'g', and 'v' are).")
+        sys.exit(f"--gate {args_cli.gate} not implemented in this script (only 'a', 'g', 'v', and 'command' are).")
 
 
 if __name__ == "__main__":

@@ -33,7 +33,13 @@ from isaaclab.sim.spawners.wrappers import MultiAssetSpawnerCfg
 from isaaclab.utils import configclass
 
 from . import mdp
-from .lift_env_cfg import EventCfg, FrankaLiftEnvCfg, FrankaLiftSceneCfg, TargetSelectionObservationsCfg
+from .lift_env_cfg import (
+    EventCfg,
+    ExplorationBonusRewardsCfg,
+    FrankaLiftEnvCfg,
+    FrankaLiftSceneCfg,
+    TargetSelectionObservationsCfg,
+)
 
 _D20_USD = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
@@ -687,6 +693,41 @@ class FrankaDieLiftJointD8BigEnvCfg(FrankaDieLiftJointHeavyEnvCfg):
 @configclass
 class FrankaDieLiftJointD8BigEnvCfg_PLAY(FrankaDieLiftJointD8BigEnvCfg):
     """Smaller, non-corrupted-observation variant for eval/play."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.scene.num_envs = 50
+        self.scene.env_spacing = 2.5
+        self.observations.policy.enable_corruption = False
+
+
+@configclass
+class FrankaDieLiftJointD8BigExplorationBonusEnvCfg(FrankaDieLiftJointD8BigEnvCfg):
+    """H1 (GRM D=1 exploration-bonus) test bed - Task 2 of
+    docs/superpowers/plans/2026-07-19-exploration-bonus-grasp-discovery-
+    implementation.md; spec: docs/superpowers/specs/2026-07-19-exploration-
+    bonus-grasp-discovery-design.md. Isolates exactly ONE variable against
+    `FrankaDieLiftJointD8BigEnvCfg` - the reward function - by overriding
+    ONLY the `rewards` field (`ExplorationBonusRewardsCfg`, lift_env_cfg.py:
+    RewardsCfg + the two new GRM D=1 exploration-bonus terms). Everything
+    else (scene/object scale/mass, 41-dim observations, IK-rel actions,
+    reset events, terminations, episode length, PPO recipe) is inherited
+    BYTE-IDENTICAL from `FrankaDieLiftJointD8BigEnvCfg`, per the spec's own
+    "isolate one variable" design and this plan's own explicit "do not
+    modify FrankaDieLiftJointD8BigEnvCfg in place" global constraint - the
+    concurrently-running d8/d10 demo-warmstart plan's own use of the plain,
+    unmodified `FrankaDieLiftJointD8BigEnvCfg` is completely unaffected by
+    this class's existence."""
+
+    rewards: ExplorationBonusRewardsCfg = ExplorationBonusRewardsCfg()
+
+
+@configclass
+class FrankaDieLiftJointD8BigExplorationBonusEnvCfg_PLAY(FrankaDieLiftJointD8BigExplorationBonusEnvCfg):
+    """Smaller, non-corrupted-observation variant for eval/play (same
+    num_envs=50/env_spacing=2.5/enable_corruption=False pattern as every
+    other _PLAY class in this file, e.g. FrankaDieLiftJointD8BigEnvCfg_PLAY
+    immediately above)."""
 
     def __post_init__(self) -> None:
         super().__post_init__()

@@ -304,6 +304,60 @@ class RewardsCfg:
     joint_vel = RewTerm(func=mdp.joint_vel_l2, weight=-1e-4, params={"asset_cfg": SceneEntityCfg("robot")})
 
 
+# Shared params for both new exploration-bonus reward terms (Task 2,
+# docs/superpowers/plans/2026-07-19-exploration-bonus-grasp-discovery-
+# implementation.md; spec: docs/superpowers/specs/2026-07-19-exploration-
+# bonus-grasp-discovery-design.md). Defined ONCE, referenced by both
+# RewTerm.params below - never copy-pasted - so term 1's own F_t and term
+# 2's own redundant recomputation of F_t (needed to compute Correction_t,
+# see mdp.GripperClosureAttemptBonusCorrection) can never silently diverge
+# on these three values. Implementer-set starting values (spec's own
+# "Global constraints": NOT tuned by this experiment - a Tier 2 hillclimb
+# candidate once/if this mechanism is validated).
+_EXPLORATION_BONUS_PARAMS = {"w_attempt": 1.0, "k": 1.0, "std_gate": 0.05}
+# MUST equal FrankaLiftPPORunnerCfg.algorithm.gamma exactly
+# (tasks/franka/agents/rsl_rl_ppo_cfg.py:50, `gamma=0.98`) - GRM's Theorem 1
+# is a telescoping-sum identity over the SAME discount factor the agent's
+# own returns/advantages are computed with; a mismatched gamma here breaks
+# the policy-invariance guarantee this mechanism exists to provide, silently
+# (plan's own "Global Constraints").
+_PPO_GAMMA = 0.98
+
+
+@configclass
+class ExplorationBonusRewardsCfg(RewardsCfg):
+    """`RewardsCfg` + two new, additive reward terms implementing GRM D=1
+    (Forbes et al., arXiv:2410.12197/2505.12611), a formally policy-invariant
+    action-dependent exploration bonus for gripper-closure attempts near the
+    object (Task 2 of the implementation plan above; H1 of the design spec).
+    Deliberately a NEW class, NOT terms added directly to the shared base
+    `RewardsCfg` - mirrors `TargetSelectionObservationsCfg`'s own established
+    "new subclass, base untouched" precedent immediately above, so the
+    concurrently-running d8/d10 demo-warmstart plan's own use of the plain,
+    unmodified `RewardsCfg`/`FrankaDieLiftJointD8BigEnvCfg` stays completely
+    unaffected (plan's own "Global Constraints").
+
+    `gripper_closure_attempt_bonus` (term 1, mdp.py) is the raw, stateless
+    F_t. `gripper_closure_attempt_bonus_correction` (term 2, mdp.py's
+    `GripperClosureAttemptBonusCorrection`, the ONE new stateful mechanism
+    this plan introduces) is NOT the spec's own F'_t verbatim - it is
+    Correction_t := F'_t - F_t, so that Term1 + Term2 == F'_t once both are
+    summed by the RewardManager (see exploration_bonus_reward.py's own module
+    docstring for the full double-counting-avoidance derivation). Both
+    weights are 1.0 (the correction term's own "weight" is a manager-level
+    multiplier on Correction_t, not a second application of w_attempt -
+    w_attempt already lives inside _EXPLORATION_BONUS_PARAMS, consumed by
+    both terms identically)."""
+
+    gripper_closure_attempt_bonus = RewTerm(func=mdp.gripper_closure_attempt_bonus, params=_EXPLORATION_BONUS_PARAMS, weight=1.0)
+
+    gripper_closure_attempt_bonus_correction = RewTerm(
+        func=mdp.GripperClosureAttemptBonusCorrection,
+        params={**_EXPLORATION_BONUS_PARAMS, "gamma": _PPO_GAMMA},
+        weight=1.0,
+    )
+
+
 @configclass
 class TerminationsCfg:
     """time_out + object_dropping only - no success-based early termination (matches the stock

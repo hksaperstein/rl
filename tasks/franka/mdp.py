@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING
 import torch
 
 from isaaclab.assets import RigidObject
-from isaaclab.managers import SceneEntityCfg
+from isaaclab.managers import ManagerTermBase, SceneEntityCfg
 from isaaclab.sensors import FrameTransformer
 from isaaclab.utils.math import combine_frame_transforms, subtract_frame_transforms
 
@@ -43,6 +43,10 @@ from isaaclab.utils.math import combine_frame_transforms, subtract_frame_transfo
 from isaaclab.envs.mdp import *  # noqa: F401, F403
 
 from .distractor_observations import distractor_distance_summary as _distractor_distance_summary_pure
+from .exploration_bonus_reward import (
+    gripper_closure_attempt_bonus_correction as _gripper_closure_attempt_bonus_correction_pure,
+)
+from .exploration_bonus_reward import gripper_closure_attempt_bonus_raw as _gripper_closure_attempt_bonus_raw_pure
 from .lift_reward import lifting_object_reward, object_goal_distance_reward, reaching_object_reward
 from .shape_observations import (
     geometry_descriptor_broadcast,
@@ -200,3 +204,204 @@ def distractor_distance_summary(
         distractor_2.data.root_pos_w[:, :3],
         active_distractor_count,
     )
+
+
+# Object-dropping termination threshold, reused BY REFERENCE (not re-typed)
+# from lift_env_cfg.py's own TerminationsCfg.object_dropping
+# (`params={"minimum_height": -0.05, ...}`, lift_env_cfg.py:315) - both
+# gripper_closure_attempt_bonus_correction's own independent is_last_step
+# recomputation below and the real TerminationsCfg entry must use the exact
+# same constant, per Task 2's own design note (avoid depending on
+# env.termination_manager's own buffers having run yet, by recomputing the
+# same predicate self-contained instead of importing lift_env_cfg's own
+# TerminationsCfg, which would be a circular import - lift_env_cfg.py
+# imports this module).
+_OBJECT_DROPPING_MINIMUM_HEIGHT = -0.05
+
+
+def gripper_closure_attempt_bonus(
+    env: ManagerBasedRLEnv,
+    w_attempt: float,
+    k: float,
+    std_gate: float,
+    object_cfg: SceneEntityCfg = SceneEntityCfg("object"),
+    ee_frame_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame"),
+    action_term_name: str = "gripper_action",
+) -> torch.Tensor:
+    """Reward term 1 (`gripper_closure_attempt_bonus` in ExplorationBonusRewardsCfg,
+    lift_env_cfg.py): the raw, action-dependent F_t (GRM D=1 exploration
+    bonus, Task 2 of docs/superpowers/plans/2026-07-19-exploration-bonus-
+    grasp-discovery-implementation.md). Plain stateless function - this term
+    has zero history dependence (see exploration_bonus_reward.py's own module
+    docstring); the ONE new stateful mechanism this plan introduces is term
+    2, GripperClosureAttemptBonusCorrection below.
+
+    `env.action_manager.get_term(action_term_name).raw_actions` genuinely
+    exists as a real (num_envs, 1)-shape tensor property (confirmed by direct
+    source read, isaaclab/envs/mdp/actions/binary_joint_actions.py:63,108-109
+    - `self._raw_actions = torch.zeros(self.num_envs, 1, ...)`, `raw_actions`
+    property returns it), set via `self._raw_actions[:] = actions` inside
+    `process_actions()` (binary_joint_actions.py:130), which
+    ManagerBasedRLEnv.step() calls at the very start of step() via
+    `action_manager.process_action()` (manager_based_rl_env.py:174) - i.e.
+    this step's own action, unchanged for the rest of step(), so its value at
+    reward-computation time is bit-identical to
+    scripts/_diag_gripper_lowpass_check.py's own pre-step() `actions[:, -1]`
+    capture (direct empirical cross-check, not just an attribute-existence
+    check: `FrankaLiftPPORunnerCfg` sets no `clip_actions` field, defaulting
+    to `None` per `RslRlOnPolicyRunnerCfg`'s own default, and
+    `RslRlVecEnvWrapper.step()` only clamps actions when
+    `self.clip_actions is not None` (isaaclab_rl/rsl_rl/vecenv_wrapper.py:
+    152-155) - so no clipping occurs between the diagnostic script's captured
+    value and what `.raw_actions` stores for this project's actual runner
+    config, confirmed by direct source read of both files on the desktop
+    Isaac Lab install, 2026-07-19).
+    """
+    gripper_term = env.action_manager.get_term(action_term_name)
+    raw_gripper_action = gripper_term.raw_actions[:, 0]
+    object_: RigidObject = env.scene[object_cfg.name]
+    ee_frame: FrameTransformer = env.scene[ee_frame_cfg.name]
+    cube_pos_w = object_.data.root_pos_w
+    ee_pos_w = ee_frame.data.target_pos_w[..., 0, :]
+    return _gripper_closure_attempt_bonus_raw_pure(raw_gripper_action, cube_pos_w, ee_pos_w, w_attempt, k, std_gate)
+
+
+class GripperClosureAttemptBonusCorrection(ManagerTermBase):
+    """Reward term 2 (`gripper_closure_attempt_bonus_correction` in
+    ExplorationBonusRewardsCfg, lift_env_cfg.py): the GRM D=1 correction
+    term, Correction_t = F'_t - F_t (see exploration_bonus_reward.py's own
+    module docstring for the full derivation). Task 2's ONE new stateful
+    mechanism (docs/superpowers/plans/2026-07-19-exploration-bonus-grasp-
+    discovery-implementation.md) - owns one persistent per-env scalar buffer
+    (`self._prev_raw`, the previous control step's raw bonus F_{t-1}),
+    something no other reward term in this codebase needs.
+
+    **Task 2 Step 1's mandatory empirical/source-read confirmation, recorded
+    here per the plan's own requirement (not assumed from the plan's own
+    draft, which turned out to have gotten one of the two comparisons wrong
+    - see below):**
+
+    (a) Class-based (`ManagerTermBase`-derived) reward terms are supported
+    and reset automatically. Direct source read,
+    isaaclab/managers/manager_base.py:412-414 (`_prepare_terms`): a
+    class-valued `term_cfg.func` is instantiated once as
+    `term_cfg.func = term_cfg.func(cfg=term_cfg, env=self._env)` - i.e.
+    `__init__(self, cfg, env)` below receives the term's own `RewardTermCfg`
+    as `cfg` (not a bare `ManagerTermBaseCfg`) and the live env as `env`.
+    isaaclab/managers/reward_manager.py:244-246 (`_prepare_terms`) appends
+    every such term to `self._class_term_cfgs`; reward_manager.py:122-124
+    (`RewardManager.reset`) then calls `term_cfg.func.reset(env_ids=env_ids)`
+    for every one of those terms whenever `RewardManager.reset(env_ids)` is
+    invoked - which `ManagerBasedRLEnv._reset_idx` triggers for exactly the
+    envs that terminated this step (per (b) below), matching this class's own
+    "reset self._prev_raw to 0 on episode reset" requirement automatically,
+    with no extra wiring needed beyond inheriting from ManagerTermBase.
+
+    (b) `episode_length_buf`'s value at reward-computation time - direct
+    source read, isaaclab/envs/manager_based_rl_env.py:154-236 (`step`):
+    the literal order of operations is
+    `episode_length_buf += 1` (line 202) -> `termination_manager.compute()`
+    (line 205) -> `reward_manager.compute()` (line 209) -> only THEN,
+    `_reset_idx()` for terminated envs (line 222), which sets
+    `episode_length_buf[env_ids] = 0` (manager_based_rl_env.py:394). So at
+    reward-computation time, `episode_length_buf` has ALREADY been
+    incremented for this step but has NOT yet been reset - i.e. it holds
+    `t + 1` (1-indexed step count), not `t` (0-indexed), for both boundaries:
+    a fresh episode's first control step (`t=0` in the spec's own indexing)
+    reads `episode_length_buf == 1`, not `0`; the episode's last control step
+    (`t=N-1`) reads `episode_length_buf == N == max_episode_length`, not
+    `N-1`. This project's own existing `time_out` termination term
+    independently confirms the same post-increment convention already:
+    `env.episode_length_buf >= env.max_episode_length`
+    (isaaclab/envs/mdp/terminations.py:30-32), read by
+    `termination_manager.compute()` one line before reward computation, using
+    a plain `>=` with no `+1` - if `episode_length_buf` were pre-increment at
+    that point, this project's OWN time_out term would already be off by one
+    every single episode, which it is not (the asset-bisect/multi-die arc's
+    episodes have always ended at exactly the configured length). **This
+    directly contradicts the implementation plan's own draft formula**
+    (`is_last_step = (episode_length_buf + 1 >= max_episode_length) | ...`,
+    the plan's "Design notes" section) - that draft assumed a pre-increment
+    read; the actual convention is post-increment, so the `+1` is dropped
+    below (`is_last_step` uses `episode_length_buf >= max_episode_length`
+    directly, no `+1`). **Cross-checked live in Isaac Sim** (not source-read
+    alone, per the plan's own "empirical, not just source-read" requirement
+    for exactly this kind of timing question): a throwaway diagnostic
+    (`_empirical_episode_boundary_check.py`, random actions,
+    `FrankaDieLiftJointD8BigExplorationBonusEnvCfg_PLAY`, 4 envs, run on a
+    real cloud GPU instance 2026-07-20) monkeypatched
+    `GripperClosureAttemptBonusCorrection.__call__` (via
+    `functools.wraps`, to keep the wrapper's own introspectable signature
+    intact - the manager's own `_resolve_common_term_cfg` signature check
+    would otherwise reject an unwrapped `*args, **kwargs` wrapper, a real
+    false-positive this diagnostic itself hit once before being fixed) to
+    record `env.episode_length_buf[0]` at the exact moment reward
+    computation reads it, across a full 250-step episode. Directly
+    observed: **`episode_length_buf[0] == 1` at the episode's first control
+    step (t=0)**; **`episode_length_buf[0] == 250 == max_episode_length` at
+    the episode's last control step (t=N-1, step index 249)**, immediately
+    followed by a reset (`truncated[0]=True`, `episode_length_buf[0]` reads
+    back as `0` once `step()` returns, matching `977a748`'s own "post-step
+    reads are already post-reset" finding for observations); and
+    `correction_term._prev_raw[0] == 0.0` immediately after that boundary,
+    confirming `reset()` fired automatically for the terminated env, per
+    (a) above. (Incidental finding, not a bug: `raw_actions` is ALSO reset
+    to `0.0` for a terminated env within the same `step()` call, before
+    `step()` returns - matching `BinaryJointAction.reset()`'s own
+    `self._raw_actions[env_ids] = 0.0`, isaaclab/envs/mdp/actions/
+    binary_joint_actions.py:146 - which only affects a POST-step read, not
+    reward computation itself, since reward computation reads
+    `raw_actions` before this same-step reset happens.) All three numbers
+    match this docstring's own conclusions exactly - no further correction
+    needed.
+
+    (c) `object_dropping`'s own `minimum_height=-0.05` constant
+    (lift_env_cfg.py:315) is reused by reference via the module-level
+    `_OBJECT_DROPPING_MINIMUM_HEIGHT` constant above, not re-typed, so this
+    class's own self-contained `is_last_step` recomputation (deliberately
+    NOT reading `env.termination_manager`'s own already-computed buffers,
+    even though (b) shows those buffers ARE in fact already populated by
+    reward-computation time - the plan's own "Design notes" section chooses
+    the self-contained recomputation anyway, to stay correct regardless of
+    manager-registration order in any future env cfg) can never silently
+    diverge from the real termination term's own value.
+    """
+
+    def __init__(self, cfg, env: ManagerBasedRLEnv):
+        super().__init__(cfg, env)
+        self._prev_raw = torch.zeros(env.num_envs, device=env.device)
+
+    def reset(self, env_ids: torch.Tensor | slice | None = None) -> None:
+        if env_ids is None:
+            env_ids = slice(None)
+        self._prev_raw[env_ids] = 0.0
+
+    def __call__(
+        self,
+        env: ManagerBasedRLEnv,
+        w_attempt: float,
+        k: float,
+        std_gate: float,
+        gamma: float,
+        object_cfg: SceneEntityCfg = SceneEntityCfg("object"),
+        ee_frame_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame"),
+        action_term_name: str = "gripper_action",
+    ) -> torch.Tensor:
+        gripper_term = env.action_manager.get_term(action_term_name)
+        raw_gripper_action = gripper_term.raw_actions[:, 0]
+        object_: RigidObject = env.scene[object_cfg.name]
+        ee_frame: FrameTransformer = env.scene[ee_frame_cfg.name]
+        cube_pos_w = object_.data.root_pos_w
+        ee_pos_w = ee_frame.data.target_pos_w[..., 0, :]
+        F_t = _gripper_closure_attempt_bonus_raw_pure(raw_gripper_action, cube_pos_w, ee_pos_w, w_attempt, k, std_gate)
+
+        # is_first_step / is_last_step per this class's own docstring finding
+        # (b) above - episode_length_buf is POST-increment, PRE-reset at this
+        # point in step(), so t=0 reads as 1 and t=N-1 reads as N (no `+1`).
+        is_first_step = env.episode_length_buf == 1
+        object_dropping = object_.data.root_pos_w[:, 2] < _OBJECT_DROPPING_MINIMUM_HEIGHT
+        is_last_step = (env.episode_length_buf >= env.max_episode_length) | object_dropping
+
+        correction = _gripper_closure_attempt_bonus_correction_pure(F_t, self._prev_raw, is_first_step, is_last_step, gamma)
+        self._prev_raw = F_t
+        return correction

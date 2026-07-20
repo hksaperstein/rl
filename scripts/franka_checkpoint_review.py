@@ -81,6 +81,7 @@ parser.add_argument(
         "joint-die-d12-std",
         "joint-die-random-size",
         "joint-die-d8-big",
+        "joint-die-d8-big-exploration-bonus",
         "joint-die-d10-big",
         "joint-die-d12-big",
         "joint-die-target-selection-so",
@@ -128,6 +129,12 @@ parser.add_argument(
         "at 0.216kg - directly comparable to the asset-bisect's own cube (3/3) and d20 (1/3) 48mm baselines "
         "(docs/superpowers/plans/2026-07-16-unified-multi-die-specialist-distillation.md, "
         ".superpowers/sdd/task-3.5-brief.md); _PLAY probe is the same fixed size, 50 envs. "
+        "joint-die-d8-big-exploration-bonus: H1 (GRM D=1 action-dependent gripper-closure-attempt exploration "
+        "bonus) grasp-discoverability test (Task 2) - IDENTICAL to joint-die-d8-big except its RewardsCfg adds "
+        "gripper_closure_attempt_bonus + gripper_closure_attempt_bonus_correction "
+        "(FrankaDieLiftJointD8BigExplorationBonusEnvCfg, docs/superpowers/plans/2026-07-19-exploration-bonus-"
+        "grasp-discovery-implementation.md; spec: docs/superpowers/specs/2026-07-19-exploration-bonus-grasp-"
+        "discovery-design.md); _PLAY probe is the same fixed size, 50 envs. "
         "joint-die-target-selection-so/-d1/-d2: target-selection-in-clutter curriculum Stages SO (0 active "
         "distractors, internal sanity gate)/D1 (1 active distractor)/D2 (2 active distractors, primary "
         "falsification check) - full 3-die scene topology, 43-dim observation schema (Task 2's "
@@ -234,6 +241,8 @@ elif args_cli.variant == "joint-die-random-size":
     from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftJointRandomSizeEnvCfg_PLAY  # noqa: E402
 elif args_cli.variant == "joint-die-d8-big":
     from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftJointD8BigEnvCfg_PLAY  # noqa: E402
+elif args_cli.variant == "joint-die-d8-big-exploration-bonus":
+    from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftJointD8BigExplorationBonusEnvCfg_PLAY  # noqa: E402
 elif args_cli.variant == "joint-die-d10-big":
     from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftJointD10BigEnvCfg_PLAY  # noqa: E402
 elif args_cli.variant == "joint-die-d12-big":
@@ -357,6 +366,8 @@ def main() -> None:
         env_cfg = FrankaDieLiftJointRandomSizeEnvCfg_PLAY()
     elif args_cli.variant == "joint-die-d8-big":
         env_cfg = FrankaDieLiftJointD8BigEnvCfg_PLAY()
+    elif args_cli.variant == "joint-die-d8-big-exploration-bonus":
+        env_cfg = FrankaDieLiftJointD8BigExplorationBonusEnvCfg_PLAY()
     elif args_cli.variant == "joint-die-d10-big":
         env_cfg = FrankaDieLiftJointD10BigEnvCfg_PLAY()
     elif args_cli.variant == "joint-die-d12-big":

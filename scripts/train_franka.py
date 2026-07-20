@@ -81,6 +81,7 @@ parser.add_argument(
         "joint-die-d12-std",
         "joint-die-random-size",
         "joint-die-d8-big",
+        "joint-die-d8-big-exploration-bonus",
         "joint-die-d10-big",
         "joint-die-d12-big",
         "joint-die-d12-d20-mixed",
@@ -128,6 +129,13 @@ parser.add_argument(
         "at 0.216kg - directly comparable to the asset-bisect's own cube (3/3) and d20 (1/3) 48mm baselines "
         "(docs/superpowers/plans/2026-07-16-unified-multi-die-specialist-distillation.md, "
         ".superpowers/sdd/task-3.5-brief.md). "
+        "joint-die-d8-big-exploration-bonus: H1 (GRM D=1 action-dependent gripper-closure-attempt exploration "
+        "bonus) grasp-discoverability test (Task 2) - IDENTICAL to joint-die-d8-big (same scene/object/"
+        "observations/actions/events/terminations/PPO recipe) except its RewardsCfg adds two new terms, "
+        "gripper_closure_attempt_bonus + gripper_closure_attempt_bonus_correction "
+        "(FrankaDieLiftJointD8BigExplorationBonusEnvCfg, docs/superpowers/plans/2026-07-19-exploration-bonus-"
+        "grasp-discovery-implementation.md; spec: docs/superpowers/specs/2026-07-19-exploration-bonus-grasp-"
+        "discovery-design.md). "
         "joint-die-d12-d20-mixed: Task 6 RL fine-tune env - the same ONE-env, deterministic-round-robin "
         "d12/d20 mixed-population env Task 5's distillation training ran against "
         "(FrankaDieLiftJointD12D20MixedEnvCfg, tasks/franka/dice_lift_joint_env_cfg.py), meant to be "
@@ -241,6 +249,10 @@ def main() -> None:
         from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftJointD8BigEnvCfg
 
         env_cfg = FrankaDieLiftJointD8BigEnvCfg()
+    elif args_cli.variant == "joint-die-d8-big-exploration-bonus":
+        from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftJointD8BigExplorationBonusEnvCfg
+
+        env_cfg = FrankaDieLiftJointD8BigExplorationBonusEnvCfg()
     elif args_cli.variant == "joint-die-d10-big":
         from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftJointD10BigEnvCfg
 
@@ -294,6 +306,7 @@ def main() -> None:
         "joint-die-d12-std": "_jointdied12std",
         "joint-die-random-size": "_jointdierandomsize",
         "joint-die-d8-big": "_jointdied8big",
+        "joint-die-d8-big-exploration-bonus": "_jointdied8bigexplorationbonus",
         "joint-die-d10-big": "_jointdied10big",
         "joint-die-d12-big": "_jointdied12big",
         "joint-die-d12-d20-mixed": "_jointdied12d20mixed",

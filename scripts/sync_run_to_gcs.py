@@ -71,6 +71,8 @@ VARIANT_MAP = {
     "train_franka_jointdierandomsize": "joint-die-random-size",
     "train_franka_jointdied8big": "joint-die-d8-big",
     "train_franka_jointdied8bigexplorationbonus": "joint-die-d8-big-exploration-bonus",
+    "train_franka_jointdied8bigantipodal": "joint-die-d8-big-antipodal",
+    "train_franka_died8bigtaskspaceantipodal": "die-d8-big-taskspace-antipodal",
     "train_franka_jointdied10big": "joint-die-d10-big",
     "train_franka_jointdied12big": "joint-die-d12-big",
     "train_franka_jointdied12d20mixed": "joint-die-d12-d20-mixed",

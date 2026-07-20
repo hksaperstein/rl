@@ -82,6 +82,8 @@ parser.add_argument(
         "joint-die-random-size",
         "joint-die-d8-big",
         "joint-die-d8-big-exploration-bonus",
+        "joint-die-d8-big-antipodal",
+        "die-d8-big-taskspace-antipodal",
         "joint-die-d10-big",
         "joint-die-d12-big",
         "joint-die-d12-d20-mixed",
@@ -136,6 +138,24 @@ parser.add_argument(
         "(FrankaDieLiftJointD8BigExplorationBonusEnvCfg, docs/superpowers/plans/2026-07-19-exploration-bonus-"
         "grasp-discovery-implementation.md; spec: docs/superpowers/specs/2026-07-19-exploration-bonus-grasp-"
         "discovery-design.md). "
+        "joint-die-d8-big-antipodal: H_joint / Condition A (Task 2) - IDENTICAL to joint-die-d8-big (same "
+        "48mm-parity d8 object/scale/mass, 41-dim observations, JOINT-SPACE actions, events, terminations, "
+        "PPO recipe) except its scene adds two new panda_leftfinger/panda_rightfinger ContactSensorCfg fields "
+        "and its RewardsCfg adds one new term, antipodal_grasp_quality (a bilateral force-closure/antipodal "
+        "grasp-quality bonus ported from AR4's Experiments 9-11, refit to this scene's real mu=0.5). Arm "
+        "control stays joint-space, unchanged from joint-die-d8-big - this is the JOINT-SPACE half of a "
+        "two-condition test (FrankaDieLiftJointD8BigAntipodalEnvCfg, docs/superpowers/plans/2026-07-20-d8-"
+        "antipodal-grasp-quality-implementation.md; spec: docs/superpowers/specs/2026-07-20-d8-antipodal-"
+        "grasp-quality-design.md). "
+        "die-d8-big-taskspace-antipodal: H_taskspace / Condition B (Task 2) - IDENTICAL scene/object/rewards "
+        "to joint-die-d8-big-antipodal (same new ContactSensorCfg wiring + antipodal_grasp_quality reward "
+        "term) but under TASK-SPACE/relative-differential-IK arm control instead of joint-space - the exact "
+        "stock DifferentialInverseKinematicsActionCfg recipe (FrankaLiftEnvCfg.ActionsCfg.arm_action's own "
+        "values) re-asserted after the joint-space-defaulting __post_init__ chain runs. Tests whether this "
+        "project's own AR4-era finding (antipodal signal requires task-space control, Experiments 9->10->11) "
+        "transfers onto Franka/d8 (FrankaDieLiftD8BigTaskspaceAntipodalEnvCfg, same plan/spec as "
+        "joint-die-d8-big-antipodal above - NOT gated on that condition's own result, both run to completion "
+        "unconditionally). "
         "joint-die-d12-d20-mixed: Task 6 RL fine-tune env - the same ONE-env, deterministic-round-robin "
         "d12/d20 mixed-population env Task 5's distillation training ran against "
         "(FrankaDieLiftJointD12D20MixedEnvCfg, tasks/franka/dice_lift_joint_env_cfg.py), meant to be "
@@ -253,6 +273,14 @@ def main() -> None:
         from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftJointD8BigExplorationBonusEnvCfg
 
         env_cfg = FrankaDieLiftJointD8BigExplorationBonusEnvCfg()
+    elif args_cli.variant == "joint-die-d8-big-antipodal":
+        from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftJointD8BigAntipodalEnvCfg
+
+        env_cfg = FrankaDieLiftJointD8BigAntipodalEnvCfg()
+    elif args_cli.variant == "die-d8-big-taskspace-antipodal":
+        from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftD8BigTaskspaceAntipodalEnvCfg
+
+        env_cfg = FrankaDieLiftD8BigTaskspaceAntipodalEnvCfg()
     elif args_cli.variant == "joint-die-d10-big":
         from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftJointD10BigEnvCfg
 
@@ -307,6 +335,8 @@ def main() -> None:
         "joint-die-random-size": "_jointdierandomsize",
         "joint-die-d8-big": "_jointdied8big",
         "joint-die-d8-big-exploration-bonus": "_jointdied8bigexplorationbonus",
+        "joint-die-d8-big-antipodal": "_jointdied8bigantipodal",
+        "die-d8-big-taskspace-antipodal": "_died8bigtaskspaceantipodal",
         "joint-die-d10-big": "_jointdied10big",
         "joint-die-d12-big": "_jointdied12big",
         "joint-die-d12-d20-mixed": "_jointdied12d20mixed",

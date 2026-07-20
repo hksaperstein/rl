@@ -25,6 +25,7 @@ FrankaLiftEnvCfg. Import only after an AppLauncher exists.
 import os
 
 from isaaclab.assets import ArticulationCfg, RigidObjectCfg
+from isaaclab.controllers.differential_ik_cfg import DifferentialIKControllerCfg
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.sensors import ContactSensorCfg
@@ -43,6 +44,7 @@ from .lift_env_cfg import (
     FrankaLiftEnvCfg,
     FrankaLiftSceneCfg,
     TargetSelectionObservationsCfg,
+    _IK_BODY_OFFSET,
 )
 
 _D20_USD = os.path.join(
@@ -1042,6 +1044,121 @@ class FrankaDieLiftContactSceneCfg(FrankaLiftSceneCfg):
         debug_vis=False,
         filter_prim_paths_expr=["{ENV_REGEX_NS}/Object"],
     )
+
+
+@configclass
+class FrankaDieLiftJointD8BigAntipodalEnvCfg(FrankaDieLiftJointD8BigEnvCfg):
+    """H_joint / Condition A (Task 2, docs/superpowers/plans/2026-07-20-d8-
+    antipodal-grasp-quality-implementation.md; spec: docs/superpowers/specs/
+    2026-07-20-d8-antipodal-grasp-quality-design.md): d8 48mm-parity
+    (`FrankaDieLiftJointD8BigEnvCfg`, the same 0/24 grasp-discoverability
+    null this whole antipodal-grasp-quality mechanism is meant to unlock)
+    PLUS the new antipodal/force-closure grasp-quality reward term
+    (Task 1), under JOINT-SPACE control - this env cfg's own inherited
+    `JointPositionActionCfg` (from `FrankaDieLiftJointEnvCfg.__post_init__`,
+    still the last writer to `self.actions.arm_action` since this class adds
+    no `__post_init__` override of its own), unchanged - the "Joint" in this
+    class's own name.
+
+    Overrides ONLY `scene` (-> `FrankaDieLiftContactSceneCfg`, the
+    two-single-body `ContactSensorCfg` wiring Task 1 built and empirically
+    verified above) and `rewards` (-> `AntipodalGraspRewardsCfg`) - a pure
+    field-override leaf, no `__post_init__` needed, matching
+    `FrankaDieLiftJointD8BigExplorationBonusEnvCfg`'s own "new subclass,
+    base's own inherited `__post_init__` chain still mutates
+    `self.scene.object` regardless of which `SceneCfg` subclass `self.scene`
+    resolves to" precedent a few classes above.
+
+    `scene` is instantiated with the SAME `num_envs=4096, env_spacing=2.5`
+    every other scene-field override in this file/`lift_env_cfg.py` uses
+    (`FrankaLiftEnvCfg`/`FrankaDieLiftJointD12D20TargetSelectionSOEnvCfg`/
+    etc.) - a bare `FrankaDieLiftContactSceneCfg()` with no args would
+    silently drop those two values back to `InteractiveSceneCfg`'s own
+    field defaults, since a `configclass` field override REPLACES the base
+    class's own default instance wholesale rather than merging into it -
+    this repo has zero precedent anywhere of a scene-field override
+    omitting these two kwargs, so this class doesn't either."""
+
+    scene: FrankaDieLiftContactSceneCfg = FrankaDieLiftContactSceneCfg(num_envs=4096, env_spacing=2.5)
+    rewards: AntipodalGraspRewardsCfg = AntipodalGraspRewardsCfg()
+
+
+@configclass
+class FrankaDieLiftJointD8BigAntipodalEnvCfg_PLAY(FrankaDieLiftJointD8BigAntipodalEnvCfg):
+    """Smaller, non-corrupted-observation variant for eval/play (same
+    num_envs=50/env_spacing=2.5/enable_corruption=False pattern as every
+    other _PLAY class in this file)."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.scene.num_envs = 50
+        self.scene.env_spacing = 2.5
+        self.observations.policy.enable_corruption = False
+
+
+@configclass
+class FrankaDieLiftD8BigTaskspaceAntipodalEnvCfg(FrankaDieLiftJointD8BigAntipodalEnvCfg):
+    """H_taskspace / Condition B (Task 2, same plan/spec as Condition A
+    above): IDENTICAL scene/object/rewards/observations/events/terminations/
+    PPO recipe to Condition A - the antipodal-grasp-quality reward's own
+    `ContactSensorCfg` wiring and reward term - but re-asserts TASK-SPACE/
+    relative-differential-IK arm control instead of Condition A's inherited
+    joint-space `JointPositionActionCfg`.
+
+    This is the plan's own explicitly-flagged trickiest piece of this
+    task's class composition. `FrankaDieLiftJointD8BigAntipodalEnvCfg`'s
+    full `__post_init__` chain - all the way up through
+    `FrankaDieLiftJointEnvCfg.__post_init__`, which sets
+    `self.actions.arm_action` to a `JointPositionActionCfg` - MUST run
+    first (for its die-swap/mass/scale/scene-object side effects, which
+    this class needs unchanged), and only AFTER that full chain completes
+    does this class's own `__post_init__` re-overwrite `self.actions.
+    arm_action` back to task-space IK. Calling `super().__post_init__()`
+    first (rather than skipping or reordering it) is exactly what achieves
+    this: Python's own MRO runs every ancestor's `__post_init__` body
+    (including the joint-space assignment, several frames up the `super()`
+    chain) to completion before control returns here, so this class's own
+    post-`super()` line is the LAST write to `self.actions.arm_action` and
+    wins - confirmed empirically below (Task 2's own required check), not
+    just asserted from the class hierarchy alone.
+
+    Values below are `FrankaLiftEnvCfg.ActionsCfg.arm_action`'s own exact
+    stock task-space recipe (asset_name/joint_names/body_name/controller/
+    scale/body_offset), copied field-for-field rather than instantiating
+    `ActionsCfg()` wholesale (which would also reset `gripper_action` - not
+    this class's concern and not something that should be silently
+    re-decided here). `_IK_BODY_OFFSET` is imported directly from
+    `lift_env_cfg.py` (0.107 - the IK controller's own control-target
+    offset, NOT `_EE_MEASUREMENT_OFFSET`'s 0.1034 - see that module's own
+    docstring for why these are two different stock constants) rather than
+    a re-typed literal, so the two can never silently drift apart.
+
+    Class name deliberately drops "Joint" (unlike Condition A) to reflect
+    it is NOT joint-space, matching the spec's own naming convention."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.actions.arm_action = mdp.DifferentialInverseKinematicsActionCfg(
+            asset_name="robot",
+            joint_names=["panda_joint.*"],
+            body_name="panda_hand",
+            controller=DifferentialIKControllerCfg(command_type="pose", use_relative_mode=True, ik_method="dls"),
+            scale=0.5,
+            body_offset=mdp.DifferentialInverseKinematicsActionCfg.OffsetCfg(pos=_IK_BODY_OFFSET),
+        )
+
+
+@configclass
+class FrankaDieLiftD8BigTaskspaceAntipodalEnvCfg_PLAY(FrankaDieLiftD8BigTaskspaceAntipodalEnvCfg):
+    """Smaller, non-corrupted-observation variant for eval/play (same
+    num_envs=50/env_spacing=2.5/enable_corruption=False pattern as every
+    other _PLAY class in this file)."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.scene.num_envs = 50
+        self.scene.env_spacing = 2.5
+        self.observations.policy.enable_corruption = False
 
 
 # ---------------------------------------------------------------------------

@@ -4201,3 +4201,87 @@ convention for a result outside its pre-authorized fallback chain (H2/H3
 are only pre-authorized for a plain both-bars falsification, which this
 is not). See `kb/wiki/experiments/exploration-bonus-grasp-discovery.md`
 for the full compiled write-up.
+
+---
+
+### d8/d10 demonstration-augmented warm-start, H2 fallback (2026-07-20): PASSED both shapes — investigation closed
+
+H1 (`ROADMAP.md`'s own entry above/`kb/wiki/experiments/d8-d10-demo-warmstart.md`)
+had just cleanly falsified for both d8 and d10 (0/24 each). Per the
+design spec's pre-authorized "one fallback rung, no new spec" convention,
+executed H2 for both shapes: direct `scripts/train_franka.py --checkpoint
+<d12 checkpoint> --variant joint-die-{d8,d10}-big --max_iterations 2999`
+resume (full optimizer-state resume, no `--policy_only_checkpoint`) from
+the already-converged, nearest-by-sphericity d12 specialist checkpoint
+(`gs://rl-manipulation-hks-runs/unified-multi-die-specialists/joint-die-d12-big/seed123/2026-07-19_06-37-16/model_1499.pt`,
+ψ=0.9286 vs. d8 ψ=0.8896/d10 ψ=0.8959) — no new pipeline code, exactly as
+the spec specified. Pre-flight-verified the checkpoint directly
+(`gsutil stat` + a real `torch.load` shape check, not trusted from the
+spec text alone): `actor.0.weight (256, 41)`, `actor.6.weight (8, 64)` —
+an exact match to d8/d10's own 41-dim observation / 8-dim action schema,
+confirming clean drop-in compatibility.
+
+**Result: d8 3/3 seeds full 8/8 (24/24 envs, a clean sweep — matching
+cube's own perfect record and exceeding d12's 1/3/d20's 2/3 at this same
+anchor). d10 1/3 seeds full 8/8 (seed7 only, 8/24 envs — the same "0 or
+full-8/8-within-seed, never a spurious partial" pattern this project has
+seen for every other shape's discovering seed).** Neither shape
+falsified; both pass H2's bar cleanly. Independently re-derived from raw
+`heights_*.npy` for d8 seed42, d10 seed7, and d10 seed42 (a from-scratch
+reimplementation of the resting-z/gain/sustained-lift logic, not reusing
+`franka_checkpoint_review.py`'s own code) — matched the tool's own numbers
+exactly after fixing a self-caught bug in that reimplementation (an
+initial pass wrongly included the object's pre-settle spawn-drop
+transient in the lift-analysis window, producing a spuriously elevated
+gain reading for a genuinely-null d10 seed; restricting the window to
+start at `post_settle_start_step` per the tool's own documented
+convention fixed it). Frame-by-frame video review (d8 seed42, d10 seed7,
+d10 seed42-null) confirms a real gripper-closed-and-lifted posture change
+for both positive seeds and continued non-engagement for the null,
+matching the instrumented numbers.
+
+**Real infra friction, same category as H1's Task 3:** the single
+project-wide `GPUS_ALL_REGIONS=1` quota was contended twice by a
+concurrent sibling workstream's own training batch (real blocking polls,
+not worked around); two genuine SPOT preemptions (confirmed via `gcloud
+compute operations list` preemption system events) recovered via
+checkpoint-resume, after which the instance was switched from SPOT to
+on-demand provisioning (`gcloud compute instances set-scheduling
+--no-preemptible --provisioning-model=STANDARD` — note
+`--maintenance-policy=MIGRATE` is rejected for GPU-attached instances,
+`onHostMaintenance` must stay `TERMINATE`; folded into
+`docs/cloud/dispatch-checklist.md`), after which zero further
+preemptions occurred. Confirmed switching to on-demand does **not**
+bypass the shared `GPUS_ALL_REGIONS` quota itself (only protects against
+preemption once the GPU is actually acquired). Confirmed
+`franka_checkpoint_review.py`'s output-filename collision fix (commit
+`d5b9cd1`) was already present and held correctly under this task's own
+same-basename-across-seeds scenario (6 genuinely distinct artifact sets
+produced).
+
+**Cost: ≈$3.44** (duration × published SPOT/on-demand SKU rates,
+on-demand L4 rate $0.560/GPU-hr confirmed via the live Cloud Billing
+Catalog API rather than assumed) — well under the plan's $10 cap; combined
+with H1's own ≈$4, total experiment spend ≈$7.44. Full teardown verified
+clean (`scripts/check_cloud_state.sh`).
+
+**Checkpoints:** `gs://rl-manipulation-hks-runs/d8-d10-h2-checkpoint-warmstart/joint-die-{d8,d10}-big/seed{42,123,7}/<timestamp>/model_2998.pt`.
+Eval artifacts: `gs://rl-manipulation-hks-runs/d8-d10-h2-checkpoint-warmstart/eval-artifacts/`.
+
+**Bottom line: the d8/d10 grasp-discoverability investigation is closed
+with a real positive resolution, not a third null.** From-scratch PPO
+cannot discover the d8/d10 grasp with this project's standard recipe
+(the original Task 3.5 null and H1's demonstration-BC-warm-start null
+both confirm this), but PPO fine-tuned from a different, geometrically-nearest
+shape's already-converged weights can — cleanly for d8, partially
+(matching this project's own established discovery-rate pattern) for
+d10. This is evidence the original null was a policy-initialization/
+exploration problem specific to cold-start learning, not an intrinsic
+physical or reward-design barrier: the same reward function, PPO
+hyperparameters, and observation schema that never discovered the grasp
+from scratch now discovers it reliably once seeded from nearby-shape
+weights. `BACKLOG.md`'s "Task 4 scope decision" (which deferred d8/d10
+from the specialist-distillation arc on the original from-scratch null)
+can now be revisited with this positive result in hand — a decision for
+Principal, not made here. See `kb/wiki/experiments/d8-d10-demo-warmstart.md`'s
+"H2" section for the full compiled write-up.

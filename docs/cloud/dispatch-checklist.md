@@ -108,3 +108,18 @@ or assume it's implied by other context.)
   remaining job count is small enough that on-demand's ~2x hourly rate
   stays well within the task's cost cap — not a general policy change,
   reconsider fresh each time.
+- **Switching an existing SPOT instance to on-demand mid-task (2026-07-20
+  finding, d8/d10 H2 task):** `gcloud compute instances set-scheduling
+  --no-preemptible --provisioning-model=STANDARD
+  --clear-instance-termination-action --restart-on-failure` works on a
+  *stopped* instance without needing to delete/recreate it (checkpoints
+  on the boot disk are preserved) — cheaper than the snapshot-and-migrate
+  recipe below when you just want to drop SPOT, not also change zone.
+  **Gotcha: do not also pass `--maintenance-policy=MIGRATE`** — GPU-attached
+  instances reject it (`onHostMaintenance` must stay `TERMINATE`
+  regardless of provisioning model; only non-GPU instances can migrate
+  live). Also confirmed: switching to on-demand does **not** bypass the
+  shared project-wide `GPUS_ALL_REGIONS` quota — it only protects an
+  instance from *preemption* once it has actually acquired the GPU, not
+  from contention with another concurrent workstream trying to acquire
+  the same single project-wide GPU slot first.

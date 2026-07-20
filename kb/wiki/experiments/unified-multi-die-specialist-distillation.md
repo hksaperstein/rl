@@ -636,3 +636,10 @@ evidence-backed reason to start from (real shape barrier, not a fixable
 pipeline defect) rather than re-litigating from scratch. Total cost: ≈$5.87
 of the original $15 cloud-spend cap. No further work planned under this
 experiment.
+
+**Update (2026-07-20):** the demonstration-augmented warm-start follow-on
+tested here as an open question was run and falsified for both shapes —
+see [[d8-d10-demo-warmstart]] (H1: BC-pretrain from one real scripted
+demonstration per shape, then full PPO fine-tune — 0/24 both d8 and d10,
+robust and independently re-verified). H2 (d12-specialist checkpoint
+warm-start) remains open as that experiment's own next rung, not yet run.

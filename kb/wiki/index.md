@@ -185,6 +185,16 @@ see the coverage boundary note below.)*
   at Stage D2**, comfortably above the pre-registered 6/8 bar, no
   wrong-die grasp observed in any inspected video frame. ≈$1.35 of the
   $5 cloud-spend cap for Tasks 4-6.
+- [[d8-d10-demo-warmstart]] (2026-07-19 -> 2026-07-20, H1 COMPLETE —
+  FALSIFIED both shapes) — tests whether BC-pretraining from one real
+  scripted-grasp demonstration per shape, warm-starting an otherwise-
+  unchanged full PPO fine-tune, unlocks grasp discovery for d8/d10 at the
+  48mm-parity anchor where cold-start PPO was robustly null. **Result:
+  0/24 both d8 and d10** (3 seeds x 8 envs each), independently
+  re-derived from raw trajectories and confirmed by frame-by-frame video
+  review — no partial signal in any seed. H2 (d12-specialist checkpoint
+  warm-start) remains pre-authorized as the next rung, not yet run.
+  ≈$4 of the $10 cloud-spend cap.
 
 ### Concepts
 

@@ -4003,3 +4003,90 @@ heaped/occluding arrangements, and multi-seed replication of this
 experiment's single-seed (seed42) result. No further work planned under
 this experiment; see `kb/wiki/experiments/target-selection-clutter.md`
 for the full compiled, cross-referenced write-up.
+
+---
+
+### d8/d10 demonstration-augmented warm-start (2026-07-19 -> 2026-07-20): H1 FALSIFIED both shapes
+
+Tested H1 from `docs/superpowers/specs/2026-07-19-d8-d10-demo-warmstart-design.md`:
+DAPG-style behavior-cloning pretrain from one real scripted-grasp
+demonstration trajectory per shape (captured via `dice_pick_demo.py`'s
+own DiffIK grasp controller at the unified-multi-die-specialist-
+distillation experiment's 48mm-parity anchor), warm-starting an otherwise
+completely unchanged full 1500-iteration PPO fine-tune — a candidate fix
+for that experiment's own robust d8/d10 0/24-both-shapes cold-start null.
+
+Tasks 0-2 (re-verify the scripted grasp transfers to 48mm scale, build
+`regress_on_paired_batches`/`tasks/franka/demo_action_mapping.py`/
+`scripts/extract_demo_trajectory.py`/`scripts/bc_pretrain_demo_warmstart.py`)
+completed cleanly — BC-pretrain converged to a clean loss plateau
+(≈0.0007-0.0009) for both shapes and a bounded PPO-handoff smoke test
+confirmed the resume mechanics.
+
+**Task 3 (the real H1 run) hit real, previously-undiscovered cloud-dispatch
+infra gaps**, all resolved in-task rather than worked around silently:
+the demo/capture scene's 5-die visual mesh assets
+(`vision/data/raw/dice_sets_v1/set_00013_*.usd` — note: `set_00013`, NOT
+`set_00000`, a real distinction the first attempt at resolving this got
+wrong before self-correcting) and the vision detector's model weights
+were desktop-only and had never been shipped to any cloud instance before
+in this project (every prior cloud run either used the asset-free
+`ik-cube` variant or ran on the desktop directly); resolved via a narrow
+read-only file copy of the 10 needed asset files plus a real bug fix in
+`scripts/extract_demo_trajectory.py` (it called the vision detector
+subprocess unconditionally even under `--gt-xy-bypass`, whose whole point
+is not needing the detector — commit `bdb31b2`) so cloud captures for
+both shapes never need vision infra at all. The `notch_fixture.usd`
+fingertip-fixture asset (offline `pxr`-only build script,
+`scripts/build_notch_fixture_asset.py`) needed a symlink to the cloud
+instance's own pip-installed Isaac Sim extension paths rather than the
+desktop's from-source layout. A project-wide `GPUS_ALL_REGIONS=1` GCP
+quota (shared across every concurrent Senior cloud workstream) blocked
+provisioning for ~40 real minutes until a sibling workstream's job
+finished — the same quota-sharing constraint independently flagged by the
+concurrent target-selection-clutter experiment's own Task 4-6 report.
+SPOT preemptions clustered unusually severely (6 across this task's real
+GPU-active time); recovered via checkpoint-resume each time, then
+switched the remaining runs to on-demand provisioning (this project's own
+documented precedent) after the 6th, via a snapshot-and-zone-migrate
+cycle — zero further preemptions afterward. **A second real bug** was
+found and fixed in `scripts/franka_checkpoint_review.py`: its output
+filenames depended only on the checkpoint's basename, so 3 seeds of the
+same shape training to the same iteration count (identical
+`model_1519.pt`/`model_1517.pt` names in different run directories)
+silently overwrote each other's eval video/heights.npy/summary.json; all
+6 evals were re-run after the fix with genuinely distinct artifacts.
+
+**Result: 0/8 sustained-lift discovery in every one of 6 runs (3 seeds x
+2 shapes) — d8 0/24, d10 0/24. H1 is falsified for both shapes**, per the
+spec's own falsification bar. Independently re-derived (a fresh
+reimplementation of the settle-window/gain/sustained-lift logic, not a
+re-run of the eval script) from the raw `heights_*.npy` for one seed per
+shape and got byte-identical 0/8 both times; per-env `max_height_gain_m`
+was small (≈8.8mm d8, ≈4.3-5.4mm d10, well under the 40mm threshold) and
+essentially identical across all 8 parallel envs within each run — not a
+policy that sometimes grasps, one that never learned any real
+object-contingent behavior from the single-demonstration warm start.
+Frame-by-frame video review (both re-derived seeds) confirms the gripper
+approaches and hovers near the die in both shapes but never closes a real
+grasp, consistent with the instrumented null (Experiment 16 precedent for
+why the video check matters). No never-before-observed "partial"
+(1/8-7/8) result was seen in any seed.
+
+**Checkpoints:** `gs://rl-manipulation-hks-runs/d8-d10-demo-warmstart/joint-die-{d8,d10}-big/seed{42,123,7}/<timestamp>/model_{1519,1517}.pt`.
+Eval artifacts: `gs://rl-manipulation-hks-runs/d8-d10-demo-warmstart/eval-artifacts/`.
+
+**Cost: ≈$4 of the plan's $10 cloud-spend cap** (duration × published-SKU-
+rate estimate, no exact billing export exists — this project's standing
+methodology). Full teardown verified after every provisioning cycle.
+
+**Bottom line:** BC-pretraining from one real demonstration per shape
+(the original Task 2 design's pooled-5-trajectories approach — this run's
+own captures produced 5 valid trajectories per shape, all pooled) does
+not unlock grasp discovery for either d8 or d10 at the 48mm-parity
+anchor. H2 (checkpoint warm-start from the d12 specialist) remains
+pre-authorized as the next rung per the spec's own fallback design but
+was **not started here** — reported back to the controller per the
+plan's own stop-and-report instruction; see
+`kb/wiki/experiments/d8-d10-demo-warmstart.md` for the full compiled
+write-up.

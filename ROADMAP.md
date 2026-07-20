@@ -4090,3 +4090,114 @@ was **not started here** — reported back to the controller per the
 plan's own stop-and-report instruction; see
 `kb/wiki/experiments/d8-d10-demo-warmstart.md` for the full compiled
 write-up.
+
+### Exploration-bonus grasp discovery (2026-07-19 -> 2026-07-20): H1 SPLIT — mechanism fires (seed 123), lift still never completes (0/24)
+
+Task 4 (real 3-seed/1500-iteration run) of
+`docs/superpowers/plans/2026-07-19-exploration-bonus-grasp-discovery-implementation.md`,
+testing H1 (a GRM `D=1`, action-dependent potential-based exploration
+bonus for gripper-closure attempts near the object —
+`gripper_closure_attempt_bonus` + `gripper_closure_attempt_bonus_correction`,
+Tasks 1-3 already built/committed: `10a9588`, `59b0246`, `e9bc14b`) against
+d8's robust, independently-established 0/24 from-scratch null at the
+48mm-parity anchor (`FrankaDieLiftJointD8BigEnvCfg`, Task 3.5).
+
+**Both falsification bars, per seed, never averaged:**
+
+| seed | mechanism-level (`frac_steps_raw_action_negative_near_object`) | behavioral (`envs_with_sustained_lift`) |
+|------|------------------------------------------------------------------|------------------------------------------|
+| 42   | 8/8 envs **null** (final checkpoint never got within 5cm of the object in any env, all episode) | 0/8 |
+| 123  | 7/8 envs = **1.0** (every near-object step had a negative raw gripper action — the mechanism firing strongly), 1/8 null | 0/8 |
+| 7    | 1/8 env = **0.0** (confirmed: got near, never attempted), 7/8 null | 0/8 |
+
+Per the spec's own pre-registered rule, "H1's mechanism-level claim is
+falsified only if this fraction is exactly `0.000` in all 3 seeds" —
+seed 123's `1.0` result (a clear, repeated, nonzero value, not a rounding
+artifact) means **the mechanism-level bar is not falsified; it fires**.
+The behavioral bar is a clean 0/24 across all 3 seeds — `max_height_gain_m`
+≈0.0088m for every env in every seed (essentially identical across all 24
+env-seed combinations, the same physics-settle-noise magnitude seen in
+the from-scratch baseline and the d8/d10 demo-warmstart null, well under
+the 0.04m lift threshold).
+
+**Overall verdict, per the spec's own explicit rule (falsified only if
+BOTH bars fail across all 3 seeds): this is the SPLIT outcome, not a
+falsification** — the exploration mechanism demonstrably works (in ≥1
+seed, the policy reliably samples gripper-closure attempts specifically
+when near the object, not at random), but this does not translate into
+any completed lift. This is the first result in this project's history
+that lands in this explicitly-anticipated third category rather than a
+plain pass/fail.
+
+**Independent verification** (per this project's standing practice):
+re-derived both bars for seed 123 (the strongest mechanism signal) from
+raw per-step arrays, not the summary JSON — `raw_arrays.npz`
+(`raw_gripper_action`/`ee_object_distance`) reproduced the exact
+per-env fractions (envs 0-3/5-7 = 1.0, env 4 = null) byte-for-byte; a
+fresh, independent reimplementation of `franka_checkpoint_review.py`'s
+post-`977a748` settle-detection logic against the raw `heights_*.npy`
+reproduced 0/8 and the same `max_height_gain_m` values to displayed
+precision. Frame-by-frame video review of seed 123 (frames 10/15: gripper
+descending toward the die; frames 20/30: fingers visibly closed at
+roughly the die's location, object occluded/not visible; frames 100/248:
+die still resting on the table, ungrasped, gripper retracted to a resting
+pose above and away from it) visually confirms the instrumented split —
+a real closure attempt near the object that does not result in a lift,
+not a video/instrumentation mismatch (Experiment 16 precedent for why
+this check matters).
+
+**No code bug found or fixed in this task** — Tasks 1-3's mechanism,
+instrumentation, and wiring all behaved exactly as designed; the split
+result is a genuine substantive finding about grasp mechanics, not a
+defect in the exploration-bonus implementation. (Real, non-code infra
+friction did occur: two SPOT preemptions during the eval phase, both
+apparently from contention with the concurrently-running d8/d10-H2
+workstream over this project's shared `GPUS_ALL_REGIONS=1` project-wide
+quota — the same constraint already flagged by the target-selection-clutter
+and d8/d10-demo-warmstart tasks. Both were real blocking-polled, not
+guessed through; `--instance-termination-action=STOP` preserved the
+instance's disk/venv/repo state across both, so recovery was a plain
+restart + idempotent script re-run, no re-install and no training
+re-run needed — all 3 seeds' 1500-iteration training runs themselves
+completed in a single shot with zero preemptions.)
+
+**Checkpoints:** `logs/train_franka_jointdied8bigexplorationbonus/{2026-07-20_09-52-47,2026-07-20_10-25-11,2026-07-20_10-57-38}/model_1499.pt`
+(seeds 42/123/7 respectively; cloud-local, not synced to GCS — this task's
+own dispatch did not run `sync_run_to_gcs.py`, only the 3 diagnostic/eval
+scripts needed for the verdict itself).
+
+**Cost: ≈$1.2 of the plan's $3 cap** (≈3.0hr real SPOT g2-standard-4+L4
+instance-running time across 3 start/stop windows, at the recipe's
+published $0.361/hr combined rate, plus ≈$0.07 disk — duration ×
+published-SKU-rate estimate, this project's standing methodology, no
+exact billing export exists). Full teardown verified
+(`scripts/check_cloud_state.sh` shows zero resources belonging to this
+task; the other workstream's own `rl-d8d10-h2-checkpoint-warmstart`
+instance/disk, still present, is not this task's to touch).
+
+**Bottom line and forward pointer:** per the spec's own explicit
+characterization of this exact outcome, this points *away* from the pure
+discoverability question this spec targeted and *toward* a downstream
+grasp-mechanics problem — the policy now reliably finds and attempts the
+right moment/place to close (seed 123), but closing there still doesn't
+produce a lift. This is meaningfully different from Experiment 5's
+AR4-era null (policy never even approached the object, "reach, grip,
+freeze" — see [[experiment-05-potential-based-reward-shaping]]) and from
+this arc's own from-scratch/demo-warmstart nulls (gripper hovers near the
+object but the raw action never goes negative there at all): for the
+first time on this shape, real closure attempts are being sampled exactly
+where they should be, and still fail to lift. The honest next candidate
+direction is grasp-mechanics-specific, not exploration-specific:
+verifying actual finger-object contact/antipodal alignment at the moment
+of closure (this project's Experiment 9/10 antipodal-grasp-quality axis,
+not revisited since the Franka pivot), or the d8 die's own
+geometry/mass/friction parameters at 48mm-parity scale, rather than a
+further exploration- or warm-start-based fix — those are the two
+already-tried axes (this experiment and d8/d10-demo-warmstart) that both
+now show the same shape: getting the gripper to the right place/moment is
+solvable, closing effectively once there is not. Not decided or started
+here — a stop-and-report point back to the controller, per the spec's own
+convention for a result outside its pre-authorized fallback chain (H2/H3
+are only pre-authorized for a plain both-bars falsification, which this
+is not). See `kb/wiki/experiments/exploration-bonus-grasp-discovery.md`
+for the full compiled write-up.

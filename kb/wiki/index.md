@@ -195,6 +195,20 @@ see the coverage boundary note below.)*
   review — no partial signal in any seed. H2 (d12-specialist checkpoint
   warm-start) remains pre-authorized as the next rung, not yet run.
   ≈$4 of the $10 cloud-spend cap.
+- [[exploration-bonus-grasp-discovery]] (2026-07-19 -> 2026-07-20, H1
+  COMPLETE — SPLIT, not falsified) — tests whether a theoretically
+  policy-invariant (GRM `D=1`) potential-based exploration bonus for
+  gripper-closure attempts near the object unlocks d8 grasp discovery at
+  the same 48mm-parity null. **Result: mechanism-level bar fires in seed
+  123 (7/8 envs, frac=1.0 — real closure attempts sampled near the
+  object), but behavioral bar stays 0/24 across all 3 seeds** — the
+  spec's own explicitly pre-registered third outcome, not a plain
+  pass/fail. TDD-verified to avoid Experiment 5's own "always >= 0"
+  formula-sign bug, and confirmed at real-run scale to have done so (this
+  checkpoint approaches and attempts closure, unlike Experiment 5's total
+  freeze). Independently re-derived from raw arrays and confirmed by
+  frame-by-frame video review. No code bug found. ≈$1.2 of the $3
+  cloud-spend cap.
 
 ### Concepts
 

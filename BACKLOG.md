@@ -526,3 +526,43 @@ scene/observation-schema wiring was never broken, only the original
 from-scratch attempt's pre-existing cold-start difficulty made it look
 that way. Cost ~$0.39 (cloud), full teardown verified. Stage D1/D2 (plan
 Tasks 5/6) are unblocked.
+
+## New workstream direction: AR4-vs-Franka comparison chosen over camera/task-design ideas (2026-07-20)
+
+User asked for a non-training workstream, offering several candidates:
+integrating a live video feed, moving the camera to the wrist instead of
+a fixed mount, designing dice-specific tasks (rolling, sorting), or
+root-causing why the AR4 never worked as well as the Franka. Chose the
+AR4-vs-Franka comparison to start now — it's pure investigation/analysis
+over already-collected evidence (no new training runs needed), directly
+answers an already-open question this project's own CLAUDE.md has
+carried since the platform pivot ("root cause unresolved as of the
+pivot": a 17-27mm classical-IK positioning miss, an unconfirmed
+gripper jaw-mimic constraint, an unverified convex-hull jaw collision
+approximation), and is a direct, concrete test of the North Star's own
+"drop in a new arm, training should succeed immediately" bar now that a
+working Franka baseline exists to diff against — something that wasn't
+possible when these AR4 questions were first shelved.
+
+**Logged, not chosen now — real ideas, deferred:**
+- **Wrist-mounted camera instead of fixed.** A legitimate architecture
+  change (ties camera pose to the end-effector frame instead of world
+  frame) with real generalization value (better close-up/occlusion
+  handling for fine manipulation) but a bigger lift — touches the
+  `vision/` detector's training-data assumptions and the perception
+  pipeline structurally, closer to a Tier-1 structural change than a
+  quick investigation.
+- **Live video feed integration.** No physical hardware exists in this
+  project (confirmed by search — this is Isaac Sim/Lab simulation only,
+  no ROS/camera-driver integration anywhere in the repo), so this reads
+  as a sim-side ask: e.g. a real-time per-step detection loop instead of
+  the current batch render-then-detect pipeline `dice_pick_demo.py`
+  uses. Worth scoping properly with the user before starting, since
+  "live video feed" most naturally implies real hardware and it's worth
+  confirming that reading is right rather than assuming.
+- **New dice-specific tasks (rolling, sorting).** Real scope expansion
+  beyond CLAUDE.md's own stated discipline ("multi-object generalization
+  is a real, intended future phase — but comes after single-object
+  pick-and-place is solved") — not premature exactly, since the user
+  raised it directly, but a bigger scope call than the other three
+  options, worth a deliberate decision rather than folding in casually.

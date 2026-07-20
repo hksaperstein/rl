@@ -24,16 +24,20 @@ FrankaLiftEnvCfg. Import only after an AppLauncher exists.
 
 import os
 
-from isaaclab.assets import RigidObjectCfg
+from isaaclab.assets import ArticulationCfg, RigidObjectCfg
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import SceneEntityCfg
+from isaaclab.sensors import ContactSensorCfg
 from isaaclab.sim.schemas.schemas_cfg import MassPropertiesCfg, RigidBodyPropertiesCfg
 from isaaclab.sim.spawners.from_files.from_files_cfg import UsdFileCfg
 from isaaclab.sim.spawners.wrappers import MultiAssetSpawnerCfg
 from isaaclab.utils import configclass
 
+from isaaclab_assets.robots.franka import FRANKA_PANDA_HIGH_PD_CFG  # isort: skip
+
 from . import mdp
 from .lift_env_cfg import (
+    AntipodalGraspRewardsCfg,
     EventCfg,
     ExplorationBonusRewardsCfg,
     FrankaLiftEnvCfg,
@@ -929,6 +933,115 @@ class FrankaDieLiftJointD12D20MixedEnvCfg(FrankaDieLiftJointHeavyEnvCfg):
             ],
             random_choice=False,
         )
+
+
+# ---------------------------------------------------------------------------
+# Task 1 (docs/superpowers/plans/2026-07-20-d8-antipodal-grasp-quality-
+# implementation.md; spec: docs/superpowers/specs/2026-07-20-d8-antipodal-
+# grasp-quality-design.md): ContactSensorCfg scene wiring for the antipodal/
+# force-closure grasp-quality reward (mdp.antipodal_grasp_bonus,
+# AntipodalGraspRewardsCfg in lift_env_cfg.py).
+# ---------------------------------------------------------------------------
+
+# PhysX activates PhysxContactReportAPI per-body at USD-spawn time for the
+# WHOLE robot, not selectively per-body - copy()-then-mutate is the exact
+# idiom tasks/franka/dice_scene_cfg.py's own _FRANKA_ROBOT_CFG_WITH_CONTACT
+# already uses (and, one level further back, the same idiom
+# isaaclab_assets' own franka.py uses to derive FRANKA_PANDA_HIGH_PD_CFG from
+# FRANKA_PANDA_CFG), reused here for the first time inside a
+# ManagerBasedRLEnvCfg (Task 1's own "genuinely new, not a re-trust of the
+# scripted-demo precedent" design note).
+_FRANKA_ROBOT_CFG_WITH_CONTACT = FRANKA_PANDA_HIGH_PD_CFG.copy()
+_FRANKA_ROBOT_CFG_WITH_CONTACT.spawn.activate_contact_sensors = True
+
+
+@configclass
+class FrankaDieLiftContactSceneCfg(FrankaLiftSceneCfg):
+    """`FrankaLiftSceneCfg` + contact-activated robot spawn + two new
+    single-body `ContactSensorCfg` fields on `panda_leftfinger`/
+    `panda_rightfinger`, filtered to the scene's `Object` prim - mirrors
+    `FrankaDieLiftTargetSelectionSceneCfg`'s own "extend `FrankaLiftSceneCfg`
+    with new sibling fields" precedent immediately below in this file, and
+    adapts `tasks/franka/dice_scene_cfg.py`'s already-proven
+    `activate_contact_sensors=True` + two-single-body-`ContactSensorCfg`-
+    with-`filter_prim_paths_expr` pattern (validated there for a plain
+    scripted `InteractiveScene` demo, `scripts/dice_pick_demo.py`) onto a
+    real `ManagerBasedRLEnvCfg` for the first time - a genuinely new
+    wiring, not assumed to transfer automatically (Task 1's own required
+    empirical check, see below). Two separate single-body sensors (not one
+    two-body sensor), matching `tasks/ar4/pickplace_env_cfg.py`'s
+    `gripper_jaw1_contact`/`gripper_jaw2_contact` convention: PhysX requires
+    the filter match count to equal the sensor body count.
+
+    `object` field is NOT overridden here - stays inherited from
+    `FrankaLiftSceneCfg` (the base DexCube). Every leaf env cfg in this file
+    already mutates `self.scene.object` at runtime in its own
+    `__post_init__` regardless of which `SceneCfg` subclass `self.scene`
+    resolves to (confirmed by direct read of this file's own existing
+    pattern - every other leaf class does exactly this), so the die swap
+    for `FrankaDieLiftJointD8BigAntipodalEnvCfg` (Task 2) happens the same
+    way it already does for every other die-lift env cfg in this file.
+
+    **Task 1's required empirical check** (implementation plan's own
+    "Design notes" #3 - the scripted-demo precedent is real but not
+    identical to a live `RewardManager` reading `ContactSensorData.
+    force_matrix_w` every step inside a real training loop). Run live on a
+    GCP L4 cloud instance 2026-07-20 (desktop unreachable that session, per
+    CLAUDE.md's desktop-first/cloud-fallback policy):
+    `scripts/_diag_contact_sensor_check.py` built a minimal 8-env
+    `ManagerBasedRLEnv` using this exact scene cfg (via a throwaway leaf env
+    cfg subclassing `FrankaDieLiftJointD8BigEnvCfg` with only `scene`
+    overridden to `FrankaDieLiftContactSceneCfg()`), teleported the d8 die
+    to the live `ee_frame` pinch point every step (adapting
+    `scripts/calibrate_gripper_contact.py`'s own AR4-era technique) through
+    an open->close->hold gripper phase sequence plus a real "far, untouched"
+    negative control, and read
+    `env.scene["panda_leftfinger_contact"].data.force_matrix_w`/
+    `panda_rightfinger_contact`'s own field directly every step. Confirmed:
+    (a) shape is exactly `(num_envs, 1, 1, 3)` = `(8, 1, 1, 3)` (one body,
+    one filter target, one 3-vector), matching `mdp.antipodal_grasp_bonus`'s
+    own `.view(env.num_envs, 3)` reshape exactly (reshape verified to
+    produce `(8, 3)` with no error) - same shape AR4's own source comment
+    records for its own two-single-body sensors, `tasks/ar4/mdp.py:929`;
+    (b) genuinely EXACTLY zero (`0.000000` N, both jaws, every env) during
+    both the "far" (die left untouched at its own randomized reset position,
+    nowhere near the gripper) and "open" (die teleported to the pinch point
+    but gripper still open) phases - no phantom contact force; (c)
+    genuinely nonzero once the scripted gripper closes on the teleported
+    die: per-jaw force magnitude (max over envs) settled at
+    `left=44.109 N, right=44.060 N` through the "close" phase and stayed at
+    that same order through the full 120-step "hold" phase
+    (`left=44.109 N, right=44.060 N` at the final step) - a real, sustained,
+    roughly bilaterally-symmetric contact-force reading, not a one-step
+    transient. This magnitude is a rigid-teleport-into-contact impulse
+    (the die is teleported already overlapping the pinch point, then the
+    gripper is driven rapidly closed onto it - a stiffer, less gentle
+    contact than a real learned grasp's own gradual approach would produce),
+    not itself a claim about what a trained policy's own contact forces will
+    look like - the check's actual scope is confirming the sensor wiring
+    reads real, nonzero, physically-plausible-order forces on genuine
+    contact and exact zero otherwise, which it does. See
+    `scripts/_diag_contact_sensor_check.py`'s own module docstring and this
+    check's full run log for the complete per-phase numbers."""
+
+    robot: ArticulationCfg = _FRANKA_ROBOT_CFG_WITH_CONTACT.replace(prim_path="{ENV_REGEX_NS}/Robot")
+
+    panda_leftfinger_contact: ContactSensorCfg = ContactSensorCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/panda_leftfinger",
+        update_period=0.0,
+        history_length=0,
+        track_contact_points=True,
+        debug_vis=False,
+        filter_prim_paths_expr=["{ENV_REGEX_NS}/Object"],
+    )
+    panda_rightfinger_contact: ContactSensorCfg = ContactSensorCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/panda_rightfinger",
+        update_period=0.0,
+        history_length=0,
+        track_contact_points=True,
+        debug_vis=False,
+        filter_prim_paths_expr=["{ENV_REGEX_NS}/Object"],
+    )
 
 
 # ---------------------------------------------------------------------------

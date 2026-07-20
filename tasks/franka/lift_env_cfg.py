@@ -359,6 +359,45 @@ class ExplorationBonusRewardsCfg(RewardsCfg):
 
 
 @configclass
+class AntipodalGraspRewardsCfg(RewardsCfg):
+    """`RewardsCfg` + one new, additive reward term: `antipodal_grasp_quality`
+    (Task 1, docs/superpowers/plans/2026-07-20-d8-antipodal-grasp-quality-
+    implementation.md; spec: docs/superpowers/specs/2026-07-20-d8-antipodal-
+    grasp-quality-design.md), a bilateral force-closure/antipodal
+    grasp-quality bonus ported from `tasks/ar4/mdp.py:902-940`'s own
+    `antipodal_grasp_bonus` (Experiments 9-11), refit to this Franka die-lift
+    scene's real friction coefficient (`mu=0.5` -> `antipodal_cos_threshold=
+    -0.894427`, NOT AR4's own `mu=1.0` -> `-0.7071` - see
+    `tasks/franka/antipodal_grasp_reward.py`'s own module docstring for the
+    full derivation).
+
+    Deliberately a NEW class, NOT a term added directly to the shared base
+    `RewardsCfg` - mirrors `ExplorationBonusRewardsCfg`'s own "new subclass,
+    base `RewardsCfg` untouched" precedent immediately above, so every other
+    concurrently-relevant workstream's own use of the plain, unmodified
+    `RewardsCfg`/`FrankaDieLiftJointD8BigEnvCfg` (e.g. the d8/d10
+    demo-warmstart or exploration-bonus arcs) stays completely unaffected
+    (this plan's own Global Constraints). `force_threshold`/
+    `antipodal_cos_threshold`/`weight` are all fixed, implementer-set
+    starting values for this experiment (the spec's own explicit "Global
+    constraints": `antipodal_cos_threshold` is NOT a free dial at all -
+    physically derived from this scene's real friction - while
+    `force_threshold`/`weight` are Tier 2 hillclimb candidates later, not
+    tuned by this experiment either)."""
+
+    antipodal_grasp_quality = RewTerm(
+        func=mdp.antipodal_grasp_bonus,
+        params={
+            "force_threshold": 0.05,
+            "antipodal_cos_threshold": -0.894427,
+            "jaw1_contact_cfg": SceneEntityCfg("panda_leftfinger_contact"),
+            "jaw2_contact_cfg": SceneEntityCfg("panda_rightfinger_contact"),
+        },
+        weight=1.0,
+    )
+
+
+@configclass
 class TerminationsCfg:
     """time_out + object_dropping only - no success-based early termination (matches the stock
     recipe; 100% time-out is the expected steady state here, not evidence of failure)."""

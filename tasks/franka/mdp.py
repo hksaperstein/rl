@@ -31,7 +31,7 @@ import torch
 
 from isaaclab.assets import RigidObject
 from isaaclab.managers import ManagerTermBase, SceneEntityCfg
-from isaaclab.sensors import FrameTransformer
+from isaaclab.sensors import ContactSensor, FrameTransformer
 from isaaclab.utils.math import combine_frame_transforms, subtract_frame_transforms
 
 # Generic, robot/task-agnostic manager-term library (joint_pos_rel, last_action,
@@ -42,6 +42,7 @@ from isaaclab.utils.math import combine_frame_transforms, subtract_frame_transfo
 # Isaac Lab's own installed-package library, not this repo's AR4-era code.
 from isaaclab.envs.mdp import *  # noqa: F401, F403
 
+from .antipodal_grasp_reward import antipodal_grasp_bonus_raw as _antipodal_grasp_bonus_raw_pure
 from .distractor_observations import distractor_distance_summary as _distractor_distance_summary_pure
 from .exploration_bonus_reward import (
     gripper_closure_attempt_bonus_correction as _gripper_closure_attempt_bonus_correction_pure,
@@ -405,3 +406,40 @@ class GripperClosureAttemptBonusCorrection(ManagerTermBase):
         correction = _gripper_closure_attempt_bonus_correction_pure(F_t, self._prev_raw, is_first_step, is_last_step, gamma)
         self._prev_raw = F_t
         return correction
+
+
+def antipodal_grasp_bonus(
+    env: ManagerBasedRLEnv,
+    force_threshold: float,
+    antipodal_cos_threshold: float,
+    jaw1_contact_cfg: SceneEntityCfg,
+    jaw2_contact_cfg: SceneEntityCfg,
+) -> torch.Tensor:
+    """`antipodal_grasp_quality` reward term (AntipodalGraspRewardsCfg,
+    lift_env_cfg.py) - Task 1 of docs/superpowers/plans/2026-07-20-d8-
+    antipodal-grasp-quality-implementation.md; spec: docs/superpowers/specs/
+    2026-07-20-d8-antipodal-grasp-quality-design.md. Thin wrapper: reads live
+    `ContactSensor` state and delegates the actual force-closure/antipodal
+    computation to antipodal_grasp_reward.antipodal_grasp_bonus_raw (pure
+    torch, no isaaclab import, unit-tested in isolation via
+    tests/test_franka_antipodal_grasp_reward.py). Ported (not imported, per
+    the spec - tasks/franka/ never imports tasks/ar4/) from tasks/ar4/mdp.py:
+    902-940's own antipodal_grasp_bonus - same math/signature, refit to this
+    Franka scene's real friction coefficient (mu=0.5 ->
+    antipodal_cos_threshold=-0.894427, NOT AR4's own mu=1.0 -> -0.7071 - see
+    antipodal_grasp_reward.py's own module docstring for the full
+    derivation).
+
+    force_matrix_w reshape (`.view(env.num_envs, 3)`, identical to the AR4
+    source's own reshape): empirically confirmed correct for this scene's
+    own single-body/single-filter ContactSensorCfg wiring
+    (FrankaDieLiftContactSceneCfg, dice_lift_joint_env_cfg.py) by Task 1's
+    own required empirical check - see that class's own docstring for the
+    exact observed shape/values, not assumed to transfer byte-for-byte from
+    the AR4 source's own scene topology without re-confirming here.
+    """
+    jaw1_sensor: ContactSensor = env.scene[jaw1_contact_cfg.name]
+    jaw2_sensor: ContactSensor = env.scene[jaw2_contact_cfg.name]
+    jaw1_force_vec = jaw1_sensor.data.force_matrix_w.view(env.num_envs, 3)
+    jaw2_force_vec = jaw2_sensor.data.force_matrix_w.view(env.num_envs, 3)
+    return _antipodal_grasp_bonus_raw_pure(jaw1_force_vec, jaw2_force_vec, force_threshold, antipodal_cos_threshold)

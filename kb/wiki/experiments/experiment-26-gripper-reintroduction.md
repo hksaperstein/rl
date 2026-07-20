@@ -164,6 +164,14 @@ ungated-sum shape and Experiment 17/18's separately-weighted gated terms.
 directly from Experiment 25's own Isaac-Lab-reference-task derivation
 (Stack task, 30.0s, the closest structural analog to this 4-stage task);
 see that article for the derivation itself.
+[[ar4-vs-franka-root-cause-comparison]] — a later (2026-07-20) direct
+root-cause investigation of the jaw-mirroring retirement referenced
+above: confirms the underlying jaw-mimic constraint was never
+successfully enforced by any of three independent mechanisms across
+Experiments 17-22, and that this project's own recorded verdict for this
+experiment ("not yet root-caused to a specific fix") was never actually
+resolved in favor of the asset-defect explanation over the reward-design
+one before the platform pivot.
 
 ## Sources
 

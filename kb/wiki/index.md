@@ -14,10 +14,16 @@ arm** — Experiments 1 through 26 below, one AR4 arm, one graspable object
 progress was made (reach solved, antipodal grasp contact increasingly
 reliable) but a genuine lift-and-carry was never confirmed in evaluation
 video, and mounting evidence (see Experiment 26 and the follow-up
-investigations after it) pointed at AR4-asset-specific defects — an
-unresolved 17-27mm classical-IK positioning miss, an unconfirmed gripper
-jaw-mimic constraint, unverified jaw collision geometry — rather than a
-fundamental RL/reward-design difficulty.
+investigations after it) pointed at AR4-asset-specific defects — a
+classical-IK positioning miss, an unconfirmed gripper jaw-mimic
+constraint, unverified jaw collision geometry — rather than a fundamental
+RL/reward-design difficulty. **[[ar4-vs-franka-root-cause-comparison]]**
+(2026-07-20) directly root-caused all three against the Franka setup:
+the jaw-mimic finding holds up (confirmed never enforced, and Franka's
+identical action-space mechanism needed no fix), the IK-miss claim was
+real but overstated in its precision and was a classical-script/DLS
+control-algorithm limitation rather than a URDF defect, and the
+collision-geometry claim was never actually verified on either platform.
 
 **Phase 2 (current): the Franka Emika Panda**, per the platform-pivot
 decision recorded in [CLAUDE.md](../../CLAUDE.md) — built on a dedicated
@@ -243,6 +249,18 @@ see the coverage boundary note below.)*
   demo-script synchronous-subprocess stall are both structural, not
   bugs. The window is not a training-health signal in either direction —
   watch the log-mtime heartbeat and TensorBoard instead.
+- [[ar4-vs-franka-root-cause-comparison]] (2026-07-20) — a dedicated
+  read-only investigation root-causing the pivot's three named AR4
+  defects against Franka directly: the jaw-mimic constraint confirmed
+  never enforced (3/3 fix attempts failed) with a genuinely revealing
+  structural finding (both platforms use the identical symmetric
+  action-space mechanism — the defect is physical, not RL-design); the
+  classical-IK grasp miss re-characterized as a DLS single-step
+  local-minimum trap in standalone demo scripts, not a URDF/asset
+  defect, with the "17-27mm" figure itself unsourced; and the jaw
+  collision-geometry claim still unverified on both platforms. Also
+  finds the project's own last AR4 result (Experiment 26) was never
+  cleanly attributed to these defects rather than reward design.
 
 ## Scope of this first pass
 

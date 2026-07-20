@@ -241,7 +241,14 @@ achieved — not a general breakdown of this project's established reach
 behavior. Not yet root-caused to a specific fix — see
 [[experiment-26-gripper-reintroduction]] for the full result and
 [[staged-reward-co-satisfiability]] for the reward mechanism this design
-extends.
+extends. **[[ar4-vs-franka-root-cause-comparison]]** (2026-07-20) is the
+direct follow-up investigation into "not yet root-caused": it confirms
+the jaw-mimic constraint was never enforced (three independent fix
+attempts, all failed) and that this is a real, physical, AR4-specific
+asset defect distinct from Franka's own working asset — but also finds
+Experiment 26's own recorded verdict never cleanly separated that
+explanation from the reward-design one named above, so this arc's true
+final answer stayed confounded through the pivot decision itself.
 
 ## Related experiments
 

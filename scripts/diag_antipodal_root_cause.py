@@ -9,8 +9,9 @@ see `kb/wiki/experiments/d8-antipodal-grasp-quality.md`'s already-CLOSED
 H_joint/H_taskspace result and its "Root cause investigation" follow-up
 section (2026-07-20) this script was built to support.
 
-Loads a trained checkpoint (either condition) and rolls out N envs for one
-full episode, recording every step:
+Loads a trained checkpoint (any of the three conditions) and rolls out N envs for one
+full episode, recording every step. Condition-relative support added per Task 2 of
+`docs/superpowers/plans/2026-07-20-d8-relative-joint-action-implementation.md`:
   - both jaws' raw contact-force vectors (`panda_leftfinger_contact`/
     `panda_rightfinger_contact` ContactSensorCfg, the exact
     `force_matrix_w.view(N, 3)` reshape Task 1 of the antipodal-grasp-
@@ -75,7 +76,7 @@ import sys
 from isaaclab.app import AppLauncher
 
 parser = argparse.ArgumentParser(description="Per-step contact/reward/pose instrumentation for a trained antipodal checkpoint.")
-parser.add_argument("--variant", choices=["condition-a", "condition-b"], required=True)
+parser.add_argument("--variant", choices=["condition-a", "condition-b", "condition-relative"], required=True)
 parser.add_argument("--checkpoint", type=str, required=True, help="Path to the rsl_rl checkpoint (.pt) to load.")
 parser.add_argument("--num_envs", type=int, default=64)
 parser.add_argument(
@@ -115,6 +116,7 @@ from tasks.franka.antipodal_grasp_reward import antipodal_grasp_bonus_raw  # noq
 from tasks.franka.dice_lift_joint_env_cfg import (  # noqa: E402
     FrankaDieLiftD8BigTaskspaceAntipodalEnvCfg_PLAY,
     FrankaDieLiftJointD8BigAntipodalEnvCfg_PLAY,
+    FrankaDieLiftJointD8BigRelativeAntipodalEnvCfg_PLAY,
 )
 from isaaclab.managers import SceneEntityCfg  # noqa: E402
 
@@ -162,8 +164,10 @@ REWARD_TERMS = [
 def main() -> None:
     if args_cli.variant == "condition-a":
         env_cfg = FrankaDieLiftJointD8BigAntipodalEnvCfg_PLAY()
-    else:
+    elif args_cli.variant == "condition-b":
         env_cfg = FrankaDieLiftD8BigTaskspaceAntipodalEnvCfg_PLAY()
+    else:
+        env_cfg = FrankaDieLiftJointD8BigRelativeAntipodalEnvCfg_PLAY()
     env_cfg.scene.num_envs = args_cli.num_envs
     env_cfg.sim.device = args_cli.device
 

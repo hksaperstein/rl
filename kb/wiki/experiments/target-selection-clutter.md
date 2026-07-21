@@ -716,6 +716,137 @@ complete itself.
 Commit: `scripts/extend_checkpoint_observation_dims.py`'s docstring-only
 change (no `.pt` files committed).
 
+**Task 5: training + eval — PRIMARY FALSIFICATION CHECK (2026-07-21).**
+Desktop was checked first (`scripts/check_gpu_availability.sh`) and was
+genuinely BUSY — a concurrent AR4-fixes-transfer workstream was actively
+training on the desktop's GPU at dispatch time (a separate checkout,
+`/home/saps/projects/rl-ar4-fixes-transfer`, confirmed via a live
+`rl-gpu-job` inhibitor + a real compute-app PID in `nvidia-smi`), so this
+ran on GCP cloud fallback (`g2-standard-4` + 1x L4, SPOT initially,
+zone `us-central1-c` after `us-central1-a`/`-b` both stockout-rejected).
+Public-repo clone (`git clone https://github.com/hksaperstein/rl.git`,
+no deploy key needed — repo went public 2026-07-13) at commit `ee71f17`,
+matching this session's own local `main` HEAD exactly.
+
+**Second `--verify` on the training host (Task 4's own precondition):**
+downloaded `model_5096.pt` fresh and re-ran the checkpoint surgery on the
+GCP instance itself — **PASSED again, exactly 0.0 max abs diff for both
+actor and critic branches**, confirming Task 4's local result held on a
+completely independent machine/download.
+
+**Training:** `train_franka.py --variant joint-die-target-selection-e1
+--checkpoint model_5096_44dim.pt --policy_only_checkpoint --max_iterations
+6096`. Printed `Resumed from model_5096_44dim.pt at iteration 5096;
+running 1000 more iteration(s) to reach the absolute target 6096` —
+confirming the checkpoint's own recorded iteration count directly, not
+assumed from the filename. Reward curve watched live throughout: at the
+earliest captured data (iteration ~5388, ~300 iterations into the resume)
+`Episode_Reward/lifting_object` was already 13.14 and
+`Episode_Reward/object_goal_tracking` already 12.36 — both already at or
+above D2's own final converged plateau (D2 finished at ~13.0 / climbing
+to ~12.2, per that stage's own section above) — then climbed gently and
+noisily (not monotonically iteration-to-iteration, but a clear overall
+rise) to 13.35 / 12.79 by the final iteration (6095), with
+`Episode_Termination/object_dropping` low and stable throughout (0.1-0.6%,
+no divergence). **Judgment call: did not extend the 1000-iteration
+starting budget.** The curve was still drifting upward as the budget's
+end approached (matching the plan's own "still climbing" language
+literally), but the magnitude of that residual drift was small (roughly
++0.2 reward units over the last ~700 iterations) and the run had already
+reached/exceeded D2's own final numbers well before the budget ran out —
+extending further looked like diminishing-returns fine-tuning, not
+recovery from a real perturbation, and the $2 cost cap favored stopping
+at a result that already comfortably passes the falsification bar (see
+below) over spending more budget chasing a further, likely-marginal gain.
+Training took **24 min 23s** wall-clock on the cloud L4 (`Total timesteps:
+98,304,000` at 4096 envs) — coincidentally almost identical to D2's own
+~24.5-minute 1000-iteration resume. Final checkpoint saved as
+`model_6095.pt` (rsl_rl's normal 0-indexed save-numbering artifact for a
+`max_iterations=6096` target, same pattern as the shakedown recipe's own
+documented `model_1499.pt` for a `max_iterations=1500` run — not a bug).
+
+**Instrumented eval** (`franka_checkpoint_review.py --eval_target_shape
+{d12,d20}`, num_envs=8, full 4-entity E1 topology, all 3 distractors
+real/active, checkpoint `model_6095.pt`):
+
+| shape | envs_with_sustained_lift | falsification bar (>=6/8) | max_height_gain | max_consecutive_lifted_steps |
+|-------|---------------------------|----------------------------|------------------|-------------------------------|
+| d12   | **8/8**                   | PASS                       | 321.6-469.4mm    | 220-223 (of 250 episode steps) |
+| d20   | **8/8**                   | PASS                       | 304.0-488.1mm    | 219-222 (of 250 episode steps) |
+
+**Primary falsification check (pre-registered in the spec): both shapes
+independently clear the 6/8 bar at 8/8 (100%)** — comfortably above the
+75% floor, matching D2's own 8/8-both-shapes result at one more
+simultaneous distractor. **The count-curriculum + fixed-size zero-padded
+observation mechanism is NOT falsified at K=3, for either shape.**
+
+**Video inspection — both target-shape eval videos downloaded and
+inspected frame-by-frame (`ffmpeg`-extracted stills at 2fps spanning the
+full 10s clip, not just the JSON summary), per this project's
+verification standard and matching D2's own practice:** in both videos, 4
+objects are visible at the very first frame (the target, near the
+gripper's start pose, plus the 3 distractors in a row); by the second
+frame (~1s in) only the 3 distractors remain visible on the table — the
+target is grasped and lifted essentially immediately, consistent with the
+height instrumentation's own `resting_z` measurement window (steps
+10-45) and matching D2's own documented "white-on-white, visually hard to
+distinguish from the gripper at this camera distance, but ground-truth-
+confirmed via height instrumentation" note. **Across every inspected
+frame through to the end of both episodes, all 3 distractors remain in
+their original table positions, completely undisturbed** — no frame in
+either video showed the gripper grasping or disturbing a distractor die.
+Same structural guarantee as D2: `scene["object"]` is always the
+commanded target by scene-topology construction, so the height metric
+alone already rules out "lifted a distractor, left the target behind";
+the video check independently confirms the complementary case (no
+distractor disturbance), now re-verified at one more simultaneous
+distractor than D2's own check.
+
+**Infra notes (folded into `docs/cloud/dispatch-checklist.md`'s pattern,
+recorded here for this run's own record):** two genuine SPOT preemptions
+hit during this task (confirmed via `gcloud compute operations list`
+showing real `compute.instances.preempted` events, not stockout/manual
+stops) — one ~5 minutes after instance creation (interrupted the apt
+install mid-transaction; a plain re-run of the same idempotent install
+script recovered cleanly, no dpkg corruption found this time), and a
+second immediately after training completed and the final checkpoint was
+already safely on disk (interrupted at eval start, before any eval
+artifact was written, so nothing was lost). The second preemption's
+restart hit genuine `ZONE_RESOURCE_POOL_EXHAUSTED` stockout across **15**
+retry attempts in `us-central1-c` (worse than the checklist's own
+documented "a brief retry loop... reliably found a moment of free SPOT
+capacity" precedent) — resolved by switching the *stopped* instance from
+SPOT to on-demand in place (`gcloud compute instances set-scheduling
+--no-preemptible --provisioning-model=STANDARD
+--clear-instance-termination-action --restart-on-failure`, preserving the
+boot disk with the venv/repo/checkpoint intact rather than losing them to
+a snapshot-and-recreate-elsewhere recovery), which started immediately
+and let eval/sync/teardown finish without further interruption.
+
+**Checkpoint:**
+`gs://rl-manipulation-hks-runs/target-selection-clutter/joint-die-target-selection-e1/seed42/2026-07-21_22-30-33/model_6095.pt`.
+Eval artifacts (videos + heights JSON/npy, both shapes):
+`gs://rl-manipulation-hks-runs/target-selection-clutter/eval-artifacts/joint-die-target-selection-e1/`.
+
+**Cost:** ~$0.59 total against the $2 cap (SPOT compute ~$0.33 for
+~55.5min combined uptime across the two SPOT windows before each
+preemption, + on-demand compute ~$0.23 for ~14.5min after the scheduling
+switch, + disk ~$0.03 for ~1.47hr total instance existence at
+150GB pd-balanced) — comfortably under cap; no controller notification
+needed. Full teardown verified: instance deleted, `scripts/check_cloud_state.sh`
+clean (zero instances/disks/snapshots), no local Isaac Sim process, flock
+lock free.
+
+**Bottom line — Stage E1 PASSES for both shapes.** The same
+count-curriculum + fixed-size zero-padded `distractor_distance_summary`
+observation mechanism that was already validated at K=1 (Stage SO/D1) and
+K=2 (Stage D2) continues to scale cleanly to K=3 simultaneous
+distractors, via a single checkpoint-resumed training step from D2's own
+finished policy, with no observed "grasped the wrong die" failure mode.
+Per the plan's own explicit scope: **E2 (3→4 distractors) and S1 (folding
+in d8/d10) remain future, separately-gated specs** — this result does not
+itself start either of those follow-on stages.
+
 ## Related
 
 [[unified-multi-die-specialist-distillation]] — this experiment's own

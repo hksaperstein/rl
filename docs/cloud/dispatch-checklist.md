@@ -74,6 +74,33 @@ or assume it's implied by other context.)
 
 ## Known infra gaps as of 2026-07-17 (fold into the recipe if they recur)
 
+- **A SPOT preemption followed by `gcloud compute instances start` can
+  come back `RUNNING` but stuck in a GRUB rescue prompt, never actually
+  finishing boot** (found 2026-07-21, d8-antipodal-root-cause diagnostic
+  task — confirmed via `gcloud compute instances get-serial-port-output`,
+  which showed `error: can't find command` repeated at a `grub>` prompt
+  instead of a normal boot log). Distinct from every previously-documented
+  preemption case above (which all resumed cleanly with a plain restart) —
+  this is a genuine boot-disk corruption, not a preemption-recovery
+  scenario a resume script can work around. No interactive GRUB-repair
+  attempted (no established recipe for this project, and each attempt
+  costs real wall-clock on a real running instance); the pragmatic
+  response that worked: delete the stuck instance immediately (verify zero
+  leftover resources via `scripts/check_cloud_state.sh`), re-provision a
+  fresh instance from scratch, and treat any local-disk-only progress
+  since the last GCS sync as lost. **Mitigation for future long training
+  runs**: run a background loop (`while true; do gsutil -m rsync -r
+  <run-dir> gs://.../ ; sleep 300; done` in its own detached `tmux`
+  session, alongside the training session) that periodically syncs
+  checkpoints/tfevents to GCS throughout the run, not just once at the
+  end — so a repeat of this exact failure mode loses at most one sync
+  interval of progress instead of the entire run. On-demand provisioning
+  was tried first as an alternative to avoid the preemption that triggers
+  this failure mode at all, but was fully stocked out project-wide across
+  10 surveyed zones at dispatch time (`us-central1-a/b/c`, `us-east1-b/c/d`,
+  `us-west1-a/b/c`, `us-west4-a/c`) — SPOT was the only viable option, so
+  this gap should be assumed live for any future SPOT dispatch until a
+  real GRUB-recovery recipe exists (not yet built).
 - A SPOT preemption mid-install can corrupt the shared pip wheel cache
   on the boot disk — a resumed install may need a cache clear, not just
   a plain re-run.

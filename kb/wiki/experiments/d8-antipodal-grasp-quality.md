@@ -535,6 +535,96 @@ d8 lift. Not decided or started here, per this plan's own explicit
 decision for Principal on whether/how to pursue that residual-seed
 question is a separate, later call.
 
+## Root cause investigation (2026-07-21 follow-up): joint-space learns to AVOID contact entirely, not "touch non-antipodally" — and the mechanism is not the one originally hypothesized
+
+**Motivation.** The Closing verdict above establishes THAT H_joint fails and H_taskspace succeeds, but this project's own AR4-era arc (Experiments 9→10→11) never root-caused *why* joint-space regresses the antipodal signal to zero — it only found that switching to task-space worked. This follow-up root-causes the mechanism directly from real rollout data (not just tfevents scalars), using a new instrumented diagnostic script, `scripts/diag_antipodal_root_cause.py` (headless, no video — records per-step contact-force vectors on both jaws, the antipodal geometric sub-conditions, every `AntipodalGraspRewardsCfg` reward term's raw pre-weight value via direct `mdp` function calls — the same direct-call pattern `scripts/smoke_test_graspgoal_ground_penalty.py` established — plus `ee_frame` position/orientation and the policy's own raw actions, all cross-checked against the exact training-time `antipodal_grasp_bonus_raw` function via an in-script assertion).
+
+**Method.** Three data sources, all real rollouts (128 envs × 249 steps ≈ 31,872 samples per checkpoint), not proxies:
+1. The three ORIGINAL H_joint seeds' already-existing final checkpoints (`gs://rl-manipulation-hks-runs/d8-antipodal-grasp-quality/joint-die-d8-big-antipodal/seed{42,123,7}/`) — free, no retrain.
+2. A fresh joint-space retrain (Condition A, seed 42, identical recipe, GCP SPOT `g2-standard-4`+`nvidia-l4`) with checkpoints kept at iterations {0, 100, 300, 700, 1499} — since the original run's intermediate checkpoints (`save_interval=50`) were never GCS-synced (only the final was), a fresh run was required to get a trajectory, not just an endpoint. Synced throughout to `gs://rl-manipulation-hks-runs/d8-antipodal-root-cause/joint-seed42-retrain/` via a background sync loop (mitigation for the SPOT-preemption/reboot-corruption incident below).
+3. A fresh task-space retrain (Condition B, seed 123 — the one seed that succeeded in the original H_taskspace run), same 5 checkpoints, `gs://rl-manipulation-hks-runs/d8-antipodal-root-cause/taskspace-seed123-retrain/`.
+
+**Operational incident (new infra gap, folded into `docs/cloud/dispatch-checklist.md`):** the first SPOT instance was genuinely preempted (`compute.instances.preempted` confirmed via `gcloud compute operations list`) 34 minutes into the joint-space retrain; on `gcloud compute instances start`, the instance came back `RUNNING` but stuck at a GRUB rescue prompt (confirmed via `get-serial-port-output`) and never finished booting — a boot-disk corruption distinct from every previously-documented preemption-recovery case in this project (which all resumed cleanly). Cut losses rather than debug GRUB interactively: deleted the stuck instance (verified zero leftover resources) and re-provisioned fresh (on-demand was fully stocked out project-wide across 10 zones at the time, confirmed empirically before falling back to SPOT again) rather than trying to recover the corrupted disk. The interrupted retrain's own partial checkpoints were unrecoverable (lost with the deleted disk), but this cost no real data since the retrain was restarted from scratch on the new instance and ran to completion cleanly; the three original seeds' free-rollout `.npz` files (not the summary numbers, which were already captured in this task's own transcript) were similarly lost with that same disk and are not re-derivable without re-running those three rollouts.
+
+### Finding 1: contact frequency, not geometric precision, is the discriminating variable — H1 resolved decisively toward "avoidance"
+
+Directly measured fraction of (step, env) samples where BOTH jaws register force above `force_threshold=0.05N` (the antipodal term's own magnitude gate):
+
+| checkpoint | contact_frequency | antipodal_satisfying_frequency | fraction of contact steps that ARE antipodal |
+|---|---|---|---|
+| joint-space, seed 42 final (original run) | **0.0** | 0.0 | n/a |
+| joint-space, seed 123 final (original run) | **0.0** | 0.0 | n/a |
+| joint-space, seed 7 final (original run) | **0.0** | 0.0 | n/a |
+| joint-space retrain (seed 42), iter 0 | 0.0 | 0.0 | n/a |
+| joint-space retrain (seed 42), iter 100 | **0.0** | 0.0 | n/a |
+| joint-space retrain (seed 42), iter 300 | **0.0** | 0.0 | n/a |
+| joint-space retrain (seed 42), iter 700 | **0.0** | 0.0 | n/a |
+| joint-space retrain (seed 42), iter 1499 | **0.0** | 0.0 | n/a |
+| task-space retrain (seed 123), iter 0 | 0.0 | 0.0 | n/a |
+| task-space retrain (seed 123), iter 100 | 0.00047 | 0.00044 | **93.3%** |
+| task-space retrain (seed 123), iter 300 | 0.6297 | 0.6254 | **99.3%** |
+| task-space retrain (seed 123), iter 700 | 0.8539 | 0.8518 | **99.7%** |
+| task-space retrain (seed 123), iter 1499 | 0.8781 | 0.8780 | **99.996%** |
+
+Joint-space's contact frequency is **exact, literal `0.0` at every single one of 8 checkpoints spanning the full 0→1499 range across 4 different seeds/runs (all 3 original seeds' final checkpoints + the fresh seed-42 retrain's full 5-point trajectory)** — not a low number, an exact zero over ~32k samples each time. This directly answers the question the design spec's own outcome matrix left open: joint-space's policy is not touching the object non-antipodally and failing the geometric condition — **it converges to never touching the object at all.** Task-space, in clean contrast, shows contact frequency **rising monotonically from 0 to 88%** over the identical 1500 iterations, and — critically — whenever contact happens, it is *already* overwhelmingly antipodal from the very first checkpoint where any contact appears at all (93.3% at iter 100, rising to 99.996% by iter 1499). This means task-space's own learning problem was never "achieve contact, then fix its geometry" — geometric correctness essentially comes for free once any contact happens at all under task-space; the entire learning curve is about **achieving contact reliably in the first place**, which is exactly the thing joint-space never manages to do even once in ~256k sampled (step, env) pairs across this investigation.
+
+Independent reproduction: seed 123's re-derived `antipodal_satisfying_frequency=0.8780` at iter 1499 closely matches the original H_taskspace run's own tfevents-derived `Episode_Reward/antipodal_grasp_quality` final value (`0.83944721`) — a genuinely different measurement (single eval rollout of 128 envs at the exact final checkpoint vs. a 4096-env on-policy training average over the final 100 iterations) landing in close agreement, corroborating both the original result and this follow-up's own new instrumentation.
+
+### Finding 2: the reward-structure hypothesis (H2) is ruled out numerically, not just by inference
+
+Read every `RewardsCfg`/`AntipodalGraspRewardsCfg` term's raw (pre-weight) value directly from the same rollouts. The `action_rate`/`joint_vel` penalty terms' *weighted* per-step contributions (`weight=-1e-4` each) are:
+
+| checkpoint | action_rate (raw → weighted) | joint_vel (raw → weighted) |
+|---|---|---|
+| joint-space retrain, iter 1499 | 0.0644 → **−6.4e-6** | 1.1991 → **−1.2e-4** |
+| task-space retrain, iter 1499 | 0.2706 → **−2.7e-5** | 3.6887 → **−3.7e-4** |
+
+Both conditions' weighted penalty contributions are **2-4 orders of magnitude smaller** than the reward terms that actually matter (`reaching_object` realizing 0.10-0.84 at weight 1.0; `antipodal_grasp_quality` realizing up to 0.88 at weight 1.0) — nowhere near large enough to plausibly disincentivize contact-seeking behavior in either condition. More decisively: **the reward structure, including these exact penalty weights, is byte-identical between conditions** (both inherit `AntipodalGraspRewardsCfg` unchanged), and it produces dramatically different outcomes (0% vs. 88% contact frequency) — if the reward structure itself were the cause, it would have to fail identically in both conditions, which it does not. **H2 is ruled out directly, not merely deprioritized.**
+
+### Finding 3: the exploration/action-space-geometry hypothesis (H3) as originally framed is falsified by the data — but a refined, better-evidenced version of it holds
+
+The original H3 hypothesized joint-space's 7-DOF direct actuation produces **noisier** per-step end-effector motion than task-space's direct 6-DOF Cartesian action. Measured directly (`ee_frame` position/orientation step-to-step deltas):
+
+| checkpoint | joint-space EE pos jitter (mean, m) | task-space EE pos jitter (mean, m) | joint-space EE ang jitter (mean, rad) | task-space EE ang jitter (mean, rad) |
+|---|---|---|---|---|
+| iter 0 | 0.000157 | 0.00701 | 0.000497 | 0.02371 |
+| iter 100 | 0.00256 | 0.00596 | 0.00804 | 0.02820 |
+| iter 300 | 0.00324 | 0.02036 | 0.01573 | 0.05089 |
+| iter 700 | 0.00385 | 0.01460 | 0.01052 | 0.03193 |
+| iter 1499 | 0.00320 | 0.00527 | 0.00952 | 0.01271 |
+
+**Task-space's own raw per-step jitter is equal to or LARGER than joint-space's at every single checkpoint, including iteration 0 (pure random-init policy, before any learning)** — the exact opposite of the original hypothesis. "Joint-space produces geometrically noisier motion" is falsified as stated.
+
+The real, data-supported distinguishing signature instead shows up in the **shape of the `reaching_object` reward's own trajectory**:
+
+| checkpoint | joint-space `reaching_object` | task-space `reaching_object` |
+|---|---|---|
+| iter 0 | 0.00089 | 0.0000682 |
+| iter 100 | **0.6015 (peak)** | 0.7899 |
+| iter 300 | 0.2337 | 0.6506 |
+| iter 700 | 0.1136 | 0.8203 |
+| iter 1499 | **0.0957** | **0.8394** |
+
+Joint-space **transiently discovers** a real approach-the-object capability early (peaking at iteration 100, matching the original run's own reported antipodal-signal transient peak window of iter ~48-60), then **regresses away from it** over the remaining 1400 iterations, converging to a policy that stays substantially farther from the object than it once did. Task-space's `reaching_object` reward instead rises and *stays* high throughout. Given the reward structure is identical (Finding 2), this is not a reward-incentive difference — it is a **learnability/credit-assignment difference intrinsic to the action-space mapping itself**: joint-space's 7-DOF direct actuation requires the policy to implicitly learn a configuration-dependent, nonlinearly-coupled mapping from raw joint deltas to precise end-effector motion near the object — a mapping that changes shape depending on the arm's current pose — whereas task-space's action is mediated by a fixed, non-learned differential-IK controller that keeps the action-to-EE-motion relationship consistent regardless of configuration. As PPO's own action-distribution entropy narrows over training (a documented PPO dynamic — see citations below), joint-space's early, marginal, exploration-noise-driven successful approaches are not consistently reinforced or generalized, and the policy abandons them for a lower-variance, lower-ceiling "hover-near-but-never-touch" local optimum; task-space's configuration-independent mapping keeps the same final-approach precision reachable and reinforceable even as entropy shrinks, so it does not fall into the same trap.
+
+**Literature grounding** (existence/accuracy-checked per this project's standing citation practice, not deeply re-litigated once confirmed real):
+- Martín-Martín, Lee, Gardner, Savarese, Bohg, Garg, "Variable Impedance Control in End-Effector Space: An Action Space for Reinforcement Learning in Contact-Rich Tasks," IROS 2019 (arXiv:1906.08880) — directly compares joint-torque/joint-PD vs. task-space/impedance action spaces on contact-rich manipulation; task-space parameterizations learn faster and more reliably, attributed to direct alignment with task-relevant Cartesian DOFs vs. a configuration-dependent joint mapping. On-point, not incidental.
+- Varin, Grossman, Kuindersma, "A Comparison of Action Spaces for Learning Manipulation Tasks," IROS 2019 (arXiv:1908.08659) — ablates torque/joint-PD/inverse-dynamics/task-space-impedance action spaces across contact-rich tasks with both PPO and SAC; task-space impedance "significantly reduces the number of samples needed" across all tasks/algorithms. Direct sample-efficiency comparison.
+- Hsu, Mendler-Dünner, Hardt, "Revisiting Design Choices in Proximal Policy Optimization" (arXiv:2009.10897, 2020 — remains an arXiv preprint, not confirmed peer-reviewed, cited as such) — formally characterizes a PPO failure mode where a continuous Gaussian policy initially converges toward high-reward regions, then diverges into low-reward regions as the policy's variance shrinks (the score function becomes hypersensitive to tail actions, and a single off-policy reward signal can produce an outsized update the policy has little signal to recover from). A close mechanistic match to the observed `reaching_object` rise-then-decay.
+- Nikishin, Schwarzer, D'Oro, Bacon, Courville, "The Primacy Bias in Deep Reinforcement Learning," ICML 2022 (arXiv:2205.07802) — thematically adjacent (agents overfit to early experience, fail to incorporate later evidence) but its own experiments are off-policy/value-based (SAC, Rainbow), not on-policy PPO continuous control — cited as a weaker analogy, not a direct mechanistic match, and flagged honestly as such rather than overstated.
+
+### Candidate fixes surveyed, NOT implemented (a design decision, not a scoped bug fix)
+
+Per this task's own explicit instruction not to implement blind: three candidates were considered and none were implemented, because each requires a genuine design decision beyond this investigation's scope (root-causing an already-closed result, not authoring a new experiment):
+
+1. **Warm-start joint-space from the task-space policy's weights.** Blocked cleanly at the output layer (8 total actions — 7 joint + gripper — vs. task-space's 7 — 6 Cartesian + gripper — a shape mismatch), though the shared trunk could in principle transfer with checkpoint-surgery plumbing this repo doesn't currently have. A real candidate, but a nontrivial architecture change.
+2. **Reward-shaping adjustment.** Not well-motivated — Finding 2 directly rules out the reward structure as the differentiator, so changing reward weights would not address a credit-assignment/exploration problem.
+3. **An action-space parameterization between raw absolute joint targets and full 6-DOF differential-IK.** Isaac Lab v2.3.1's own `isaaclab/envs/mdp/actions/actions_cfg.py` (surveyed directly on the live cloud instance, not merely assumed) has real, concrete options besides the two already tested: `RelativeJointPositionActionCfg` (still fully joint-space, no IK layer at all, but INCREMENTAL/relative deltas rather than absolute-position-with-offset targets — bounds each action's effect to a small, fixed-scale joint delta regardless of current pose) and `OperationalSpaceControllerActionCfg` (a distinct operational-space controller, not the `DifferentialInverseKinematicsActionCfg` already used for H_taskspace). This is the most direct next test this investigation surfaces: `RelativeJointPositionActionCfg` isolates "relative/incremental action semantics" from "joint-space vs. task-space" as two axes this experiment's own 2-condition design changed simultaneously (Condition A vs. B differ in BOTH joint-vs-task AND absolute-vs-relative at once) — a genuinely new Tier 1 structural-experiment candidate (new action term = new hypothesis + spec + plan per `CLAUDE.md`'s workflow), flagged here for Principal's own next-direction call, not decided or spec'd by this investigation.
+
+### Cost
+
+Two SPOT `g2-standard-4`+`nvidia-l4` instances (the first destroyed after the GRUB-corruption incident above, ~1hr instance-uptime before deletion; the second ran the full retrain+diagnostic pipeline end-to-end, ~5.5hr instance-uptime including install/rollouts/two full 1500-iteration training runs). Estimated (duration × published SPOT SKU rate, no BigQuery billing export exists in this project): **≈$2.5** total, well within a reasonable follow-up budget and consistent with this project's own prior per-run cost pattern. Full teardown verified via `scripts/check_cloud_state.sh` (zero instances/disks/snapshots after the final deletion).
+
 ## Related
 
 [[experiment-09-antipodal-grasp-bonus]],

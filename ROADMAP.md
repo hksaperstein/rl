@@ -4497,3 +4497,48 @@ experiment" constraint; a decision for Principal on whether/how to pursue
 that residual-seed question is a separate, later call. See
 `kb/wiki/experiments/d8-antipodal-grasp-quality.md` for the full
 per-seed/per-condition evidence and independent-verification detail.
+
+**Root-cause follow-up (2026-07-21): joint-space learns to AVOID contact
+entirely, not "touch non-antipodally" — resolved with real rollout data,
+not just tfevents scalars.** Directly measured contact frequency (fraction
+of steps with real nonzero force on both jaws) across 8 checkpoints
+spanning 4 different joint-space runs/seeds (all 3 original H_joint final
+checkpoints + a fresh seed-42 retrain's full 0→1499 trajectory): **exact,
+literal `0.0` at every single one** — not merely low. Task-space's own
+contact frequency, measured the same way on a fresh seed-123 retrain, rises
+monotonically 0→88% over training, and once contact happens it is already
+93-99.996% antipodal from the earliest checkpoint where any appears — i.e.
+task-space's whole learning problem is *achieving* contact, not fixing its
+geometry afterward. The reward-structure hypothesis is ruled out
+numerically (action-rate/joint-vel penalties are 2-4 orders of magnitude
+too small to matter, in both conditions, under the byte-identical reward
+cfg both conditions share). The originally-hypothesized "joint-space
+produces noisier raw motion" mechanism is directly falsified — task-space's
+own per-step EE jitter is equal-or-larger at every checkpoint, including
+iteration 0. The real, data-backed mechanism: joint-space's `reaching_object`
+reward *rises then decays* (peaks ~iter 100, falls back down by iter 1499)
+— a transiently-discovered approach capability the policy abandons over
+training — while task-space's rises and stays high throughout, consistent
+with a credit-assignment/exploration difference intrinsic to joint-space's
+configuration-dependent action-to-EE-motion mapping (grounded in real,
+verified literature: Martín-Martín et al. IROS 2019 VICES;
+Varin et al. IROS 2019 action-space comparison; Hsu et al. 2020 on PPO's
+own entropy-narrowing dynamic — see the kb article for full citations and
+an honest note on which literature match is strong vs. merely thematic). No
+fix implemented — three candidates were surveyed (checkpoint warm-start,
+blocked by an action-dim mismatch; reward-shaping, unmotivated given the
+numeric rule-out above; and `RelativeJointPositionActionCfg` — a genuine
+incremental/relative joint-space action option this task found by surveying
+Isaac Lab's actual `actions_cfg.py`, isolating "relative vs. absolute
+action semantics" from "joint- vs. task-space" as two axes the original
+2-condition design changed simultaneously) but none implemented, since each
+is a genuine design decision (a new action-space axis needs its own Tier 1
+hypothesis/spec/plan) rather than a scoped bug fix this task could close out
+unilaterally. Flagged to Principal as the clearest next candidate direction
+if this axis is revisited. Cost ≈$2.5 (two SPOT cloud dispatches; the first
+instance was destroyed after a genuine SPOT-preemption-then-GRUB-boot-
+corruption incident on restart — a new infra gap, not previously seen in
+this project's own cloud history, folded into
+`docs/cloud/dispatch-checklist.md`). See
+`kb/wiki/experiments/d8-antipodal-grasp-quality.md`'s "Root cause
+investigation (2026-07-21 follow-up)" section for full data tables.

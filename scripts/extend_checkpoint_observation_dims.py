@@ -110,6 +110,31 @@ Usage:
 download separately, e.g. `gcloud storage cp` / `gsutil cp`, to keep this
 script's own dependency surface minimal and testable without network
 access).
+
+Reused verbatim (no logic change) for Stage E1's 43->44 dim extension
+(docs/superpowers/plans/2026-07-21-target-selection-clutter-e1-3distractors-implementation.md
+Task 4, warm-starting E1's 3-distractor run from D2's own finished
+`model_5096.pt`). At E1, `--verify`'s meaning is narrower than it was at
+Stage SO above, and readers should not assume it proves the same thing:
+`verify_stage_so_equivalence` always feeds the extended network a
+synthetic batch whose NEW column(s) are forced to exactly 0.0 - an
+unconditional linear-algebra fact (a Linear layer's new column contributes
+exactly 0.0 to its output whenever fed exactly 0.0, regardless of what the
+other columns carry or what distribution the network was ever trained
+under). A passing `--verify` therefore still proves the surgery is
+MECHANICALLY correct at E1 - the old 43 columns were copied unchanged, not
+reordered/corrupted, and the new column was appended (not interleaved) at
+the right position - but it does NOT prove E1 starts from
+behaviorally-unperturbed D2 behavior the way it did at Stage SO, because
+E1's new column (`distractor_3`'s slot in `distractor_distance_summary_3`)
+is never actually 0.0 once E1 trains for real: the 3rd distractor is
+active from iteration 0, unlike Stage SO's genuinely-inert extension
+(active_distractor_count=0 there made the analogous new columns hard-
+zeroed constants in real training too, not just in this synthetic check).
+The real question of whether E1's warm start helped or hurt is answered by
+E1's own trained/evaluated result (that plan's Task 5), not by this gate -
+this gate's only job at E1, same as always, is to catch a column-order/
+copy bug before spending any training budget on a broken extension.
 """
 
 from __future__ import annotations

@@ -654,6 +654,68 @@ completion; both instances/disks confirmed fully torn down afterward via
 Video: `gs://rl-manipulation-hks-runs/target-selection-clutter/deployment-demo/dice_pick_drop_repeat_demo/dice_pick_drop_repeat_demo_checkpoints_model_5096_10cycles-step-0.mp4`.
 Per-cycle JSON summary alongside it in the same GCS folder.
 
+## Stage E1: scaling to 3 distractors (2026-07-21)
+
+Extends D2 (2 active distractors, 8/8 both shapes) to tolerate a 3rd
+simultaneous distractor, via a new additive K=3 observation sibling
+(`distractor_distance_summary_3`, 41+3=44 dims), a 2×2-grid scene
+topology, and a checkpoint-warm-start resume from D2's own finished
+`model_5096.pt`. Plan:
+`docs/superpowers/plans/2026-07-21-target-selection-clutter-e1-3distractors-implementation.md`.
+Tasks 1 (K=2->K=3 observation extension, TDD), 2 (2×2 grid scene/event
+cfg + live spawn-and-settle diagnostic), and 3 (`--variant
+joint-die-target-selection-e1` wiring across `train_franka.py`/
+`franka_checkpoint_review.py`/`sync_run_to_gcs.py`) are complete
+(commit `b975de9` has Task 3's wiring).
+
+**Task 4: checkpoint weight-surgery, 43->44-dim extension of
+`model_5096.pt` (2026-07-21).** Reused
+`scripts/extend_checkpoint_observation_dims.py` verbatim (already
+generic over `--old-obs-dim`/`--new-obs-dim`, no code change needed to
+the surgery/verify logic itself) — only a documentation-only docstring
+addition recording this reuse and E1's narrower `--verify` meaning.
+Downloaded `model_5096.pt` from
+`gs://rl-manipulation-hks-runs/target-selection-clutter/joint-die-target-selection-d2/seed42/2026-07-19_21-08-07/model_5096.pt`
+and ran the surgery + `--verify` locally (CPU-only, no Isaac Sim/GPU):
+**PASSED, exactly 0.0 max abs diff for both actor and critic branches**
+— the pre-training gate. Pre-check: re-ran
+`tests/test_distractor_observations.py` first (27/27 passed, including
+Task 1's own load-bearing K=2/K=3 column-0/1 cross-check) to confirm the
+gate's precondition — a column-order mismatch between the K=2 and K=3
+pure functions would be the most likely cause of a gate failure, and
+this test already guards against it.
+
+**Mechanical vs. behavioral, made explicit (this is the point of Task
+4's docstring note):** unlike Stage SO's own warm start, this `--verify`
+pass does NOT mean E1 starts from behaviorally-unperturbed D2 behavior.
+`verify_stage_so_equivalence` always feeds the extended network a
+synthetic batch whose new column is forced to exactly `0.0` — an
+unconditional linear-algebra fact (a Linear layer's new column
+contributes exactly 0.0 whenever fed exactly 0.0, regardless of what the
+network was ever trained on), so a pass only proves the surgery is
+*mechanically* correct: the old 43 columns copied unchanged, the new
+column appended (not interleaved) at the right position. At Stage SO
+the analogous new columns really were hard-zeroed constants during real
+training too (`active_distractor_count=0`), so that pass doubled as a
+genuine behavioral-equivalence proof. At E1, `distractor_3`'s slot is
+real and active from iteration 0 — never actually `0.0` once training
+runs for real — so the behavioral question ("did the warm start help or
+hurt") is answered only by Task 5's own trained/evaluated result, not by
+this gate.
+
+Extended checkpoint `model_5096_44dim.pt` is not committed to git (data/
+model artifacts stay gitignored per this repo's convention) — it needs a
+**second `--verify` run on Task 5's actual training host**, immediately
+before that task's `train_franka.py` launch, matching the original
+SO warm start's own double-verification protocol. Task 5's dispatch
+target was not yet known at Task 4 completion time (dispatched
+separately) — this second verification is an explicit precondition Task
+5 must satisfy before starting training, not something Task 4 could
+complete itself.
+
+Commit: `scripts/extend_checkpoint_observation_dims.py`'s docstring-only
+change (no `.pt` files committed).
+
 ## Related
 
 [[unified-multi-die-specialist-distillation]] — this experiment's own

@@ -260,6 +260,45 @@ class TargetSelectionObservationsCfg(ObservationsCfg):
 
 
 @configclass
+class TargetSelectionE1ObservationsCfg(ObservationsCfg):
+    """`ObservationsCfg` + one new, additive term, `distractor_distance_summary`
+    (Task 1, docs/superpowers/plans/2026-07-21-target-selection-clutter-e1-
+    3distractors-implementation.md; spec: docs/superpowers/specs/2026-07-21-
+    target-selection-clutter-e1-3distractors-design.md) - the K=3 sibling
+    to `TargetSelectionObservationsCfg` above, extending the
+    count-curriculum + fixed-size zero-padded observation mechanism
+    (DexSinGrasp's own `d_t^S`, arXiv:2504.04516 §III-A Eq. 1) from K=2 to
+    K=3 distractor slots (see mdp.distractor_distance_summary_3 and
+    tasks/franka/distractor_observations.py's distractor_distance_summary_3
+    for the pure math). Grows the observation space by exactly 3 dims
+    (41 -> 44) for whichever env cfg uses this class.
+
+    This is a NEW, purely additive class alongside (NOT replacing)
+    `TargetSelectionObservationsCfg` above, which is left completely
+    untouched and still used unchanged by SO/D1/D2 and their `_PLAY` eval
+    variants - same "field name collision, term function differs" idiom:
+    the `distractor_distance_summary` ObsTerm field name is reused here
+    (mirroring the K=2 class's own field name) but its `func=` now points
+    at the K=3 wrapper, growing the term's own output width from 2 to 3
+    columns without changing any other term in the group.
+
+    Deliberately NOT added to the shared base `ObservationsCfg.PolicyCfg`
+    - same reasoning as the K=2 term: `distractor_distance_summary_3`
+    requires `env.scene["distractor_1"]`/`["distractor_2"]`/
+    `["distractor_3"]` to actually exist as scene entities - only
+    dice_lift_joint_env_cfg.py's new E1 curriculum-stage env cfg
+    (FrankaDieLiftTargetSelectionE1SceneCfg) has all three. Adding this
+    term to the shared base class would `KeyError` on every other env cfg
+    in this codebase the moment its observation manager ran."""
+
+    @configclass
+    class PolicyCfg(ObservationsCfg.PolicyCfg):
+        distractor_distance_summary = ObsTerm(func=mdp.distractor_distance_summary_3)
+
+    policy: PolicyCfg = PolicyCfg()
+
+
+@configclass
 class EventCfg:
     """Reset events: put the whole scene back to default, then jitter the cube's start pose."""
 

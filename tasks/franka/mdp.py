@@ -44,6 +44,7 @@ from isaaclab.envs.mdp import *  # noqa: F401, F403
 
 from .antipodal_grasp_reward import antipodal_grasp_bonus_raw as _antipodal_grasp_bonus_raw_pure
 from .distractor_observations import distractor_distance_summary as _distractor_distance_summary_pure
+from .distractor_observations import distractor_distance_summary_3 as _distractor_distance_summary_3_pure
 from .exploration_bonus_reward import (
     gripper_closure_attempt_bonus_correction as _gripper_closure_attempt_bonus_correction_pure,
 )
@@ -203,6 +204,45 @@ def distractor_distance_summary(
         target.data.root_pos_w[:, :3],
         distractor_1.data.root_pos_w[:, :3],
         distractor_2.data.root_pos_w[:, :3],
+        active_distractor_count,
+    )
+
+
+def distractor_distance_summary_3(
+    env: ManagerBasedRLEnv, object_cfg: SceneEntityCfg = SceneEntityCfg("object")
+) -> torch.Tensor:
+    """Observation term: (num_envs, 3) fixed-size, hard-zero-padded
+    target-to-distractor distance summary - K=3 additive sibling to
+    `distractor_distance_summary` above (Task 1, docs/superpowers/plans/
+    2026-07-21-target-selection-clutter-e1-3distractors-implementation.md;
+    spec: docs/superpowers/specs/2026-07-21-target-selection-clutter-e1-
+    3distractors-design.md).
+
+    Reads FOUR live scene entities - `object_cfg.name` (the target,
+    default "object"), and the three always-present E1 clutter-scene slots
+    `env.scene["distractor_1"]`/`["distractor_2"]`/`["distractor_3"]`
+    (added by dice_lift_joint_env_cfg.py's
+    FrankaDieLiftTargetSelectionE1SceneCfg) - plus
+    `env.cfg.active_distractor_count` (0/1/2/3), and delegates the actual
+    distance/zero-padding computation to
+    tasks/franka/distractor_observations.py's `distractor_distance_summary_3`
+    pure function. Only meaningful for env cfgs that actually have all
+    three distractor_1/distractor_2/distractor_3 scene entities (the new
+    E1 curriculum-stage class) - NOT wired into the shared base
+    ObservationsCfg.PolicyCfg for exactly that reason (see
+    TargetSelectionE1ObservationsCfg in lift_env_cfg.py). The existing
+    `distractor_distance_summary` (K=2) wrapper above is left completely
+    untouched and still used unchanged by SO/D1/D2."""
+    target: RigidObject = env.scene[object_cfg.name]
+    distractor_1: RigidObject = env.scene["distractor_1"]
+    distractor_2: RigidObject = env.scene["distractor_2"]
+    distractor_3: RigidObject = env.scene["distractor_3"]
+    active_distractor_count = getattr(env.cfg, "active_distractor_count", 0)
+    return _distractor_distance_summary_3_pure(
+        target.data.root_pos_w[:, :3],
+        distractor_1.data.root_pos_w[:, :3],
+        distractor_2.data.root_pos_w[:, :3],
+        distractor_3.data.root_pos_w[:, :3],
         active_distractor_count,
     )
 

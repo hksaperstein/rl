@@ -75,3 +75,45 @@ def distractor_distance_summary(
         out[:, 1] = torch.linalg.norm(distractor_2_pos - target_pos, dim=-1)
 
     return out
+
+
+def distractor_distance_summary_3(
+    target_pos: torch.Tensor,
+    distractor_1_pos: torch.Tensor,
+    distractor_2_pos: torch.Tensor,
+    distractor_3_pos: torch.Tensor,
+    active_distractor_count: int,
+) -> torch.Tensor:
+    """(num_envs, 3) tensor: K=3 additive sibling to `distractor_distance_summary`
+    above (Task 1, docs/superpowers/plans/2026-07-21-target-selection-
+    clutter-e1-3distractors-implementation.md; spec:
+    docs/superpowers/specs/2026-07-21-target-selection-clutter-e1-
+    3distractors-design.md), extending the count-curriculum + fixed-size
+    zero-padded observation mechanism from K=2 to K=3 distractor slots
+    (`distractor_1`, `distractor_2`, `distractor_3`).
+
+    Column 0 = Euclidean distance from `target_pos` to `distractor_1_pos`,
+    column 1 = to `distractor_2_pos`, column 2 = to `distractor_3_pos` -
+    each column HARD-ZEROED (not the real distance) whenever its own slot
+    index (0-based: column i needs `active_distractor_count > i`) is
+    inactive for the current curriculum stage. All position args are
+    (num_envs, 3) world-frame position tensors.
+
+    Columns 0/1 are computed by the IDENTICAL Euclidean-norm formula, same
+    argument order, as `distractor_distance_summary`'s own columns 0/1 -
+    this identity is load-bearing for Task 4's checkpoint warm-start (see
+    tests/test_distractor_observations.py's
+    TestDistractorDistanceSummary3K2CrossCheck, which asserts this
+    directly): the existing `distractor_distance_summary` (K=2) is left
+    completely untouched and still used unchanged by SO/D1/D2."""
+    num_envs = target_pos.shape[0]
+    out = torch.zeros((num_envs, 3), dtype=target_pos.dtype, device=target_pos.device)
+
+    if active_distractor_count >= 1:
+        out[:, 0] = torch.linalg.norm(distractor_1_pos - target_pos, dim=-1)
+    if active_distractor_count >= 2:
+        out[:, 1] = torch.linalg.norm(distractor_2_pos - target_pos, dim=-1)
+    if active_distractor_count >= 3:
+        out[:, 2] = torch.linalg.norm(distractor_3_pos - target_pos, dim=-1)
+
+    return out

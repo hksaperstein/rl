@@ -18,7 +18,10 @@ import math
 
 import torch
 
-from tasks.franka.distractor_observations import distractor_distance_summary
+from tasks.franka.distractor_observations import (
+    distractor_distance_summary,
+    distractor_distance_summary_3,
+)
 
 
 def _pos(x, y, z):
@@ -159,3 +162,257 @@ class TestDistractorDistanceSummaryPerEnvVarying:
         out = distractor_distance_summary(target, d1, d2, active_distractor_count=1)
         for row in range(num_envs):
             assert out[row, 1].item() == 0.0
+
+
+# --- K=3 extension (Task 1, docs/superpowers/plans/2026-07-21-target-
+# selection-clutter-e1-3distractors-implementation.md; spec:
+# docs/superpowers/specs/2026-07-21-target-selection-clutter-e1-
+# 3distractors-design.md) - additive sibling to the K=2 tests above, which
+# remain untouched. --------------------------------------------------------
+
+
+class TestDistractorDistanceSummary3Shape:
+    def test_output_shape_is_num_envs_by_3(self):
+        num_envs = 5
+        target = torch.zeros(num_envs, 3)
+        d1 = torch.ones(num_envs, 3)
+        d2 = torch.ones(num_envs, 3) * 2.0
+        d3 = torch.ones(num_envs, 3) * 3.0
+        out = distractor_distance_summary_3(target, d1, d2, d3, active_distractor_count=3)
+        assert out.shape == (num_envs, 3)
+
+    def test_num_envs_one(self):
+        target = _pos(0.0, 0.0, 0.0)
+        d1 = _pos(1.0, 0.0, 0.0)
+        d2 = _pos(0.0, 1.0, 0.0)
+        d3 = _pos(0.0, 0.0, 1.0)
+        out = distractor_distance_summary_3(target, d1, d2, d3, active_distractor_count=3)
+        assert out.shape == (1, 3)
+
+
+class TestDistractorDistanceSummary3ActiveSlots:
+    def test_correct_euclidean_distance_slot_0_active(self):
+        """3-4-5 triangle: target at origin, distractor_1 at (3, 4, 0) ->
+        distance exactly 5.0."""
+        target = _pos(0.0, 0.0, 0.0)
+        d1 = _pos(3.0, 4.0, 0.0)
+        d2 = _pos(0.0, 0.0, 0.0)  # inactive, value irrelevant
+        d3 = _pos(0.0, 0.0, 0.0)  # inactive, value irrelevant
+        out = distractor_distance_summary_3(target, d1, d2, d3, active_distractor_count=1)
+        assert math.isclose(out[0, 0].item(), 5.0, rel_tol=1e-5)
+
+    def test_correct_euclidean_distance_slot_1_active(self):
+        """Both of the first two slots active: distractor_1 at distance 5
+        (3-4-5), distractor_2 at distance 13 (5-12-13) from the target."""
+        target = _pos(0.0, 0.0, 0.0)
+        d1 = _pos(3.0, 4.0, 0.0)
+        d2 = _pos(5.0, 12.0, 0.0)
+        d3 = _pos(0.0, 0.0, 0.0)  # inactive, value irrelevant
+        out = distractor_distance_summary_3(target, d1, d2, d3, active_distractor_count=2)
+        assert math.isclose(out[0, 0].item(), 5.0, rel_tol=1e-5)
+        assert math.isclose(out[0, 1].item(), 13.0, rel_tol=1e-5)
+
+    def test_correct_euclidean_distance_slot_2_active(self):
+        """All 3 slots active: distractor_3 at distance 25 (7-24-25) from
+        the target."""
+        target = _pos(0.0, 0.0, 0.0)
+        d1 = _pos(3.0, 4.0, 0.0)
+        d2 = _pos(5.0, 12.0, 0.0)
+        d3 = _pos(7.0, 24.0, 0.0)
+        out = distractor_distance_summary_3(target, d1, d2, d3, active_distractor_count=3)
+        assert math.isclose(out[0, 0].item(), 5.0, rel_tol=1e-5)
+        assert math.isclose(out[0, 1].item(), 13.0, rel_tol=1e-5)
+        assert math.isclose(out[0, 2].item(), 25.0, rel_tol=1e-5)
+
+    def test_correct_euclidean_distance_3d(self):
+        target = _pos(1.0, 1.0, 1.0)
+        d1 = _pos(1.0, 1.0, 3.0)  # distance 2.0 along z only
+        d2 = _pos(1.0, 1.0, 1.0)  # inactive
+        d3 = _pos(1.0, 1.0, 1.0)  # inactive
+        out = distractor_distance_summary_3(target, d1, d2, d3, active_distractor_count=1)
+        assert math.isclose(out[0, 0].item(), 2.0, rel_tol=1e-5)
+
+
+class TestDistractorDistanceSummary3HardZeroPadding:
+    """Same hard-zero-not-real-distance requirement as the K=2 term."""
+
+    def test_active_distractor_count_zero_all_slots_hard_zero(self):
+        target = _pos(0.0, 0.0, 0.0)
+        # All distractors placed FAR from the target - if zero-padding were
+        # broken, this would be a large nonzero value instead of exactly 0.0.
+        d1 = _pos(100.0, 100.0, 100.0)
+        d2 = _pos(-500.0, 300.0, 50.0)
+        d3 = _pos(999.0, -999.0, 999.0)
+        out = distractor_distance_summary_3(target, d1, d2, d3, active_distractor_count=0)
+        assert out[0, 0].item() == 0.0
+        assert out[0, 1].item() == 0.0
+        assert out[0, 2].item() == 0.0
+
+    def test_active_distractor_count_one_slot_1_real_others_hard_zero(self):
+        target = _pos(0.0, 0.0, 0.0)
+        d1 = _pos(3.0, 4.0, 0.0)  # real, active -> 5.0
+        d2 = _pos(-1000.0, 1000.0, 1000.0)  # far away, but INACTIVE -> must be exactly 0
+        d3 = _pos(2000.0, -2000.0, 2000.0)  # far away, but INACTIVE -> must be exactly 0
+        out = distractor_distance_summary_3(target, d1, d2, d3, active_distractor_count=1)
+        assert math.isclose(out[0, 0].item(), 5.0, rel_tol=1e-5)
+        assert out[0, 1].item() == 0.0, "inactive slot must be hard-zeroed, not the real parked-off-table distance"
+        assert out[0, 2].item() == 0.0, "inactive slot must be hard-zeroed, not the real parked-off-table distance"
+
+    def test_active_distractor_count_two_slot_2_still_hard_zero(self):
+        target = _pos(0.0, 0.0, 0.0)
+        d1 = _pos(3.0, 4.0, 0.0)
+        d2 = _pos(6.0, 8.0, 0.0)
+        d3 = _pos(-3000.0, 3000.0, 3000.0)  # far away, but INACTIVE -> must be exactly 0
+        out = distractor_distance_summary_3(target, d1, d2, d3, active_distractor_count=2)
+        assert out[0, 0].item() != 0.0
+        assert out[0, 1].item() != 0.0
+        assert out[0, 2].item() == 0.0, "inactive slot must be hard-zeroed, not the real parked-off-table distance"
+
+    def test_active_distractor_count_three_all_slots_real_nonzero(self):
+        target = _pos(0.0, 0.0, 0.0)
+        d1 = _pos(3.0, 4.0, 0.0)
+        d2 = _pos(6.0, 8.0, 0.0)
+        d3 = _pos(9.0, 12.0, 0.0)
+        out = distractor_distance_summary_3(target, d1, d2, d3, active_distractor_count=3)
+        assert out[0, 0].item() != 0.0
+        assert out[0, 1].item() != 0.0
+        assert out[0, 2].item() != 0.0
+
+    def test_zero_and_nonzero_column_pattern_matches_active_count_across_0_1_2_3(self):
+        target = _pos(0.0, 0.0, 0.0)
+        d1 = _pos(3.0, 4.0, 0.0)  # nonzero real distance = 5.0
+        d2 = _pos(6.0, 8.0, 0.0)  # nonzero real distance = 10.0
+        d3 = _pos(9.0, 12.0, 0.0)  # nonzero real distance = 15.0
+
+        out0 = distractor_distance_summary_3(target, d1, d2, d3, active_distractor_count=0)
+        assert out0[0, 0].item() == 0.0 and out0[0, 1].item() == 0.0 and out0[0, 2].item() == 0.0
+
+        out1 = distractor_distance_summary_3(target, d1, d2, d3, active_distractor_count=1)
+        assert out1[0, 0].item() != 0.0 and out1[0, 1].item() == 0.0 and out1[0, 2].item() == 0.0
+
+        out2 = distractor_distance_summary_3(target, d1, d2, d3, active_distractor_count=2)
+        assert out2[0, 0].item() != 0.0 and out2[0, 1].item() != 0.0 and out2[0, 2].item() == 0.0
+
+        out3 = distractor_distance_summary_3(target, d1, d2, d3, active_distractor_count=3)
+        assert out3[0, 0].item() != 0.0 and out3[0, 1].item() != 0.0 and out3[0, 2].item() != 0.0
+
+
+class TestDistractorDistanceSummary3PerEnvVarying:
+    """Same genuinely-per-environment-varying property as the K=2 term."""
+
+    def test_batch_of_multiple_envs_produces_per_row_varying_distances(self):
+        target = torch.tensor(
+            [
+                [0.0, 0.0, 0.0],
+                [0.0, 0.0, 0.0],
+                [0.0, 0.0, 0.0],
+            ],
+            dtype=torch.float32,
+        )
+        d1 = torch.tensor(
+            [
+                [1.0, 0.0, 0.0],  # distance 1.0
+                [2.0, 0.0, 0.0],  # distance 2.0
+                [3.0, 0.0, 0.0],  # distance 3.0
+            ],
+            dtype=torch.float32,
+        )
+        d2 = torch.zeros(3, 3)
+        d3 = torch.zeros(3, 3)
+        out = distractor_distance_summary_3(target, d1, d2, d3, active_distractor_count=1)
+        assert math.isclose(out[0, 0].item(), 1.0, rel_tol=1e-5)
+        assert math.isclose(out[1, 0].item(), 2.0, rel_tol=1e-5)
+        assert math.isclose(out[2, 0].item(), 3.0, rel_tol=1e-5)
+        # rows must genuinely differ from each other - not a broadcast constant
+        assert out[0, 0].item() != out[1, 0].item()
+        assert out[1, 0].item() != out[2, 0].item()
+
+    def test_inactive_columns_stay_zero_across_all_rows_of_a_varying_batch(self):
+        num_envs = 4
+        target = torch.zeros(num_envs, 3)
+        d1 = torch.arange(num_envs, dtype=torch.float32).unsqueeze(1) * torch.tensor([[1.0, 0.0, 0.0]])
+        d2 = torch.arange(num_envs, dtype=torch.float32).unsqueeze(1) * torch.tensor([[0.0, 5.0, 0.0]])
+        d3 = torch.arange(num_envs, dtype=torch.float32).unsqueeze(1) * torch.tensor([[0.0, 0.0, 7.0]])
+        out = distractor_distance_summary_3(target, d1, d2, d3, active_distractor_count=1)
+        for row in range(num_envs):
+            assert out[row, 1].item() == 0.0
+            assert out[row, 2].item() == 0.0
+
+
+class TestDistractorDistanceSummary3K2CrossCheck:
+    """Load-bearing cross-check for Task 4's checkpoint warm-start (see
+    docs/superpowers/plans/2026-07-21-target-selection-clutter-e1-
+    3distractors-implementation.md, Task 1 Step 1): the K=3 function's
+    first two columns must be numerically IDENTICAL to the K=2 function's
+    output, for the same target/d1/d2 tensors and the same
+    active_distractor_count in {0, 1, 2}. This is the exact property Task
+    4's checkpoint-surgery weight-copy assumes holds for columns 0/1 to
+    carry over meaningfully - if this test fails, the K=3 function's
+    column order/formula has diverged from the K=2 function's."""
+
+    def _cross_check(self, target, d1, d2, d3, active_distractor_count):
+        k2_out = distractor_distance_summary(target, d1, d2, active_distractor_count)
+        k3_out = distractor_distance_summary_3(target, d1, d2, d3, active_distractor_count)
+        assert torch.equal(k3_out[:, :2], k2_out), (
+            f"K=3 columns [:, :2] diverged from K=2 output at "
+            f"active_distractor_count={active_distractor_count}"
+        )
+
+    def test_cross_check_active_count_zero(self):
+        num_envs = 3
+        target = torch.zeros(num_envs, 3)
+        d1 = torch.tensor([[3.0, 4.0, 0.0]] * num_envs)
+        d2 = torch.tensor([[5.0, 12.0, 0.0]] * num_envs)
+        d3 = torch.tensor([[7.0, 24.0, 0.0]] * num_envs)
+        self._cross_check(target, d1, d2, d3, active_distractor_count=0)
+
+    def test_cross_check_active_count_one(self):
+        num_envs = 3
+        target = torch.zeros(num_envs, 3)
+        d1 = torch.tensor([[3.0, 4.0, 0.0]] * num_envs)
+        d2 = torch.tensor([[5.0, 12.0, 0.0]] * num_envs)
+        d3 = torch.tensor([[7.0, 24.0, 0.0]] * num_envs)
+        self._cross_check(target, d1, d2, d3, active_distractor_count=1)
+
+    def test_cross_check_active_count_two_matches_d2_real_trained_configuration(self):
+        """active_distractor_count=2 is D2's own real trained configuration
+        - the strongest, most directly relevant case for Task 4's checkpoint
+        warm-start from model_5096.pt."""
+        num_envs = 4
+        target = torch.tensor(
+            [
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 2.0, 0.0],
+                [0.5, 0.5, 0.5],
+            ],
+            dtype=torch.float32,
+        )
+        d1 = torch.tensor(
+            [
+                [3.0, 4.0, 0.0],
+                [4.0, 4.0, 0.0],
+                [0.0, 8.0, 0.0],
+                [2.5, 0.5, 0.5],
+            ],
+            dtype=torch.float32,
+        )
+        d2 = torch.tensor(
+            [
+                [5.0, 12.0, 0.0],
+                [6.0, 12.0, 0.0],
+                [0.0, 14.0, 0.0],
+                [5.5, 0.5, 0.5],
+            ],
+            dtype=torch.float32,
+        )
+        d3 = torch.tensor(
+            [
+                [7.0, 24.0, 0.0],
+                [8.0, 24.0, 0.0],
+                [0.0, 26.0, 0.0],
+                [8.5, 0.5, 0.5],
+            ],
+            dtype=torch.float32,
+        )
+        self._cross_check(target, d1, d2, d3, active_distractor_count=2)

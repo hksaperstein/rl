@@ -47,9 +47,9 @@ from .pickplace_env_cfg import _EE_OFFSET
 from .robot_cfg import (
     ARM_JOINT_NAMES,
     AR4_MK5_CFG,
-    GRIPPER_CLOSED_POS,
+    GRIPPER_CLOSED_COMMAND_EXPR,
     GRIPPER_JOINT_NAMES,
-    GRIPPER_OPEN_POS,
+    GRIPPER_OPEN_COMMAND_EXPR,
 )
 
 # Same fixed cube spawn as Experiment 25; goal is now where the CUBE must
@@ -103,25 +103,44 @@ class ActionsCfg:
 
     Final whole-branch review of this experiment found MirroredGripperActionCfg
     (jaw2 tracks jaw1's target) is an unconditional no-op here: BinaryJointAction
-    already assigns both jaws the IDENTICAL commanded value (open_command_expr/
-    close_command_expr use the same constant for both joint names), so there is
-    nothing for jaw2 to diverge from at the command level in the first place -
-    the actual jaw asymmetry happens at the physics/actuator level under contact,
-    which no command-level mirroring can address. This is the third jaw-
-    synchronization-specific fix attempt to prove ineffective (Experiment 19's
-    PhysxMimicJointAPI made things worse; Experiment 22's original mirror-actual
-    had a reactive-lag bug; this pass's lag fix, mirror-commanded, is a true
-    no-op) - retired as a lever per this project's own "3 failed fixes means
-    question the architecture, not patch again" discipline, not attempted a
-    fourth time. Uses plain ProximityGatedBinaryJointPositionActionCfg
-    (Experiment 21's validated fix, unaffected by this finding) instead."""
+    was assigning both jaws the IDENTICAL commanded value (open_command_expr/
+    close_command_expr used the same constant for both joint names), so there
+    was nothing for jaw2 to diverge from at the command level in the first
+    place - the actual jaw asymmetry was believed to happen only at the
+    physics/actuator level under contact, which no command-level mirroring
+    could address.
+
+    CORRECTION (2026-07-21, ar4-franka-fixes-transfer plan Task 5,
+    controller-authorized cross-experiment fix): the "IDENTICAL commanded
+    value" premise above was itself a real bug, not a neutral fact -
+    gripper_jaw2_joint's PhysxMimicJointAPI mirrors jaw1 with gearing=-1.0
+    (confirmed by direct USD inspection, commit 64ab5cc), so jaw2's
+    physically-correct commanded value is always -1.0 * jaw1's, not the same
+    signed constant. GRIPPER_OPEN_COMMAND_EXPR/GRIPPER_CLOSED_COMMAND_EXPR
+    (tasks/ar4/robot_cfg.py) now mirror jaw2 correctly. This does NOT revive
+    MirroredGripperActionCfg as a lever (that mechanism tracks jaw1's
+    *dynamic* per-step target under contact load, a different problem from
+    this static open/close sign bug), but it does mean the "nothing for jaw2
+    to diverge from at the command level" reasoning above was never actually
+    true - see kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md for
+    the full writeup of why this may be a genuine root-cause candidate for
+    the jaw-asymmetry problem the three attempts below were trying to fix.
+    This is still the third jaw-synchronization-specific *fix attempt* to
+    prove ineffective as a lever (Experiment 19's PhysxMimicJointAPI made
+    things worse; Experiment 22's original mirror-actual had a reactive-lag
+    bug; this pass's lag fix, mirror-commanded, is a true no-op given the
+    static open/close bug is now fixed at its own source) - retired as a
+    lever per this project's own "3 failed fixes means question the
+    architecture, not patch again" discipline, not attempted a fourth time.
+    Uses plain ProximityGatedBinaryJointPositionActionCfg (Experiment 21's
+    validated fix, unaffected by this finding) instead."""
 
     joint_positions = isaaclab_mdp.JointPositionActionCfg(asset_name="robot", joint_names=ARM_JOINT_NAMES, scale=0.5)
     gripper_position = ProximityGatedBinaryJointPositionActionCfg(
         asset_name="robot",
         joint_names=GRIPPER_JOINT_NAMES,
-        open_command_expr={name: GRIPPER_OPEN_POS for name in GRIPPER_JOINT_NAMES},
-        close_command_expr={name: GRIPPER_CLOSED_POS for name in GRIPPER_JOINT_NAMES},
+        open_command_expr=GRIPPER_OPEN_COMMAND_EXPR,
+        close_command_expr=GRIPPER_CLOSED_COMMAND_EXPR,
         object_cfg=SceneEntityCfg("cube"),
         ee_frame_cfg=SceneEntityCfg("ee_frame"),
         proximity_threshold=PROXIMITY_THRESHOLD,

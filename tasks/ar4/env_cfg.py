@@ -20,7 +20,15 @@ from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.utils.configclass import configclass
 
 from .objects_cfg import CUBE_CFG, RECT_PRISM_CFG, SPHERE_CFG, WEDGE_CFG
-from .robot_cfg import AR4_MK5_CFG, ARM_JOINT_NAMES, GRIPPER_CLOSED_POS, GRIPPER_JOINT_NAMES, GRIPPER_OPEN_POS
+from .robot_cfg import (
+    AR4_MK5_CFG,
+    ARM_JOINT_NAMES,
+    GRIPPER_CLOSED_COMMAND_EXPR,
+    GRIPPER_CLOSED_POS,
+    GRIPPER_JOINT_NAMES,
+    GRIPPER_OPEN_COMMAND_EXPR,
+    GRIPPER_OPEN_POS,
+)
 
 
 @configclass
@@ -48,8 +56,8 @@ class ActionsCfg:
     gripper_position = mdp.BinaryJointPositionActionCfg(
         asset_name="robot",
         joint_names=GRIPPER_JOINT_NAMES,
-        open_command_expr={name: GRIPPER_OPEN_POS for name in GRIPPER_JOINT_NAMES},
-        close_command_expr={name: GRIPPER_CLOSED_POS for name in GRIPPER_JOINT_NAMES},
+        open_command_expr=GRIPPER_OPEN_COMMAND_EXPR,
+        close_command_expr=GRIPPER_CLOSED_COMMAND_EXPR,
     )
 
 

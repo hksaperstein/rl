@@ -42,7 +42,14 @@ from isaaclab_tasks.manager_based.manipulation.lift import mdp
 from . import mdp as ar4_mdp
 from .pickplace_mirror_env_cfg import Ar4PickPlaceMirrorSceneCfg
 from .agents.rsl_rl_ppo_cfg import Ar4PickPlacePPORunnerCfg
-from .robot_cfg import ARM_JOINT_NAMES, GRIPPER_CLOSED_POS, GRIPPER_JOINT_NAMES, GRIPPER_OPEN_POS
+from .robot_cfg import (
+    ARM_JOINT_NAMES,
+    GRIPPER_CLOSED_COMMAND_EXPR,
+    GRIPPER_CLOSED_POS,
+    GRIPPER_JOINT_NAMES,
+    GRIPPER_OPEN_COMMAND_EXPR,
+    GRIPPER_OPEN_POS,
+)
 
 
 @configclass
@@ -54,8 +61,8 @@ class ActionsCfg:
     gripper_position = isaaclab_mdp.BinaryJointPositionActionCfg(
         asset_name="robot",
         joint_names=GRIPPER_JOINT_NAMES,
-        open_command_expr={name: GRIPPER_OPEN_POS for name in GRIPPER_JOINT_NAMES},
-        close_command_expr={name: GRIPPER_CLOSED_POS for name in GRIPPER_JOINT_NAMES},
+        open_command_expr=GRIPPER_OPEN_COMMAND_EXPR,
+        close_command_expr=GRIPPER_CLOSED_COMMAND_EXPR,
     )
 
 

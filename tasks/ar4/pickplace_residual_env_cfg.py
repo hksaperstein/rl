@@ -39,7 +39,14 @@ from . import mdp as ar4_mdp
 from .pickplace_env_cfg import _EE_OFFSET
 from .pickplace_mirror_env_cfg import Ar4PickPlaceMirrorSceneCfg
 from .residual_ik_action import ResidualDifferentialIKActionCfg
-from .robot_cfg import ARM_JOINT_NAMES, GRIPPER_CLOSED_POS, GRIPPER_JOINT_NAMES, GRIPPER_OPEN_POS
+from .robot_cfg import (
+    ARM_JOINT_NAMES,
+    GRIPPER_CLOSED_COMMAND_EXPR,
+    GRIPPER_CLOSED_POS,
+    GRIPPER_JOINT_NAMES,
+    GRIPPER_OPEN_COMMAND_EXPR,
+    GRIPPER_OPEN_POS,
+)
 
 # Same values as pickplace_taskspace_env_cfg.py's EventCfg reuse.
 _LIFT_MINIMAL_HEIGHT = 0.03
@@ -76,8 +83,8 @@ class ActionsCfg:
     gripper_position = isaaclab_mdp.BinaryJointPositionActionCfg(
         asset_name="robot",
         joint_names=GRIPPER_JOINT_NAMES,
-        open_command_expr={name: GRIPPER_OPEN_POS for name in GRIPPER_JOINT_NAMES},
-        close_command_expr={name: GRIPPER_CLOSED_POS for name in GRIPPER_JOINT_NAMES},
+        open_command_expr=GRIPPER_OPEN_COMMAND_EXPR,
+        close_command_expr=GRIPPER_CLOSED_COMMAND_EXPR,
     )
 
 

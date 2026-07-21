@@ -34,7 +34,14 @@ from .pickplace_pregrasp_env_cfg import (
     RewardsCfg,
     TerminationsCfg,
 )
-from .robot_cfg import ARM_JOINT_NAMES, GRIPPER_CLOSED_POS, GRIPPER_JOINT_NAMES, GRIPPER_OPEN_POS
+from .robot_cfg import (
+    ARM_JOINT_NAMES,
+    GRIPPER_CLOSED_COMMAND_EXPR,
+    GRIPPER_CLOSED_POS,
+    GRIPPER_JOINT_NAMES,
+    GRIPPER_OPEN_COMMAND_EXPR,
+    GRIPPER_OPEN_POS,
+)
 import isaaclab.envs.mdp as isaaclab_mdp
 import isaaclab.sim as sim_utils
 
@@ -63,8 +70,8 @@ class ActionsCfg:
     gripper_position = isaaclab_mdp.BinaryJointPositionActionCfg(
         asset_name="robot",
         joint_names=GRIPPER_JOINT_NAMES,
-        open_command_expr={name: GRIPPER_OPEN_POS for name in GRIPPER_JOINT_NAMES},
-        close_command_expr={name: GRIPPER_CLOSED_POS for name in GRIPPER_JOINT_NAMES},
+        open_command_expr=GRIPPER_OPEN_COMMAND_EXPR,
+        close_command_expr=GRIPPER_CLOSED_COMMAND_EXPR,
     )
 
 

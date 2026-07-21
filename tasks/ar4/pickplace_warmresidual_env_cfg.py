@@ -47,7 +47,14 @@ from .pickplace_orientationbias_env_cfg import (
     TerminationsCfg,
 )
 from .pickplace_taskspace_env_cfg import Ar4PickPlaceTaskspacePPORunnerCfg  # noqa: F401 (re-exported for scripts/train.py's PPO-cfg selection)
-from .robot_cfg import ARM_JOINT_NAMES, GRIPPER_CLOSED_POS, GRIPPER_JOINT_NAMES, GRIPPER_OPEN_POS
+from .robot_cfg import (
+    ARM_JOINT_NAMES,
+    GRIPPER_CLOSED_COMMAND_EXPR,
+    GRIPPER_CLOSED_POS,
+    GRIPPER_JOINT_NAMES,
+    GRIPPER_OPEN_COMMAND_EXPR,
+    GRIPPER_OPEN_POS,
+)
 
 # Same values as pickplace_residual_env_cfg.py's/pickplace_taskspace_env_cfg.py's
 # EventCfg reuse - the waypoint geometry itself is unchanged, only the
@@ -91,8 +98,8 @@ class ActionsCfg:
     gripper_position = MirroredGripperActionCfg(
         asset_name="robot",
         joint_names=GRIPPER_JOINT_NAMES,
-        open_command_expr={name: GRIPPER_OPEN_POS for name in GRIPPER_JOINT_NAMES},
-        close_command_expr={name: GRIPPER_CLOSED_POS for name in GRIPPER_JOINT_NAMES},
+        open_command_expr=GRIPPER_OPEN_COMMAND_EXPR,
+        close_command_expr=GRIPPER_CLOSED_COMMAND_EXPR,
         object_cfg=SceneEntityCfg("cube"),
         ee_frame_cfg=SceneEntityCfg("ee_frame"),
         proximity_threshold=_PROXIMITY_THRESHOLD,

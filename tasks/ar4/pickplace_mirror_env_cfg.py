@@ -39,7 +39,15 @@ from isaaclab_tasks.manager_based.manipulation.lift import mdp
 from . import mdp as ar4_mdp
 from .objects_cfg import CUBE_CFG
 from .pickplace_env_cfg import _EE_OFFSET
-from .robot_cfg import AR4_MK5_CFG, ARM_JOINT_NAMES, GRIPPER_CLOSED_POS, GRIPPER_JOINT_NAMES, GRIPPER_OPEN_POS
+from .robot_cfg import (
+    AR4_MK5_CFG,
+    ARM_JOINT_NAMES,
+    GRIPPER_CLOSED_COMMAND_EXPR,
+    GRIPPER_CLOSED_POS,
+    GRIPPER_JOINT_NAMES,
+    GRIPPER_OPEN_COMMAND_EXPR,
+    GRIPPER_OPEN_POS,
+)
 
 # Env-local (robot-relative) workspace bounds this task randomizes the
 # cube's spawn and the goal's y-coordinate within. Defined independently
@@ -71,8 +79,8 @@ class ActionsCfg:
     gripper_position = isaaclab_mdp.BinaryJointPositionActionCfg(
         asset_name="robot",
         joint_names=GRIPPER_JOINT_NAMES,
-        open_command_expr={name: GRIPPER_OPEN_POS for name in GRIPPER_JOINT_NAMES},
-        close_command_expr={name: GRIPPER_CLOSED_POS for name in GRIPPER_JOINT_NAMES},
+        open_command_expr=GRIPPER_OPEN_COMMAND_EXPR,
+        close_command_expr=GRIPPER_CLOSED_COMMAND_EXPR,
     )
 
 

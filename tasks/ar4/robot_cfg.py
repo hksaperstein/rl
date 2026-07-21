@@ -18,6 +18,27 @@ ARM_JOINT_NAMES = ["joint_1", "joint_2", "joint_3", "joint_4", "joint_5", "joint
 GRIPPER_JOINT_NAMES = ["gripper_jaw1_joint", "gripper_jaw2_joint"]
 GRIPPER_OPEN_POS = 0.014
 GRIPPER_CLOSED_POS = 0.0
+# gripper_jaw2_joint's PhysxMimicJointAPI mirrors gripper_jaw1_joint with
+# gearing=-1.0, offset=0.0 (confirmed by direct USD inspection, commit
+# 64ab5cc / docs/superpowers/specs/research/2026-07-21-ar4-usd-asset-debugging.md):
+# jaw2's physically-correct commanded position is always -1.0 * jaw1's
+# commanded position, NOT the same signed value. Every open/close command
+# dict across tasks/ar4/*.py (and this file's own init_state, below)
+# previously assigned BOTH joints the IDENTICAL constant - a real,
+# load-bearing bug discovered 2026-07-21 (ar4-franka-fixes-transfer plan,
+# Task 5) when the newly-corrected, mimic-consistent jaw2 hard limits from
+# 64ab5cc ([-0.014, 0.000]) correctly rejected the old +0.014 default that
+# the PRE-64ab5cc (broken) jaw2 limits ([-0.0028, 0.0168]) had silently
+# tolerated for as long as this constant has existed. Fixed at this single
+# shared source so every call site inherits the mirrored value automatically
+# instead of repeating (and risking re-introducing) the same sign bug per
+# file. Controller-authorized cross-experiment fix (2026-07-21) - see
+# kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md for the full
+# writeup of why this may be a genuine root-cause candidate for AR4's own
+# long-standing jaw-asymmetry problem (Experiments 17-22's three failed
+# jaw-mimic fix attempts never diagnosed this specific sign error).
+GRIPPER_OPEN_COMMAND_EXPR = {"gripper_jaw1_joint": GRIPPER_OPEN_POS, "gripper_jaw2_joint": -GRIPPER_OPEN_POS}
+GRIPPER_CLOSED_COMMAND_EXPR = {"gripper_jaw1_joint": GRIPPER_CLOSED_POS, "gripper_jaw2_joint": -GRIPPER_CLOSED_POS}
 
 
 def _resolve_usd_path() -> str:
@@ -53,7 +74,7 @@ AR4_MK5_CFG = ArticulationCfg(
         rot=(0.0, 0.0, 0.0, 1.0),
         joint_pos={
             **{name: 0.0 for name in ARM_JOINT_NAMES},
-            **{name: GRIPPER_OPEN_POS for name in GRIPPER_JOINT_NAMES},
+            **GRIPPER_OPEN_COMMAND_EXPR,
         },
     ),
     actuators={

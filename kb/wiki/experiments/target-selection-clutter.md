@@ -583,6 +583,77 @@ with the exploration-reward research track (H1/H2/H3) in
 literature.md`, whose addendum has the full writeup. Diagnostic script:
 `scripts/_diag_gripper_lowpass_check.py`.
 
+## Deployment demo: continuous pick->lift->drop->reset loop (2026-07-21)
+
+Deployment of this experiment's finished D2 checkpoint (`model_5096.pt`,
+same checkpoint as the FINAL VERDICT above) — not a new experiment, no
+training. New script `scripts/dice_pick_drop_repeat_demo.py` builds the
+real (non-`_PLAY`-pinned) `FrankaDieLiftJointD12D20TargetSelectionD2EnvCfg`
+with `scene.num_envs = 10` (one env per demo cycle, target shape alternating
+d12/d20 via the class's own existing deterministic round-robin
+`MultiAssetSpawnerCfg`), runs the trained policy live per-env, detects
+sustained lift using `franka_checkpoint_review.py`'s own detection
+constants/logic (copied, not imported — that script has top-level
+argparse/AppLauncher side effects unsafe to import), then overrides just
+the lifted env's own action (gripper forced open via
+`BinaryJointPositionActionCfg`'s positive-raw-action convention, arm frozen
+at its last commanded target) to script a release, and lets the episode's
+own existing time_out auto-reset handle the "reset the scene" step. One
+continuous `RecordVideo` recording spans all 10 cycles; the viewport camera
+moves between envs live via `ViewportCameraController.set_view_env_index()`
+at each 250-step cycle boundary.
+
+**Result: 10/10 cycles showed sustained lift + a confirmed real release/drop**
+(5 d12 cycles, 5 d20 cycles, alternating exactly per the env's own
+env-index-parity target assignment), `max_height_gain` 0.31-0.41m per cycle
+(consistent with the FINAL VERDICT table's own 300-480mm range) and a
+0.27-0.37m height drop after each scripted release — confirmed both
+numerically (per-cycle JSON summary) and visually (frame-by-frame
+inspection at 4 points per cycle for cycles 0, 1, 5, and 9: object count on
+the table drops from 3 to 2 during the lift window and returns to 3 by the
+end of each cycle, for both a d12-commanded and a d20-commanded cycle,
+first/middle/last).
+
+**Two real bugs found and fixed in this new script during the same task**
+(not pre-existing bugs in the checkpoint/env):
+1. `scene.num_envs` as low as 2 silently produced a completely static
+   scene — the object's height never left its exact spawn value
+   (`0.055`m) for a full 250-step episode, for both envs. Not root-caused
+   further (out of this deployment task's scope; flagged as a possible
+   small-`num_envs`+`MultiAssetSpawnerCfg`+`replicate_physics=False` edge
+   case worth a closer look if it recurs) — worked around by using
+   `num_envs=10` (within the range every already-validated eval in this
+   experiment used, `num_envs>=8`), which produced fully real behavior with
+   no further issue.
+2. The live per-env `episode_length_buf`-based early-reset detector
+   mis-fired on every cycle's own *natural* end-of-episode auto-reset
+   (which also wraps the buffer 249->0, one step earlier than the next
+   cycle's own fixed camera-switch boundary), discarding a correctly
+   detected `sustained_lift=True` right before it was reported — the first
+   real 10-cycle run showed "sustained lift confirmed" in the log for
+   9/10 cycles but still reported 0/10 in the summary. Fixed by only
+   treating a buffer decrease as anomalous when it did *not* originate
+   from the episode's own final step; re-ran and confirmed 10/10 after the
+   fix.
+
+**Ran headless on GCP cloud** (desktop unavailable this session, per the
+`docs/cloud/dispatch-checklist.md` standing exception) — a recorded, not
+live-watched, demo. Real friction hit during dispatch: the project's
+single project-wide `GPUS_ALL_REGIONS` quota slot was held by two
+different concurrent Senior workstreams in turn (waited ~14 min, then
+~19 min); the first provisioned instance (`us-central1-a`, SPOT) then hit
+a genuine SPOT preemption mid-run (confirmed via `gcloud compute
+operations list`), and every previously-reliable zone was SPOT-stocked-out
+simultaneously on the resulting restart attempt — recovered by switching
+to on-demand provisioning (`us-east1-b`), a reasonable judgment call given
+this task's small cost cap and inference-only workload. Total cost
+≈$0.70 (SPOT instance existence to the preemption + on-demand instance to
+completion; both instances/disks confirmed fully torn down afterward via
+`scripts/check_cloud_state.sh`), well under the task's own cost cap.
+
+Video: `gs://rl-manipulation-hks-runs/target-selection-clutter/deployment-demo/dice_pick_drop_repeat_demo/dice_pick_drop_repeat_demo_checkpoints_model_5096_10cycles-step-0.mp4`.
+Per-cycle JSON summary alongside it in the same GCS folder.
+
 ## Related
 
 [[unified-multi-die-specialist-distillation]] — this experiment's own

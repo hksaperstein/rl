@@ -233,6 +233,22 @@ parser.add_argument(
     ),
 )
 parser.add_argument(
+    "--graspgoalrelative",
+    action="store_true",
+    default=False,
+    help=(
+        "Train on the relative/delta joint-position action variant of the grasp-goal scene "
+        "(H_ar4_relative): IDENTICAL scene/rewards/observations/terminations/events/PPO recipe to "
+        "--graspgoal (Experiment 26) - the ONLY change is the arm action term, from --graspgoal's "
+        "absolute JointPositionActionCfg (scale=0.5) to RelativeJointPositionActionCfg (scale=0.1, "
+        "use_zero_offset=True), mirroring Franka's own confirmed relative-joint-action fix. This is "
+        "still genuinely joint-space (not IK/task-space) - only the target is a delta from the "
+        "current joint position rather than a fixed absolute target. See "
+        "docs/superpowers/plans/2026-07-21-ar4-franka-fixes-transfer-implementation.md and "
+        "docs/superpowers/specs/2026-07-21-ar4-franka-fixes-transfer-design.md."
+    ),
+)
+parser.add_argument(
     "--hierarchical",
     action="store_true",
     default=False,
@@ -296,7 +312,10 @@ from tasks.ar4.pickplace_taskspace_env_cfg import (  # noqa: E402
     Ar4PickPlaceTaskspaceEnvCfg,
     Ar4PickPlaceTaskspacePPORunnerCfg,
 )
-from tasks.ar4.pickplace_graspgoal_env_cfg import Ar4PickPlaceGraspGoalEnvCfg  # noqa: E402
+from tasks.ar4.pickplace_graspgoal_env_cfg import (  # noqa: E402
+    Ar4PickPlaceGraspGoalEnvCfg,
+    Ar4PickPlaceGraspGoalRelativeEnvCfg,
+)
 from tasks.ar4.pickplace_hierarchical_env_cfg import Ar4PickPlaceHierarchicalEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_touchgoal_env_cfg import Ar4PickPlaceTouchGoalEnvCfg  # noqa: E402
 from tasks.ar4.pickplace_warmresidual_env_cfg import Ar4PickPlaceWarmResidualEnvCfg  # noqa: E402
@@ -307,6 +326,8 @@ LOG_ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 def main() -> None:
     if args_cli.graspgoal:
         env_cfg_cls = Ar4PickPlaceGraspGoalEnvCfg
+    elif args_cli.graspgoalrelative:
+        env_cfg_cls = Ar4PickPlaceGraspGoalRelativeEnvCfg
     elif args_cli.hierarchical:
         env_cfg_cls = Ar4PickPlaceHierarchicalEnvCfg
     elif args_cli.touchgoal:

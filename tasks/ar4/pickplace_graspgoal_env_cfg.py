@@ -400,3 +400,85 @@ class Ar4PickPlaceGraspGoalEnvCfg(ManagerBasedRLEnvCfg):
         self.sim.physics_material = sim_utils.RigidBodyMaterialCfg(static_friction=1.0, dynamic_friction=1.0)
         self.viewer.eye = (1.5, 1.5, 1.2)
         self.viewer.lookat = (0.0, 0.0, 0.4)
+
+
+@configclass
+class Ar4PickPlaceGraspGoalRelativeEnvCfg(Ar4PickPlaceGraspGoalEnvCfg):
+    """H_ar4_relative (Task 2, docs/superpowers/plans/2026-07-21-ar4-
+    franka-fixes-transfer-implementation.md; spec: docs/superpowers/
+    specs/2026-07-21-ar4-franka-fixes-transfer-design.md): IDENTICAL
+    scene/rewards/observations/terminations/events/PPO recipe to
+    Condition A (Ar4PickPlaceGraspGoalEnvCfg, Experiment 26) - the ONLY
+    change is the arm action term, from Condition A's inherited
+    ABSOLUTE JointPositionActionCfg (scale=0.5) to RELATIVE/delta
+    RelativeJointPositionActionCfg (scale=0.1, use_zero_offset=True),
+    mirroring Franka's own confirmed
+    FrankaDieLiftJointD8BigRelativeAntipodalEnvCfg
+    (tasks/franka/dice_lift_joint_env_cfg.py) exactly - same scale/
+    use_zero_offset values (AR4's control step is identical to
+    Franka's own, 50Hz - see the design spec's own "why scale=0.1
+    transfers without rescaling" section), same "call super, then
+    re-assert the one changed field last" pattern.
+
+    Empirical action-manager verification (Task 2, Step 3): a real
+    `Ar4PickPlaceGraspGoalRelativeEnvCfg` env (num_envs=8) was built on a
+    live GCP SPOT `g2-standard-4`+`nvidia-l4` cloud instance
+    (`rl-ar4-graspgoalrelative-task2`, `us-central1-a`, desktop
+    unreachable at dispatch time, 2026-07-21) - a separate, isolated
+    single-env-per-process script, after an initial attempt that built
+    Condition A then Condition B sequentially in ONE process was observed
+    to hang indefinitely (0% GPU utilization, CPU pegged) partway through
+    the second `ManagerBasedRLEnv` construction, a real find worth noting
+    for any future multi-condition diagnostic script in this arc: build
+    one env per process invocation, not multiple `ManagerBasedRLEnv`
+    instances sequentially in-process. The live ActionManager was read
+    directly (not the unbuilt cfg object). Exact observed output:
+    - `type(env.action_manager.get_term("joint_positions")).__name__`
+      == `"RelativeJointPositionAction"` - CONFIRMED (not
+      `JointPositionAction` - Condition A's own unmodified
+      `Ar4PickPlaceGraspGoalEnvCfg`, checked in the same session before
+      the hang above, confirmed `"JointPositionAction"` instead, as
+      expected).
+    - `env.action_manager.total_action_dim` == `7` - CONFIRMED (6
+      relative arm joints + 1 gripper binary dim - NOT Franka's 8,
+      since AR4's `gripper_position` term is a
+      ProximityGatedBinaryJointPositionAction, subclassing Isaac Lab's
+      BinaryJointPositionAction, whose action_dim is hardcoded to 1
+      regardless of the 2 underlying joint names it spans - confirmed
+      by direct source read of
+      `isaaclab/envs/mdp/actions/binary_joint_actions.py`, matching
+      this repo's own `scripts/smoke_test_graspgoal_env.py:54` comment).
+      Condition A's own `total_action_dim` is also `7` (byte-identical
+      dimensionality - only the arm term's class changes, not its size).
+    - `env.action_manager.active_terms` == `['joint_positions',
+      'gripper_position']` - CONFIRMED; `env.action_manager.
+      action_term_dim` == `[6, 1]` - CONFIRMED `joint_positions` at
+      dim 6 specifically. The manager's own printed table
+      (`print(env.action_manager)`) independently shows the same
+      `joint_positions: 6 / gripper_position: 1` breakdown under an
+      "Active Action Terms (shape: 7)" header.
+    - Secondary spot-check (not required to close this task, per this
+      arc's own judgment-call precedent): a nonzero constant action
+      (`0.3` on all 6 arm dims) was applied for one control step from two
+      DIFFERENT starting joint configurations (env 0 pre-warmed 5 steps
+      with a nonzero action on joint 0 to move it away from the reset
+      pose; env 1 left at its reset pose). Observed per-joint deltas were
+      `[0.00166, 0.00513, 0.05950, -0.00089, 0.01973, 0.00298]` (warmed-up
+      env) vs. `[-0.00006, 0.00326, 0.05949, -0.00269, 0.01965, 0.00109]`
+      (reset-pose env) - same order of magnitude at every joint (max
+      pairwise diff 0.00238 rad), consistent with the config-independent
+      commanded-delta property `RelativeJointPositionAction` guarantees
+      (per Franka's own `FrankaDieLiftJointD8BigRelativeAntipodalEnvCfg`
+      docstring, the actual joint travel within one control step is still
+      mediated by each joint's own PD servo dynamics, so a small,
+      configuration-dependent residual is expected, not a discrepancy).
+    """
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.actions.joint_positions = isaaclab_mdp.RelativeJointPositionActionCfg(
+            asset_name="robot",
+            joint_names=ARM_JOINT_NAMES,
+            scale=0.1,
+            use_zero_offset=True,
+        )

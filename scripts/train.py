@@ -244,6 +244,12 @@ parser.add_argument(
         "reach+grasp+lift+goal reward. Requires logs/reach_handoff_states.pt to already exist."
     ),
 )
+parser.add_argument(
+    "--seed",
+    type=int,
+    default=None,
+    help="Override the PPO runner cfg's seed (for the 3-seed protocol used by this project's Tier 1 experiments; default: keep the agent cfg's own).",
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
@@ -346,6 +352,9 @@ def main() -> None:
     agent_cfg.device = args_cli.device
     if args_cli.max_iterations is not None:
         agent_cfg.max_iterations = args_cli.max_iterations
+
+    if args_cli.seed is not None:
+        agent_cfg.seed = args_cli.seed
 
     if args_cli.overrides_file is not None:
         import json

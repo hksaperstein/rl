@@ -150,3 +150,41 @@ or assume it's implied by other context.)
   instance from *preemption* once it has actually acquired the GPU, not
   from contention with another concurrent workstream trying to acquire
   the same single project-wide GPU slot first.
+- **Preemption clustering can get much worse than the already-documented
+  "3 in ~3 hours"** (found 2026-07-21, AR4 Franka-fixes-transfer Task 4,
+  Condition A 3-seed training): hit **6 genuine preemptions across ~3h45m**
+  on the training instance (`us-central1-c`), each independently confirmed
+  via `gcloud compute operations list` as a real
+  `compute.instances.preempted` event, plus 2 more on a second, separate
+  diagnostic-sweep instance in the same zone shortly after. **On-demand was
+  also stocked out** (`resource_availability`/`STOCKOUT`) in this same zone
+  at the time the 2026-07-20 mitigation above was attempted — the on-demand
+  fallback is not always available even when you're willing to pay ~2x;
+  falling back further to "just keep resuming on SPOT" (via `--checkpoint`,
+  see the scripts/train.py fix this same task added) is a legitimate
+  degraded-mode response when on-demand itself is unavailable, not only
+  when it's undesirable on cost grounds. A brief retry loop against
+  `gcloud compute instances start` (10-20s spacing, up to ~15 attempts) has
+  reliably found a moment of free SPOT capacity within a few minutes every
+  time this was tried, even during this same stockout window — a single
+  failed `start` attempt is not evidence the zone is unrecoverable for a
+  while.
+- **A SPOT restart can come back with a broken NVIDIA driver even though
+  the instance itself boots fine** (found 2026-07-21, same task): `nvidia-smi`
+  reported `No devices were found` / `couldn't communicate with the NVIDIA
+  driver` after a routine preemption-restart, root-caused to an
+  automatic kernel upgrade (apt pulled a newer `linux-image-*-gcp` between
+  the instance's original boot and this restart) whose matching
+  `linux-modules-nvidia-580-server-open-<kernel>-gcp` package had been left
+  in an interrupted/broken (`iF`) dpkg state (`sudo apt-get install
+  --reinstall` itself fails with "dpkg was interrupted, you must manually
+  run 'sudo dpkg --configure -a'" until that's done first). Fix: `sudo dpkg
+  --configure -a` (finishes configuring the pending nvidia kernel-module
+  package and regenerates the initramfs/grub entries for the new kernel),
+  then a plain `sudo reboot` — `nvidia-smi` and the GPU PCI device both came
+  back healthy immediately after. `lspci | grep -i nvidia` showing the GPU
+  present as a PCI device while `nvidia-smi`/`lsmod | grep nvidia` show
+  nothing is the distinguishing signature (driver/kernel-module problem,
+  not a GPU-detach/quota problem) — check `dpkg -l | grep linux-modules-nvidia`
+  for an `iF`/broken state first before assuming a deeper GPU-attachment
+  issue.

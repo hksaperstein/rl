@@ -30,4 +30,5 @@ __pycache__/
 # convention as data//models/ above.
 /toy_env/.venv/
 /toy_env/runs/
+/toy_env/runs_500k/
 /toy_env/renders/

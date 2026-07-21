@@ -255,6 +255,126 @@ report this as the real, if negative, finding it is, not a success.**
   natural next test if this question is revisited, and is not decided or
   started here.
 
+## Scaled-up validation run (2026-07-21): 500k timesteps/mode, 5x scale — settles the open question, in the negative
+
+The 100k-step demo above left an explicit open question: was the
+non-reproduction "most plausibly explained by insufficient training scale"?
+This run answers that directly by re-running the identical comparison at
+**500,000 timesteps per mode (5x the original), single seed (seed=0), same
+`n_envs=4`, same PPO hyperparameters** — pure CPU wall-clock cost, no GPU/cloud
+involved, dispatched sequentially (`absolute` → `relative` → `task_space`, not
+in parallel) specifically to avoid oversubscribing this Pi's 4 cores and
+~1.8GB RAM; live `free -h`/`ps` monitoring throughout confirmed memory stayed
+bounded (~1.1-1.2GB used, no swim into swap, no OOM) the entire ~2h39m run.
+
+**Results (`toy_env/runs_500k/comparison_ppo_seed0.json`, local-only per this
+environment's own gitignored-runs convention — see below):**
+
+| action mode | best `mean_min_dist` | best reached @ | final `mean_min_dist` | regression (final − best) | final success_rate | wall-clock |
+|---|---|---|---|---|---|---|
+| `absolute`   | 0.0401 | t=133,344 (of 500,000) | 0.0430 | +0.0029 (**+7.1%** of best) | 0.200 | 1852s (~31 min) |
+| `relative`   | 0.0370 | t=300,024               | 0.0470 | +0.0100 (**+27.0%** of best) | 0.200 | 1862s (~31 min) |
+| `task_space` | 0.0383 | t=466,704 (near the very end) | 0.0425 | +0.0042 (**+11.1%** of best) | 0.000 | 5803s (~97 min) |
+
+(Same `mean_min_dist`/`success_rate` metrics as the 100k run above, same
+`EvalRecorderCallback`, 5 fixed-seed eval episodes per checkpoint, ~15
+checkpoints across training. `task_space` remains ~3.1x slower per step than
+the other two, consistent with the original run's own observed ~3x ratio.)
+
+**Two clear, load-bearing findings, neither of which is what the real Isaac
+Lab experiment predicts:**
+
+1. **No collapse pattern at 5x scale either — if anything, regressions got
+   *smaller*, not larger, as scale increased.** All three modes' regressions
+   here (7.1% / 27.0% / 11.1% of best) are comparable to or smaller than the
+   same modes' own 100k-scale regressions (38.7% / 29.5% / 67.1%). The real
+   Isaac Lab experiment's own signature is an ~84% collapse that gets *worse*
+   with more training, not better — this run shows the opposite trend
+   direction with 5x more data, which argues against "just needs more scale"
+   as the explanation for non-reproduction, at least within this proxy's own
+   dynamics.
+2. **A genuinely new, real result: `success_rate` (full grip+lift) is nonzero
+   for the first time in this environment's history — but only in the
+   joint-space modes, never in `task_space`.** `task_space` is a clean **0/16
+   checkpoints** (55 eval episodes across the entire back half of training,
+   t=166,680 through t=500,040) despite having comparable-to-best `reach`
+   performance (its own best `mean_min_dist`, 0.0383, is the best of all three
+   modes at this scale). `absolute` succeeds at 2/16 checkpoints (rate 0.2
+   each); `relative` succeeds at 5/16 checkpoints (rates 0.2-0.4, its most
+   frequent success mode overall). **This is the opposite of what the real
+   finding would predict** — task-space/differential-IK control is the mode
+   expected to be the more reliable one for actually completing manipulation,
+   not the one that never once completes it while the two joint-space modes
+   both do.
+
+**Honest verdict: this settles the open question, and settles it in the
+negative.** `toy_env`, even at a meaningful (5x) scale-up run entirely on this
+Pi's CPU, does **not** reproduce the real Isaac Lab action-space pathology
+(transient reach-discovery-then-abandonment under absolute joint control,
+stability under task-space control) — and on the one metric where the three
+modes did meaningfully diverge at this scale (success rate), the direction is
+inverted relative to the real finding, not merely absent or noisy.
+
+**Most plausible root cause, per this run's own evidence, not just this
+proxy's documented scope limits in the abstract:**
+
+- **No real contact/grasp mechanics is very likely the actual gate, not
+  insufficient steps.** The real Isaac Lab regression this environment tries
+  to reproduce is root-caused (see
+  [[d8-antipodal-grasp-quality]]'s "Root cause investigation" section, Finding
+  1) to the policy converging to **never make contact with the object at
+  all** under joint-space control — a genuine contact-frequency effect,
+  measured directly from real contact-sensor data, that only exists because
+  the real environment has real contact physics to avoid or seek. This proxy's
+  "grasp" is a trivial `dist < threshold AND gripper closed` check with no
+  contact force and no possibility of a near-miss — there is no equivalent
+  "avoid contact entirely" local optimum available to a policy here, since
+  there is no contact to avoid. If this diagnosis is right, no amount of
+  additional scale in this specific proxy would ever surface the real
+  pathology, because the mechanism it depends on isn't represented.
+- **`task_space`'s own zero-success result is plausibly an artifact of this
+  proxy's crude differential-IK implementation, not a real task-space
+  limitation.** This toy `task_space` mode has no orientation control and
+  uses a numerical (finite-difference) pseudo-inverse Jacobian with a
+  per-step clip — a much cruder controller than Isaac Lab's own tuned
+  `DifferentialInverseKinematicsActionCfg`. Holding the end effector inside a
+  narrow 5cm capture radius for 10 consecutive steps via coarse per-step
+  Cartesian-velocity commands may simply be a harder control problem for this
+  specific crude IK solve than reaching the same radius via direct joint
+  targets — a fact about this proxy's own grip mechanic and IK quality, not
+  evidence about real task-space control.
+- **500k steps/mode is still ~2-3 orders of magnitude below the real
+  experiment's own total budget** (1500 PPO iterations × thousands of
+  parallel envs ≈ 10⁸ env-steps) — a further scale-up is not ruled out in
+  principle, but the fact that this run's own regressions shrank rather than
+  grew with 5x more data is itself evidence against "more scale would reveal
+  the same collapse" in this specific proxy, not evidence for it.
+
+**Bottom line on the tool's usefulness — real and valuable, but narrower than
+originally hoped:** `toy_env` is validated as a genuinely working, fast,
+real-PPO CPU training harness (trains all three action modes end-to-end,
+produces interpretable learning curves, and at this larger scale even
+produces real task successes for the first time) — useful as a general
+algorithm/exploration prototyping tool. It is **not** validated as a cheap
+proxy for the specific action-space-dependent collapse finding in
+[[d8-antipodal-grasp-quality]], and this run's own evidence (regressions
+shrinking with scale, plus the inverted success-rate pattern) makes "just run
+it longer" an unpromising next step for that specific question. If this axis
+is revisited, the honest options are: (a) treat the real collapse as
+something that can only be tested in the real Isaac Lab simulator, since it
+appears to depend on genuine contact dynamics this proxy cannot represent; or
+(b) rebuild this proxy with a much more faithful grasp mechanic (something
+closer to a real antipodal/force-closure contact check) and/or a properly
+vectorized (multi-core or GPU-batched) environment and a much larger step
+budget — neither of which is decided or started here, per this task's own
+scope (measure and report, not redesign).
+
+**Where the artifacts live:** `toy_env/runs_500k/` (models + per-mode/
+combined history JSON), gitignored alongside `toy_env/runs/` per this
+environment's existing "run artifacts are local-only, results get written up
+here" convention — not committed to git, same as the original 100k run's own
+`toy_env/runs/` outputs.
+
 ## Where this lives, and why not under `tasks/`
 
 `toy_env/` is a new top-level directory, a sibling to `tasks/`/`vision/`/

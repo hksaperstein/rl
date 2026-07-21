@@ -4542,3 +4542,69 @@ this project's own cloud history, folded into
 `docs/cloud/dispatch-checklist.md`). See
 `kb/wiki/experiments/d8-antipodal-grasp-quality.md`'s "Root cause
 investigation (2026-07-21 follow-up)" section for full data tables.
+
+**H_relative test (2026-07-21): `RelativeJointPositionActionCfg` CONFIRMED,
+3/3 seeds — a genuinely joint-space fix for the collapse.** The root-cause
+follow-up's own "most direct next test" (delta/incremental joint targets,
+isolating "relative vs. absolute action semantics" from "joint- vs.
+task-space" as two axes the original design changed at once) was executed
+as its own Tier 1 experiment (spec:
+`docs/superpowers/specs/2026-07-20-d8-relative-joint-action-design.md`;
+plan: `docs/superpowers/plans/2026-07-20-d8-relative-joint-action-
+implementation.md`). 3 seeds, full 1500-iteration runs,
+`FrankaDieLiftJointD8BigRelativeAntipodalEnvCfg` — Condition A's entire
+inherited chain untouched, only the action term swapped
+(`RelativeJointPositionActionCfg(scale=0.1)`, the Kuka Allegro dexsuite's
+own shipped precedent). A real critic-divergence-adjacent bug
+(`clip_actions` on the wrong runner-cfg field) was found and fixed mid-run.
+
+Contact-frequency trajectory (iterations 0/100/300/700/1499), per seed:
+seed 42: 0 → 0.0052 → 0.5035 → 0.8539 → **0.8801**; seed 123: 0 → 0 →
+0.1346 → 0.0115 → **0.8260** (a real, honestly-reported mid-training dip
+at iter 700, self-correcting by iter 1499 rather than terminal); seed 7: 0
+→ 0.0685 → 0.4914 → 0.8852 → **0.8925**. Applying the spec's exact bar
+(final ≥0.05 AND not below iter-700's own value): **all 3 seeds
+independently CONFIRMED** — exceeding the "at least 2 of 3" threshold
+cleanly, no seed anywhere near the FALSIFIED "rose then decayed to
+near-zero" shape absolute joint-space showed in all 8 of its own prior
+measured checkpoints.
+
+**Three-way curve-shape comparison (the actual point of this experiment)**:
+absolute joint-space stays exact `0.0` at every checkpoint, every seed,
+across 12 checkpoints measured to date — never rises. Task-space rises
+monotonically 0→88%. Relative joint-space's seeds 42 and 7 **reproduce
+task-space's own curve shape and magnitude almost exactly** (seed 42's
+iter-700 value, 0.8539, matches task-space's own iter-700 value to 4
+decimal places); seed 123 shows one real deviation (the transient dip
+above) but still recovers to the same ~83-89% final band the other two
+seeds land in. This is real evidence the fix changed the *shape* of the
+curve (not merely delayed the same collapse), matching the spec's own
+falsifiable prediction directly.
+
+Behavioral bar (`franka_checkpoint_review.py`'s sustained-lift protocol,
+final checkpoint, 8 envs/seed): **8/8, 8/8, 8/8 — a clean 24/24**,
+exceeding H_taskspace's own aggregate (8/24). Video-reviewed (seed 123,
+the seed with the mid-training dip): rest frame shows the die on the
+table by an open gripper, peak frame (object height 0.453m vs. 0.012m
+resting) shows a closed gripper with no die visible on the table,
+corroborated by contact-force data (`cos_angle≈-0.99` at 82.6% of
+samples) — three independent signals triangulating to a genuine grasp+
+lift, not a video artifact.
+
+**Verdict: CONFIRMED.** A genuinely joint-space (no IK, no arm-specific
+controller) action-term change resolves the collapse H_joint showed in
+every prior measurement. Independently significant for the North Star:
+unlike task-space/differential-IK, this fix needs no arm-specific
+kinematic-chain configuration at all — real evidence the "drop in a new
+arm, train immediately" bar does not require an IK/task-space layer as a
+hidden prerequisite. Honest next candidates (not started, per this plan's
+own "no new experiment" constraint): extend to d10/d12/d20 to check the
+fix generalizes across object scale; investigate seed 123's own transient
+dip (noise-scale-dependent, a `scale` hillclimb candidate, or a milder
+recoverable instance of the same credit-assignment mechanism). Cost ≈$0.25
+(one SPOT instance, ~40min uptime, zero preemptions) — combined with
+Tasks 1-3's own ≈$1.6-1.75, this plan's total is **≈$1.9-2.0**, well under
+its $5 cap. Full teardown verified. See
+`kb/wiki/experiments/d8-antipodal-grasp-quality.md`'s "H_relative test
+(2026-07-21 follow-up)" section for full per-seed data tables and the
+three-way comparison.

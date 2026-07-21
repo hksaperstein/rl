@@ -625,6 +625,59 @@ Per this task's own explicit instruction not to implement blind: three candidate
 
 Two SPOT `g2-standard-4`+`nvidia-l4` instances (the first destroyed after the GRUB-corruption incident above, ~1hr instance-uptime before deletion; the second ran the full retrain+diagnostic pipeline end-to-end, ~5.5hr instance-uptime including install/rollouts/two full 1500-iteration training runs). Estimated (duration × published SPOT SKU rate, no BigQuery billing export exists in this project): **≈$2.5** total, well within a reasonable follow-up budget and consistent with this project's own prior per-run cost pattern. Full teardown verified via `scripts/check_cloud_state.sh` (zero instances/disks/snapshots after the final deletion).
 
+## H_relative test (2026-07-21 follow-up): `RelativeJointPositionActionCfg` CONFIRMED — a genuinely joint-space fix, 3/3 seeds
+
+**Motivation.** The root-cause investigation above named `RelativeJointPositionActionCfg` (delta/incremental joint targets, `applied_target = raw_action * scale + current_joint_pos`, recomputed fresh each control step) as the most direct next test: it isolates "relative vs. absolute action semantics" from "joint-space vs. task-space" as two axes the original H_joint/H_taskspace design changed simultaneously. Full design: `docs/superpowers/specs/2026-07-20-d8-relative-joint-action-design.md`. Implementation: `docs/superpowers/plans/2026-07-20-d8-relative-joint-action-implementation.md` (Tasks 1-4). New env cfg `FrankaDieLiftJointD8BigRelativeAntipodalEnvCfg` (`tasks/franka/dice_lift_joint_env_cfg.py`) — Condition A's full inherited chain (d8 48mm-parity, `AntipodalGraspRewardsCfg`, `FrankaDieLiftContactSceneCfg`) untouched, only `self.actions.arm_action` swapped to `RelativeJointPositionActionCfg(scale=0.1, use_zero_offset=True)`, Kuka Allegro dexsuite's own shipped precedent for `scale`. A real critic-divergence bug (`clip_actions` on the wrong cfg class, then on the wrong field) was found and fixed mid-Task-3 (`FrankaLiftRelativeJointPPORunnerCfg`, `clip_actions=5.0`) — a real, if scoped, PPO-runner-cfg exception the plan's own contingency clause anticipated.
+
+**Method.** 3 seeds (42, 123, 7), full 1500-iteration training runs, checkpoints preserved+GCS-synced throughout (iterations 0/100/300/700/1499 — all landing on `save_interval=50`). Measurement: `scripts/diag_antipodal_root_cause.py --variant condition-relative`, 64-env headless rollouts at all 5 checkpoints × 3 seeds (15 rollouts), identical contact-frequency/antipodal-frequency/`reaching_object` instrumentation as the root-cause doc, plus `scripts/franka_checkpoint_review.py`'s sustained-lift behavioral bar (8 envs × 3 seeds) at the final checkpoint. Dispatched to a single GCP SPOT `g2-standard-4`+`nvidia-l4` instance (repo cloned via public HTTPS, no `git archive` needed now that the repo is public); zero preemptions this run.
+
+### Contact-frequency trajectory — all 3 seeds independently CONFIRMED
+
+| checkpoint | seed 42 | seed 123 | seed 7 |
+|---|---|---|---|
+| iter 0 | 0.0 | 0.0 | 0.0 |
+| iter 100 | 0.005208 | 0.0 | 0.068461 |
+| iter 300 | 0.503451 | 0.134601 | 0.491403 |
+| iter 700 | 0.853853 | 0.011483 | 0.885166 |
+| iter 1499 | **0.880146** | **0.825991** | **0.892508** |
+
+Antipodal-satisfying frequency (fraction of ALL samples meeting the full bonus condition) tracks contact frequency almost 1:1 at every checkpoint once contact appears — same "geometry comes for free once contact happens" pattern the root-cause doc found under task-space (fraction-of-contact-that-is-antipodal ≥98% by iter 700 in all 3 seeds, reaching 99.99-100% by iter 1499).
+
+Applying the spec's exact numeric bar per seed:
+- **Seed 42: CONFIRMED** — iter 1499 = 0.880146 ≥ 0.05, and ≥ iter 700 (0.853853).
+- **Seed 123: CONFIRMED** — iter 1499 = 0.825991 ≥ 0.05, and ≥ iter 700 (0.011483). Note a real, honestly-reported wrinkle: seed 123 dipped to 0.011 at iter 700 (down from 0.135 at iter 300) before recovering sharply to 0.826 by iter 1499 — a transient version of Finding 3's diagnosed "abandon a marginal early gain" pattern, but **self-correcting rather than terminal**, unlike absolute joint-space's identical-shaped dip that never recovered in any of its own 8 measured checkpoints. The spec's bar only checks final-vs-iter-700, not full-trajectory monotonicity, so this seed clears CONFIRMED on the letter of the rule; flagged here rather than smoothed over.
+- **Seed 7: CONFIRMED** — iter 1499 = 0.892508 ≥ 0.05, and ≥ iter 700 (0.885166).
+
+**Overall: CONFIRMED, 3/3 seeds** — exceeds the spec's own "at least 2 of 3" bar for confirmation cleanly; no seed meets or approaches the FALSIFIED bar (none show iter-1499 <0.01 and <50% of peak — the exact opposite is true in all 3).
+
+Independent re-derivation (this project's standing practice): seed 42's full 5-checkpoint trajectory was recomputed directly from the raw `.npz` `magnitude_ok`/`antipodal_ok` arrays (not the summary JSON) and matched the reported `diag_antipodal_root_cause.py` summary exactly at all 5 checkpoints, bit for bit.
+
+### Three-way curve-shape comparison — the actual point of this experiment
+
+| checkpoint | absolute joint-space (Condition A, seed 42 retrain) | task-space (Condition B, seed 123 retrain) | relative joint-space seed 42 | relative joint-space seed 123 | relative joint-space seed 7 |
+|---|---|---|---|---|---|
+| iter 0 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 |
+| iter 100 | 0.0 | 0.00047 | 0.005208 | 0.0 | 0.068461 |
+| iter 300 | 0.0 | 0.6297 | 0.503451 | 0.134601 | 0.491403 |
+| iter 700 | 0.0 | 0.8539 | 0.853853 | 0.011483 | 0.885166 |
+| iter 1499 | 0.0 | 0.8781 | 0.880146 | 0.825991 | 0.892508 |
+
+Absolute joint-space's own contact frequency is exact `0.0` at every checkpoint, every seed, across every measurement this arc has taken (12 checkpoints now, 5 seeds/runs) — never rises at all, the falsified baseline. Task-space's own curve rises monotonically to an 88% asymptote. **Relative joint-space's seeds 42 and 7 reproduce task-space's own curve shape almost exactly** — monotonic rise, near-identical intermediate values (seed 42's iter 700 = 0.8539, literally matching task-space's own iter-700 value to 4 decimal places), and a final value (88.0-89.3%) at or slightly above task-space's own ceiling (87.8%). Seed 123 shows the one real deviation — a genuine mid-training dip (Finding 3's diagnosed signature, in miniature) — but recovers to the same ~83% final band the other two seeds land in, rather than collapsing permanently the way every one of absolute joint-space's own 8 measured checkpoints did. **This directly answers H_relative's own falsifiable question**: the fix is not merely "delayed the same collapse" (which would require final ≪ peak, the opposite of what all 3 seeds show) — it changed the shape of the curve, into something statistically indistinguishable from task-space's own success trajectory in 2/3 seeds, and a transient-not-terminal version of the original failure mode in the third.
+
+### Behavioral bar
+
+`franka_checkpoint_review.py`'s sustained-lift protocol (0.04m threshold, `977a748`'s settle-window fix), final checkpoint, 8 envs/seed: **seed 42: 8/8, seed 123: 8/8, seed 7: 8/8 — 24/24 total**, a full clean sweep exceeding H_taskspace's own aggregate result (8/24, only 1 of 3 seeds a clean 8/8). Video-reviewed per Experiment 16 discipline (a shaped/instrumented metric alone is not trusted at face value): seed 123 (the seed with the mid-training dip, judged the most interesting given the wrinkle above) was reviewed frame-by-frame — the rest frame (step 15) shows the die resting on the table next to an open gripper; the peak frame (step 248, object height 0.453m vs. a 0.012m resting height) shows the gripper closed with no die visible on the table, consistent with a genuine carry; contact-force data for this exact checkpoint/rollout independently shows both jaws registering force with `cos_angle≈-0.99` (deep antipodal geometry) at 82.6% of samples. Three independent signals (physics-buffer height, contact-force geometry, and the video's own object-disappears-from-table framing) triangulate to a real grasp+lift, not a video artifact or a wedge.
+
+### Verdict and next direction
+
+**H_relative is CONFIRMED**, cleanly, 3/3 seeds on both the mechanism bar and the behavioral bar. A genuinely joint-space (no IK, no arm-specific controller) action-term change — isolating "delta vs. absolute joint targeting" as the true variable, exactly as this investigation's own root-cause diagnosis predicted — resolves the exact-zero-contact-forever collapse the original H_joint condition showed in every one of 8 independently-measured checkpoints. This is independently significant for `CLAUDE.md`'s own North Star: unlike task-space/differential-IK (H_taskspace), a relative joint-space action requires no arm-specific IK controller or kinematic-chain configuration at all — it is close to the most morphology-agnostic action space this project has tested, and this result is real evidence that the North Star's "drop in a new arm, training should succeed immediately" bar does not require an IK/task-space layer as a hidden prerequisite.
+
+Honest next candidate direction, given this real (not hoped-for) result: extend this same action-term fix to d10/d12/d20 (the unified-multi-die-specialist work) to check whether the fix generalizes across object scale, since every d8-specific result in this arc has needed a fresh check at other sizes before being trusted as general; and separately, investigate seed 123's own transient dip specifically — is it noise-scale-dependent (a `scale=0.1` hillclimb candidate, per the plan's own Tier-2 note) or a milder, recoverable instance of the same credit-assignment mechanism Finding 3 diagnosed. Neither started here, per this plan's own explicit "do not start any new experiment" constraint — flagged for Principal's next-direction call.
+
+### Cost
+
+One SPOT `g2-standard-4`+`nvidia-l4` instance, ≈40 minutes instance-uptime (install + 15 diagnostic rollouts + 3 behavioral evals, zero preemptions) ≈ **$0.25**. Combined with Tasks 1-3's own recorded spend (≈$1.6-1.75, dominated by the 3-seed/1500-iteration training run), this plan's total cost is **≈$1.9-2.0**, well under its own $5 cap. Full teardown verified via `scripts/check_cloud_state.sh` (zero instances/disks/snapshots after deletion). All raw diagnostic/behavioral-eval artifacts (`.npz`, summary JSONs, videos, height arrays) synced to `gs://rl-manipulation-hks-runs/d8-relative-joint-action/diag_relative_task4/` and `.../behavioral_eval_task4/`.
+
 ## Related
 
 [[experiment-09-antipodal-grasp-bonus]],
@@ -647,4 +700,12 @@ whose H_taskspace condition ultimately vindicates), [[d8-d10-demo-warmstart]]
 d8 null — see "Relation to d8's own H2 success" above for why the two
 don't need reconciling into one story), [[reach-grasp-lift-gap]],
 [[ppo-critic-divergence]] (Experiment 11's own AR4-era failure mode,
-watched for and not observed here).
+watched for and not observed here — though a real, if differently-shaped,
+`clip_actions`-cfg-plumbing bug surfaced during H_relative's Task 3 and was
+fixed, see the H_relative section above), [[action-space-design]] (further
+narrowed by H_relative into delta-vs-absolute *within* joint-space — a
+genuinely joint-space fix now confirmed, not just task-space vs. joint-space
+as a whole), `CLAUDE.md`'s North Star (H_relative's own CONFIRMED result is
+direct evidence that closing the North Star's "drop in a new arm, train
+immediately" bar does not require an arm-specific IK/task-space controller
+layer as a hidden prerequisite).

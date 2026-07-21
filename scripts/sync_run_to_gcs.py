@@ -80,6 +80,7 @@ VARIANT_MAP = {
     "train_franka_jointdietargetselectionso": "joint-die-target-selection-so",
     "train_franka_jointdietargetselectiond1": "joint-die-target-selection-d1",
     "train_franka_jointdietargetselectiond2": "joint-die-target-selection-d2",
+    "train_franka_jointdietargetselectione1": "joint-die-target-selection-e1",
 }
 
 DEFAULT_BUCKET = os.environ.get("GCS_BUCKET", "gs://rl-manipulation-hks-runs")

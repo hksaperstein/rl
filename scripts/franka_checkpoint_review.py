@@ -90,6 +90,7 @@ parser.add_argument(
         "joint-die-target-selection-so",
         "joint-die-target-selection-d1",
         "joint-die-target-selection-d2",
+        "joint-die-target-selection-e1",
     ],
     default="ik-cube",
     help=(
@@ -159,12 +160,14 @@ parser.add_argument(
         "(FrankaDieLiftJointD8BigRelativeAntipodalEnvCfg, docs/superpowers/plans/2026-07-20-d8-relative-joint-"
         "action-implementation.md; spec: docs/superpowers/specs/2026-07-20-d8-relative-joint-action-design.md); "
         "_PLAY probe is the same fixed size, 50 envs. "
-        "joint-die-target-selection-so/-d1/-d2: target-selection-in-clutter curriculum Stages SO (0 active "
+        "joint-die-target-selection-so/-d1/-d2/-e1: target-selection-in-clutter curriculum Stages SO (0 active "
         "distractors, internal sanity gate)/D1 (1 active distractor)/D2 (2 active distractors, primary "
-        "falsification check) - full 3-die scene topology, 43-dim observation schema (Task 2's "
-        "distractor_distance_summary term), reward/terminations unchanged "
-        "(docs/superpowers/plans/2026-07-19-target-selection-clutter-implementation.md, "
-        "docs/superpowers/specs/2026-07-19-target-selection-clutter-design.md). Each stage has 2 "
+        "falsification check)/E1 (3 active distractors, new 2x2-grid scene topology, 44-dim observation "
+        "schema with K=3 distractor_distance_summary extension) - full 3-die scene topology, reward/terminations "
+        "unchanged (docs/superpowers/plans/2026-07-19-target-selection-clutter-implementation.md, "
+        "docs/superpowers/specs/2026-07-19-target-selection-clutter-design.md; E1 additionally: "
+        "docs/superpowers/plans/2026-07-21-target-selection-clutter-e1-3distractors-implementation.md, "
+        "docs/superpowers/specs/2026-07-21-target-selection-clutter-e1-3distractors-design.md). Each stage has 2 "
         "pinned-target-shape _PLAY classes (d12/d20) - REQUIRES --eval_target_shape to disambiguate which "
         "one to load; distractor slots are never pinned, only the target."
     ),
@@ -175,7 +178,7 @@ parser.add_argument(
     default=None,
     help=(
         "Which shape is pinned as the commanded target for this eval run - REQUIRED when --variant is one "
-        "of joint-die-target-selection-{so,d1,d2}, since a single --variant string alone is ambiguous "
+        "of joint-die-target-selection-{so,d1,d2,e1}, since a single --variant string alone is ambiguous "
         "between that stage's two pinned-target _PLAY classes "
         "(..._PLAY_D12Target/..._PLAY_D20Target, tasks/franka/dice_lift_joint_env_cfg.py; Task 1 of "
         "docs/superpowers/plans/2026-07-19-target-selection-clutter-implementation.md). Distractor slots "
@@ -212,6 +215,7 @@ _TARGET_SELECTION_VARIANTS = {
     "joint-die-target-selection-so",
     "joint-die-target-selection-d1",
     "joint-die-target-selection-d2",
+    "joint-die-target-selection-e1",
 }
 if args_cli.variant in _TARGET_SELECTION_VARIANTS and args_cli.eval_target_shape is None:
     sys.exit(
@@ -294,6 +298,11 @@ elif args_cli.variant == "joint-die-target-selection-d2":
     from tasks.franka.dice_lift_joint_env_cfg import (  # noqa: E402
         FrankaDieLiftJointD12D20TargetSelectionD2EnvCfg_PLAY_D12Target,
         FrankaDieLiftJointD12D20TargetSelectionD2EnvCfg_PLAY_D20Target,
+    )
+elif args_cli.variant == "joint-die-target-selection-e1":
+    from tasks.franka.dice_lift_joint_env_cfg import (  # noqa: E402
+        FrankaDieLiftJointD12D20TargetSelectionE1EnvCfg_PLAY_D12Target,
+        FrankaDieLiftJointD12D20TargetSelectionE1EnvCfg_PLAY_D20Target,
     )
 
 VIDEO_DIR = args_cli.output_dir or os.path.join(
@@ -428,6 +437,12 @@ def main() -> None:
             FrankaDieLiftJointD12D20TargetSelectionD2EnvCfg_PLAY_D12Target()
             if args_cli.eval_target_shape == "d12"
             else FrankaDieLiftJointD12D20TargetSelectionD2EnvCfg_PLAY_D20Target()
+        )
+    elif args_cli.variant == "joint-die-target-selection-e1":
+        env_cfg = (
+            FrankaDieLiftJointD12D20TargetSelectionE1EnvCfg_PLAY_D12Target()
+            if args_cli.eval_target_shape == "d12"
+            else FrankaDieLiftJointD12D20TargetSelectionE1EnvCfg_PLAY_D20Target()
         )
     else:
         env_cfg = FrankaLiftEnvCfg_PLAY()

@@ -91,6 +91,7 @@ parser.add_argument(
         "joint-die-target-selection-so",
         "joint-die-target-selection-d1",
         "joint-die-target-selection-d2",
+        "joint-die-target-selection-e1",
     ],
     default="ik-cube",
     help=(
@@ -188,7 +189,14 @@ parser.add_argument(
         "{d12,d20}) - the experiment's target configuration and primary falsification check, meant to be "
         "--checkpoint-resumed from Stage D1's own checkpoint "
         "(FrankaDieLiftJointD12D20TargetSelectionD2EnvCfg, "
-        "docs/superpowers/plans/2026-07-19-target-selection-clutter-implementation.md Task 6)."
+        "docs/superpowers/plans/2026-07-19-target-selection-clutter-implementation.md Task 6). "
+        "joint-die-target-selection-e1: Stage E1 (3 active distractors, all independently drawn from "
+        "{d12,d20}, new 2x2-grid scene topology) - the count-scaling extension beyond D2, meant to be "
+        "--checkpoint-resumed (--policy_only_checkpoint, 43->44 dim observation surgery via "
+        "scripts/extend_checkpoint_observation_dims.py) from Stage D2's own checkpoint "
+        "(FrankaDieLiftJointD12D20TargetSelectionE1EnvCfg, "
+        "docs/superpowers/plans/2026-07-21-target-selection-clutter-e1-3distractors-implementation.md, "
+        "docs/superpowers/specs/2026-07-21-target-selection-clutter-e1-3distractors-design.md)."
     ),
 )
 parser.add_argument(
@@ -323,6 +331,10 @@ def main() -> None:
         from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftJointD12D20TargetSelectionD2EnvCfg
 
         env_cfg = FrankaDieLiftJointD12D20TargetSelectionD2EnvCfg()
+    elif args_cli.variant == "joint-die-target-selection-e1":
+        from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftJointD12D20TargetSelectionE1EnvCfg
+
+        env_cfg = FrankaDieLiftJointD12D20TargetSelectionE1EnvCfg()
     else:
         env_cfg = FrankaLiftEnvCfg()
     env_cfg.scene.num_envs = args_cli.num_envs
@@ -370,6 +382,7 @@ def main() -> None:
         "joint-die-target-selection-so": "_jointdietargetselectionso",
         "joint-die-target-selection-d1": "_jointdietargetselectiond1",
         "joint-die-target-selection-d2": "_jointdietargetselectiond2",
+        "joint-die-target-selection-e1": "_jointdietargetselectione1",
     }[args_cli.variant]
     log_dir = os.path.join(
         LOG_ROOT + _log_suffix,

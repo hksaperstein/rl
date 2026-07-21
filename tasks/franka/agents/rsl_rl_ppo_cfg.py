@@ -89,9 +89,17 @@ class FrankaLiftRelativeJointPPORunnerCfg(FrankaLiftPPORunnerCfg):
     ever sees it (confirmed by direct read of
     `isaaclab_rl/rsl_rl/vecenv_wrapper.py:154-155` in this project's pinned
     Isaac Lab checkout - `RslRlVecEnvWrapper.__init__`'s own `clip_actions`
-    param, applied via `torch.clamp` on the raw action tensor - and
-    `isaaclab_rl/rsl_rl/rl_cfg.py:178-183`, confirming
-    `RslRlPpoAlgorithmCfg.clip_actions` is the config field that reaches it).
+    param, applied via `torch.clamp` on the raw action tensor). `clip_actions`
+    is a field on `RslRlBaseRunnerCfg` itself (the top-level runner cfg,
+    read as `agent_cfg.clip_actions` by `train_franka.py`/
+    `franka_checkpoint_review.py`/`diag_antipodal_root_cause.py`), NOT on
+    the nested `RslRlPpoAlgorithmCfg` (confirmed by direct read of
+    `isaaclab_rl/rsl_rl/rl_cfg.py:135-178` class boundaries) - an initial
+    version of this fix mis-added it as an `RslRlPpoAlgorithmCfg(...)`
+    kwarg and failed fast with `TypeError: RslRlPpoAlgorithmCfg.__init__()
+    got an unexpected keyword argument 'clip_actions'` on the very next
+    real-run attempt; caught and corrected in this same pass before further
+    training time was spent.
     `scale=0.1` itself is untouched (per the plan's own "not tunable
     mid-experiment" - the fix here is a PPO-runner-level safety clip, not an
     action-scale change) - the env cfg
@@ -99,16 +107,17 @@ class FrankaLiftRelativeJointPPORunnerCfg(FrankaLiftPPORunnerCfg):
     this fix at all.
 
     All other `algorithm`/`policy` fields are copied byte-identical from
-    `FrankaLiftPPORunnerCfg` - only `clip_actions` is added. Applied to ALL
-    THREE seeds (42/123/7), including a re-run of seed 42 (which had already
-    completed cleanly under the unclipped config) - re-run for a clean,
-    directly-comparable 3-seed set all trained under the identical corrected
-    runner cfg, since `clip_actions=5.0` is a generous bound expected to be a
-    no-op for any already-well-behaved trajectory (never triggers unless an
-    action actually exceeds +-5.0), not a behavior change for seed 42's own
-    already-clean run.
+    `FrankaLiftPPORunnerCfg` - only the top-level `clip_actions` is added.
+    Applied to ALL THREE seeds (42/123/7), including a re-run of seed 42
+    (which had already completed cleanly under the unclipped config) -
+    re-run for a clean, directly-comparable 3-seed set all trained under
+    the identical corrected runner cfg, since `clip_actions=5.0` is a
+    generous bound expected to be a no-op for any already-well-behaved
+    trajectory (never triggers unless an action actually exceeds +-5.0),
+    not a behavior change for seed 42's own already-clean run.
     """
 
+    clip_actions = 5.0
     algorithm = RslRlPpoAlgorithmCfg(
         value_loss_coef=1.0,
         use_clipped_value_loss=True,
@@ -122,5 +131,4 @@ class FrankaLiftRelativeJointPPORunnerCfg(FrankaLiftPPORunnerCfg):
         lam=0.95,
         desired_kl=0.01,
         max_grad_norm=1.0,
-        clip_actions=5.0,
     )

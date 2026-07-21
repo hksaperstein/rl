@@ -537,17 +537,22 @@ term) is not needed and was not attempted.
   explanation, or find some other approach. **Decided and executed above
   (option (a), partial-weight warm start) — nothing open on this question
   anymore.**
-- **d8/d10 as distractors or targets** — still gated on those shapes ever
-  achieving real single-object discovery first (unresolved, per
-  [[unified-multi-die-specialist-distillation]]'s own FINAL VERDICT); out
-  of scope for any follow-on to this experiment until that's resolved.
 - **3+ distractors, heaped/occluding arrangements, or any singulation
-  mechanism** — this experiment only tested flat, non-overlapping,
-  at-most-2-distractor clutter; whether the same curriculum+observation
-  mechanism scales further, or whether singulation-specific techniques
-  become necessary once occlusion is possible, is a genuinely open
-  question for a future follow-on, not assumed either way by this
-  experiment's own clean pass.
+  mechanism** — updated 2026-07-21: Stage E1 (see above) has since tested
+  and PASSED at exactly 3 simultaneous flat, non-overlapping distractors
+  (d12 8/8, d20 8/8, matching D2's own 2-distractor baseline exactly).
+  Whether the same curriculum+observation mechanism continues to scale to
+  4+ distractors (E2), or whether heaped/occluding arrangements or a
+  singulation-specific mechanism become necessary once occlusion is
+  possible, remains a genuinely open question for a future follow-on —
+  **E2 (3→4 distractors) is a future spec, explicitly gated on this
+  result and not yet started or authorized by Stage E1's pass.**
+- **d8/d10 as distractors or targets, Stage S1** — still gated on those
+  shapes ever achieving real single-object discovery first (unresolved,
+  per [[unified-multi-die-specialist-distillation]]'s own FINAL VERDICT);
+  Stage E1's clean pass at K=3 (d12/d20 only) does not change this
+  gating — S1 remains a future, separately-gated spec, not auto-started
+  by E1's completion.
 - **Multi-seed replication** — this experiment used a single seed
   (seed42) throughout, matching the checkpoint it started from; the
   spec's own scope explicitly deferred multi-seed replication to a
@@ -846,6 +851,65 @@ finished policy, with no observed "grasped the wrong die" failure mode.
 Per the plan's own explicit scope: **E2 (3→4 distractors) and S1 (folding
 in d8/d10) remain future, separately-gated specs** — this result does not
 itself start either of those follow-on stages.
+
+### Task 6 — FINAL VERDICT for Stage E1 (2026-07-21)
+
+**Pre-registered falsifiable hypothesis PASSES for both shapes,
+independently, at the primary bar — not averaged together:**
+
+| shape | envs_with_sustained_lift | falsification bar (>=6/8, 75%) | max_height_gain | max_consecutive_lifted_steps (of 250) | verdict |
+|-------|---------------------------|-----------------------------------|------------------|-----------------------------------------|---------|
+| d12   | **8/8**                   | PASS                                | 321.6-469.4mm    | 220-223                                  | **PASS — NOT falsified** |
+| d20   | **8/8**                   | PASS                                | 304.0-488.1mm    | 219-222                                  | **PASS — NOT falsified** |
+
+**Task 4's internal pre-training checkpoint-surgery gate: PASSED
+cleanly** — exactly `0.0` max abs diff for both actor and critic
+branches, confirmed twice (once locally, CPU-only, before any dispatch;
+once again independently on the real GCP training host immediately before
+`train_franka.py` launched), per this experiment's own established
+double-verification protocol. As Task 4's own docstring note makes
+explicit, this only proves the weight-surgery was mechanically correct
+(old 43 columns copied unchanged, new column appended at the right
+position) — the real behavioral question ("did the warm start help or
+hurt") is answered by Task 5's trained/evaluated result above, not by this
+gate, since `distractor_3` is genuinely active from iteration 0 at E1
+(unlike Stage SO's inert extension).
+
+**Explicit before/after comparison against D2's own 8/8-both-shapes
+baseline (the last validated data point, at 2 active distractors):** E1's
+8/8 (d12) / 8/8 (d20) at 3 active distractors is an **exact match to D2's
+own result, not a degraded pass** — going from K=2 to K=3 simultaneous
+distractors cost nothing measurable in discovery rate, for either shape,
+at this single-seed (seed42) checkpoint-resumed step.
+
+**Video verification, not just JSON:** both target-shape eval videos
+(`model_6095.pt`, full 4-entity E1 topology, all 3 distractors real/
+active) were downloaded and inspected frame-by-frame (`ffmpeg`-extracted
+stills at 2fps, spanning the full 10s clip, both shapes) — not the
+instrumented JSON alone. **Explicit "grasped the wrong die" check: no such
+incident found in either video.** The target is grasped and lifted within
+roughly the first second of both episodes; all 3 distractors remain
+visibly undisturbed in their original table positions through every
+subsequently inspected frame of both full episodes.
+
+**Cost:** ≈$0.59 of the plan's $2 cap for Task 5 (the only GPU-spend
+task), across two genuine SPOT preemptions (both recovered without data/
+checkpoint loss) — well under, no controller notification needed. Full
+teardown verified (`scripts/check_cloud_state.sh` clean, no local Isaac
+Sim process, flock lock free).
+
+**Checkpoint (final, this stage's own end state):**
+`gs://rl-manipulation-hks-runs/target-selection-clutter/joint-die-target-selection-e1/seed42/2026-07-21_22-30-33/model_6095.pt`.
+
+**Since the primary bar passed cleanly for both shapes (not falsified),
+this plan's own pre-registered falsification-escalation path (a
+Deep-Sets/attention architecture over distractor state) is not needed and
+was not attempted.** Regardless of this pass, per the plan's own explicit
+scope boundary: **E2 (3→4 distractors) and S1 (folding d8/d10 back into
+the distractor/target population) remain future specs, separately gated
+on this result, and do NOT auto-start from this plan's completion** — no
+E2/S1 work was begun as part of this plan, and none should be inferred as
+implicitly authorized by this pass.
 
 ## Related
 

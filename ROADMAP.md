@@ -4608,3 +4608,91 @@ its $5 cap. Full teardown verified. See
 `kb/wiki/experiments/d8-antipodal-grasp-quality.md`'s "H_relative test
 (2026-07-21 follow-up)" section for full per-seed data tables and the
 three-way comparison.
+
+---
+
+## Task 6 (Stage E1) + VERDICT: target-selection-clutter scales to 3 distractors — d12 8/8, d20 8/8 (2026-07-21)
+
+Closing verdict for Stage E1 of the target-selection-clutter experiment
+(plan:
+`docs/superpowers/plans/2026-07-21-target-selection-clutter-e1-3distractors-implementation.md`,
+spec:
+`docs/superpowers/specs/2026-07-21-target-selection-clutter-e1-3distractors-design.md`),
+extending Stage D2's own finished 2-active-distractor policy
+(`model_5096.pt`, 8/8 both shapes) to a 3rd simultaneous distractor via a
+new additive K=3 observation sibling (`distractor_distance_summary_3`,
+41+3=44 dims), a 2×2-grid scene topology (target relocated alongside 3 now
+co-present distractors), and a checkpoint-warm-start resume from D2's own
+checkpoint — no new curriculum stage, reward term, or termination
+mechanism. Full technical write-up: `kb/wiki/experiments/target-selection-clutter.md`'s
+"Stage E1" section (Tasks 1-5) plus its new closing-verdict subsection
+(Task 6).
+
+**Pre-training checkpoint-surgery gate (Task 4): PASSED cleanly, both
+verification runs.** `scripts/extend_checkpoint_observation_dims.py`
+(reused verbatim, no logic change) extended `model_5096.pt`'s 43-dim
+first-layer weights to 44 dims — exactly `0.0` max abs diff for both actor
+and critic branches, confirmed once locally (CPU-only, no GPU) and a
+second time independently on the actual GCP training host immediately
+before launching training, matching this experiment's own established
+double-verification protocol. As documented in that script's own updated
+docstring, this gate proves the surgery is mechanically correct (old 43
+columns copied unchanged, new column appended at the right position) — it
+does NOT prove t=0 behavioral equivalence to D2, since `distractor_3` is
+real/active from iteration 0 (unlike Stage SO's genuinely-inert
+extension); the behavioral question is answered only by the trained/
+evaluated result below.
+
+**Primary falsification check (Task 5), reported per shape, not
+averaged:**
+
+| shape | envs_with_sustained_lift | falsification bar (>=6/8) | max_height_gain | max_consecutive_lifted_steps (of 250) | verdict |
+|-------|---------------------------|----------------------------|------------------|-----------------------------------------|---------|
+| d12   | **8/8**                   | PASS                       | 321.6-469.4mm    | 220-223                                  | **PASS — NOT falsified** |
+| d20   | **8/8**                   | PASS                       | 304.0-488.1mm    | 219-222                                  | **PASS — NOT falsified** |
+
+**Before/after vs. D2's own 8/8-both-shapes baseline (2 active
+distractors): no degradation at one more simultaneous distractor** — E1
+matches D2's own 8/8/8/8 exactly, not just clearing the 6/8 (75%) floor.
+Both eval videos were downloaded and inspected frame-by-frame (`ffmpeg`-
+extracted stills at 2fps, full 10s clip, both shapes, not just the JSON
+summary) specifically checking for a "grasped the wrong die" episode — the
+target is grasped and lifted within ~1s in every inspected case, and all 3
+distractors remain visibly undisturbed at their table positions through
+every inspected frame of both episodes. No such incident was found for
+either shape.
+
+**Training:** resumed from `model_5096_44dim.pt` at iteration 5096
+(confirmed directly from `train_franka.py`'s own printed resume message,
+not assumed from the filename), ran 1000 more iterations to 6096. Reward
+curve was at/above D2's own converged plateau within the first ~300
+iterations of the resume and climbed gently and without divergence the
+rest of the way; `Episode_Termination/object_dropping` stayed 0.1-0.6%
+throughout, no instability.
+
+**Execution:** GCP cloud (desktop was BUSY — a concurrent AR4-transfer
+workstream was actively training on it at dispatch time). Two genuine
+SPOT preemptions during the task (confirmed via `gcloud compute operations
+list`, not stockout/manual stops) — one mid-install (recovered by a plain
+re-run of the idempotent install script), one right after the checkpoint
+was already safely saved to disk (nothing lost); the second preemption's
+restart hit real zone stockout, resolved by switching the stopped instance
+from SPOT to on-demand in place. Full teardown verified:
+`scripts/check_cloud_state.sh` clean (zero instances/disks/snapshots), no
+local Isaac Sim process, flock lock free.
+
+**Cost:** ≈$0.59 of the plan's $2 cap for Task 5 (the only GPU-spend
+task) — well under, no controller notification needed.
+
+**Checkpoint:**
+`gs://rl-manipulation-hks-runs/target-selection-clutter/joint-die-target-selection-e1/seed42/2026-07-21_22-30-33/model_6095.pt`.
+
+**Bottom line: Stage E1 PASSES for both shapes — the count-curriculum +
+fixed-size zero-padded `distractor_distance_summary` observation mechanism
+continues to hold at K=3, one more distractor than previously validated at
+D2's K=2.** Per the plan's own explicit scope, this result closes out this
+plan only: **E2 (3→4 distractors) and S1 (folding in d8/d10 back into the
+distractor/target population) remain future, separately-gated specs and
+do NOT auto-start from this plan's completion.** See
+`kb/wiki/experiments/target-selection-clutter.md` for the full
+cross-referenced write-up.

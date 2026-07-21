@@ -170,21 +170,28 @@ see the coverage boundary note below.)*
   a working unified 2-shape policy, checkpointed. ≈$5.87 of the $15 cloud
   cap spent. Distractors/target-selection follow-on: see
   [[target-selection-clutter]].
-- [[target-selection-clutter]] (2026-07-19, COMPLETE — hypothesis PASSES)
-  — 3-die clutter curriculum (SO: 0 active distractors -> D1: 1 -> D2: 2)
-  built on the above's finished single-object checkpoint, testing whether
-  curriculum + a new fixed-size zero-padded distractor-distance
-  observation term (DexSinGrasp's `d_t^S`) preserves discovery under
-  clutter with the reward function unchanged. Stage SO's original
-  from-scratch attempt got a confounded 0/8 both shapes (indistinguishable
-  from this project's own pre-existing cold-start difficulty, not a real
-  defect); a lossless partial-weight warm start from the single-object
-  checkpoint resolved the confound and passed cleanly (d12 8/8, d20 7/8).
-  Stage D1 (1 active distractor) then Stage D2 (2 active distractors, the
-  primary falsification check) both passed cleanly — **d12 8/8, d20 8/8
-  at Stage D2**, comfortably above the pre-registered 6/8 bar, no
-  wrong-die grasp observed in any inspected video frame. ≈$1.35 of the
-  $5 cloud-spend cap for Tasks 4-6.
+- [[target-selection-clutter]] (2026-07-19 -> 2026-07-21, COMPLETE through
+  Stage E1 — hypothesis PASSES at every stage tested) — 3-die clutter
+  curriculum (SO: 0 active distractors -> D1: 1 -> D2: 2) built on the
+  above's finished single-object checkpoint, testing whether curriculum +
+  a new fixed-size zero-padded distractor-distance observation term
+  (DexSinGrasp's `d_t^S`) preserves discovery under clutter with the
+  reward function unchanged. Stage SO's original from-scratch attempt got
+  a confounded 0/8 both shapes (indistinguishable from this project's own
+  pre-existing cold-start difficulty, not a real defect); a lossless
+  partial-weight warm start from the single-object checkpoint resolved the
+  confound and passed cleanly (d12 8/8, d20 7/8). Stage D1 (1 active
+  distractor) then Stage D2 (2 active distractors, the primary
+  falsification check) both passed cleanly — **d12 8/8, d20 8/8 at Stage
+  D2**, comfortably above the pre-registered 6/8 bar, no wrong-die grasp
+  observed in any inspected video frame. ≈$1.35 of the $5 cloud-spend cap
+  for Tasks 4-6. **Stage E1 (2026-07-21, 2->3 distractors, d12/d20 only)**
+  extended D2's own checkpoint one more distractor via an additive K=3
+  observation sibling + 2×2-grid scene topology + checkpoint warm-start —
+  **PASSED again, d12 8/8, d20 8/8, an exact match to D2's own baseline
+  with no observed wrong-die grasp**, ≈$0.59 of E1's own $2 cap. E2
+  (3->4 distractors) and S1 (folding d8/d10 back in) remain future,
+  separately-gated specs, not auto-started by E1's pass.
 - [[d8-d10-demo-warmstart]] (2026-07-19 -> 2026-07-20, H1 COMPLETE —
   FALSIFIED both shapes) — tests whether BC-pretraining from one real
   scripted-grasp demonstration per shape, warm-starting an otherwise-

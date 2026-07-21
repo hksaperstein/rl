@@ -225,7 +225,10 @@ from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tasks.franka.agents.rsl_rl_ppo_cfg import FrankaLiftPPORunnerCfg  # noqa: E402
+from tasks.franka.agents.rsl_rl_ppo_cfg import (  # noqa: E402
+    FrankaLiftPPORunnerCfg,
+    FrankaLiftRelativeJointPPORunnerCfg,
+)
 from tasks.franka.lift_env_cfg import FrankaLiftEnvCfg  # noqa: E402
 
 LOG_ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs", "train_franka")
@@ -325,7 +328,15 @@ def main() -> None:
     env_cfg.scene.num_envs = args_cli.num_envs
     env_cfg.sim.device = args_cli.device
 
-    agent_cfg = FrankaLiftPPORunnerCfg()
+    # FrankaLiftRelativeJointPPORunnerCfg (2026-07-21, d8-relative-joint-action
+    # plan Task 3 real-run divergence fix - see its own docstring in
+    # tasks/franka/agents/rsl_rl_ppo_cfg.py for the full empirical evidence
+    # and mechanism) is scoped to exactly this one variant; every other
+    # variant keeps the shared FrankaLiftPPORunnerCfg default unmodified.
+    if args_cli.variant == "joint-die-d8-big-relative-antipodal":
+        agent_cfg = FrankaLiftRelativeJointPPORunnerCfg()
+    else:
+        agent_cfg = FrankaLiftPPORunnerCfg()
     agent_cfg.device = args_cli.device
     if args_cli.max_iterations is not None:
         agent_cfg.max_iterations = args_cli.max_iterations

@@ -111,7 +111,10 @@ from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper  # noqa: E402
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # noqa: E402
 
 from tasks.franka import mdp  # noqa: E402
-from tasks.franka.agents.rsl_rl_ppo_cfg import FrankaLiftPPORunnerCfg  # noqa: E402
+from tasks.franka.agents.rsl_rl_ppo_cfg import (  # noqa: E402
+    FrankaLiftPPORunnerCfg,
+    FrankaLiftRelativeJointPPORunnerCfg,
+)
 from tasks.franka.antipodal_grasp_reward import antipodal_grasp_bonus_raw  # noqa: E402
 from tasks.franka.dice_lift_joint_env_cfg import (  # noqa: E402
     FrankaDieLiftD8BigTaskspaceAntipodalEnvCfg_PLAY,
@@ -171,7 +174,14 @@ def main() -> None:
     env_cfg.scene.num_envs = args_cli.num_envs
     env_cfg.sim.device = args_cli.device
 
-    agent_cfg = FrankaLiftPPORunnerCfg()
+    # Matches scripts/train_franka.py's own variant-scoped runner-cfg choice
+    # (2026-07-21 divergence fix, tasks/franka/agents/rsl_rl_ppo_cfg.py's
+    # FrankaLiftRelativeJointPPORunnerCfg docstring) - eval/diagnostic rollouts
+    # must use the same clip_actions the checkpoint was actually trained under.
+    if args_cli.variant == "condition-relative":
+        agent_cfg = FrankaLiftRelativeJointPPORunnerCfg()
+    else:
+        agent_cfg = FrankaLiftPPORunnerCfg()
     agent_cfg.device = args_cli.device
 
     env = ManagerBasedRLEnv(cfg=env_cfg)

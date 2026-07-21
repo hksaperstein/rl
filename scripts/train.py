@@ -24,6 +24,23 @@ parser = argparse.ArgumentParser(description="Train the AR4 pick-and-place polic
 parser.add_argument("--num_envs", type=int, default=4096, help="Number of parallel environments.")
 parser.add_argument("--max_iterations", type=int, default=None, help="Override the agent config's max_iterations.")
 parser.add_argument(
+    "--checkpoint",
+    type=str,
+    default=None,
+    help=(
+        "Path to an rsl_rl checkpoint (.pt) to resume from - restores model + optimizer state and the "
+        "checkpoint's own recorded iteration count via rsl_rl.OnPolicyRunner.load(), so training continues "
+        "instead of restarting from scratch (e.g. after a cloud SPOT preemption - see "
+        "docs/cloud/dispatch-checklist.md's 'Known infra gaps'). --max_iterations is the ABSOLUTE target "
+        "iteration count when resuming (e.g. resuming a checkpoint saved at iteration 150 with "
+        "--max_iterations 1500 runs iterations 150->1500, not 150->1650 - OnPolicyRunner.learn()'s own "
+        "num_learning_iterations argument is iterations-from-here, not an absolute target, so this script "
+        "converts between the two, mirroring scripts/train_franka.py's existing --checkpoint pattern exactly). "
+        "Writes to a NEW timestamped log_dir regardless (the checkpoint's weights/optimizer/iteration are "
+        "what carry over - its previous TensorBoard event file is not appended to)."
+    ),
+)
+parser.add_argument(
     "--overrides_file",
     type=str,
     default=None,
@@ -416,7 +433,18 @@ def main() -> None:
     dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
     dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
 
-    runner.learn(num_learning_iterations=agent_cfg.max_iterations, init_at_random_ep_len=True)
+    if args_cli.checkpoint is not None:
+        runner.load(args_cli.checkpoint)
+        resumed_at = runner.current_learning_iteration
+        num_learning_iterations = max(agent_cfg.max_iterations - resumed_at, 0)
+        print(
+            f"Resumed from {args_cli.checkpoint} at iteration {resumed_at}; running "
+            f"{num_learning_iterations} more iterations to reach {agent_cfg.max_iterations}."
+        )
+    else:
+        num_learning_iterations = agent_cfg.max_iterations
+
+    runner.learn(num_learning_iterations=num_learning_iterations, init_at_random_ep_len=True)
 
     env.close()
     print(f"Training complete. Checkpoints and logs written to: {log_dir}")

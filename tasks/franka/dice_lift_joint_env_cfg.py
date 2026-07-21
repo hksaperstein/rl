@@ -1161,6 +1161,129 @@ class FrankaDieLiftD8BigTaskspaceAntipodalEnvCfg_PLAY(FrankaDieLiftD8BigTaskspac
         self.observations.policy.enable_corruption = False
 
 
+@configclass
+class FrankaDieLiftJointD8BigRelativeAntipodalEnvCfg(FrankaDieLiftJointD8BigAntipodalEnvCfg):
+    """H_relative (Task 1, docs/superpowers/plans/2026-07-20-d8-relative-
+    joint-action-implementation.md; spec: docs/superpowers/specs/2026-07-20-
+    d8-relative-joint-action-design.md): IDENTICAL scene/object/rewards/
+    observations/events/terminations/PPO recipe to Condition A
+    (`FrankaDieLiftJointD8BigAntipodalEnvCfg` - the d8 48mm-parity
+    antipodal-reward env, the already-closed H_joint null this experiment
+    targets a fix for) - the ONLY change is the arm action term, from
+    Condition A's inherited ABSOLUTE `JointPositionActionCfg` to
+    RELATIVE/delta `RelativeJointPositionActionCfg`. Stays genuinely
+    joint-space (unlike `FrankaDieLiftD8BigTaskspaceAntipodalEnvCfg` /
+    Condition B) - class name keeps "Joint", only "Relative" distinguishes
+    it, matching the spec's own naming logic.
+
+    Exact mechanism contrast (design spec, confirmed by direct Isaac Lab
+    v2.3.1 source read of `isaaclab/envs/mdp/actions/{actions_cfg,
+    joint_actions}.py`):
+    - Condition A's absolute `JointPositionActionCfg`: `applied_target =
+      raw_action * scale + default_joint_pos` - a FIXED offset computed
+      once at action-term construction, so the actual joint motion a given
+      raw_action produces depends on how far the arm's current
+      configuration already is from that fixed target (a
+      configuration-dependent mapping - the root-cause doc's own diagnosed
+      mechanism for why joint-space's early, transient approach success at
+      iteration ~100 gets abandoned by iteration 1499, `kb/wiki/
+      experiments/d8-antipodal-grasp-quality.md`'s "Root cause
+      investigation" Finding 3).
+    - This class's `RelativeJointPositionActionCfg`: `applied_target =
+      raw_action * scale + current_joint_pos`, with `current_joint_pos`
+      read fresh via `self._asset.data.joint_pos` every control step
+      (`apply_actions()`) - a given raw_action always produces
+      approximately the same joint delta, independent of the arm's current
+      configuration (the "locally consistent" property H_relative
+      predicts will let the early approach-discovery persist instead of
+      collapsing).
+
+    `super().__post_init__()` runs Condition A's full inherited chain
+    first (die-swap/mass/scale, `AntipodalGraspRewardsCfg`,
+    `FrankaDieLiftContactSceneCfg`, and Condition A's own absolute
+    `JointPositionActionCfg` assignment via `FrankaDieLiftJointEnvCfg.
+    __post_init__` several frames up the MRO) - only AFTER that full chain
+    completes does this class's own post-`super()` line re-overwrite
+    `self.actions.arm_action` to the relative/delta config, so it is the
+    LAST write and wins - the exact same "call super, then re-assert the
+    one changed field last" pattern `FrankaDieLiftD8BigTaskspaceAntipodalEnvCfg`
+    already established for Condition B.
+
+    `scale=0.1`/`use_zero_offset=True` are this plan's own starting values
+    (Kuka Allegro dexsuite precedent, `isaaclab_tasks/manager_based/
+    manipulation/dexsuite/config/kuka_allegro/dexsuite_kuka_allegro_env_cfg.py:20`)
+    - not load-bearing for H_relative's own falsification bar, a Tier-2
+    hillclimb candidate later if the mechanism validates but needs
+    retuning (Task 2's own smoke test is the designated fallback-to-0.0625
+    checkpoint if 0.1 shows visibly excessive jitter).
+
+    **Task 1's required empirical action-manager verification (not
+    asserted from the class hierarchy alone, matching Condition B's own
+    docstring precedent for this exact kind of MRO/field-override claim) -
+    a throwaway diagnostic (`_diag_relative_action_manager_check.py`, not
+    committed - a one-off check, per the plan's own "doesn't need to be a
+    permanent file" allowance) built a real
+    `FrankaDieLiftJointD8BigRelativeAntipodalEnvCfg_PLAY` env (`num_envs=8`)
+    on a live GCP L4 cloud instance (`rl-d8-relative-task1`,
+    `us-central1-a`, desktop unreachable at dispatch time, 2026-07-20/21)
+    and read the live `ActionManager` directly (not the unbuilt cfg
+    object). Exact observed output:**
+    - `type(env.action_manager.get_term("arm_action")).__name__` ==
+      `"RelativeJointPositionAction"` - CONFIRMED (not
+      `JointPositionAction`).
+    - `env.action_manager.total_action_dim` == `8` - CONFIRMED (7
+      relative-joint + 1 gripper, byte-identical to Condition A's own
+      absolute-joint action space).
+    - `env.action_manager.active_terms` == `['arm_action', 'gripper_action']`
+      - CONFIRMED; `env.action_manager.action_term_dim` == `[7, 1]` -
+      CONFIRMED `arm_action` at dim 7. The manager's own printed table
+      (`print(env.action_manager)`) independently shows the same
+      `arm_action: 7 / gripper_action: 1` breakdown under an "Active
+      Action Terms (shape: 8)" header.
+    - Optional secondary spot-check (not required to close this task, per
+      the plan's own judgment call): a nonzero constant `arm_action`
+      (`0.3` on all 7 arm dims) was applied for one control step from two
+      DIFFERENT starting joint configurations (env 0 pre-warmed 5 steps
+      with a nonzero action to move it away from the reset pose; env 1
+      left at its reset pose). Observed per-joint deltas were
+      `[0.00644, 0.00489, 0.00600, 0.00508, 0.00262, 0.00306, 0.00293]`
+      (warmed-up env) vs. `[0.00148, 0.00210, 0.00161, 0.00200, 0.00306,
+      0.00285, 0.00292]` (reset-pose env) - same small order of
+      magnitude at every joint (max pairwise diff 0.00496 rad), NOT the
+      large across-config divergence the absolute-target mechanism would
+      produce, but also not identical to float precision. This is
+      expected, not a discrepancy: `RelativeJointPositionAction` only
+      guarantees the commanded PD *target* offset is exactly
+      config-independent (`target - current_joint_pos == raw*scale`,
+      exact by construction); the actual joint travel achieved within one
+      control step is still mediated by each joint's own PD servo
+      dynamics (residual velocity/gravity/inertia terms), which do vary
+      slightly with configuration - a strictly smaller and different-in-
+      kind effect than the absolute-target mechanism's own dependence on
+      distance-to-a-fixed-target. The four required assertions above are
+      the actual close-out criteria for this task; this secondary check is
+      corroborating context, not a pass/fail gate."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.actions.arm_action = mdp.RelativeJointPositionActionCfg(
+            asset_name="robot", joint_names=["panda_joint.*"], scale=0.1, use_zero_offset=True
+        )
+
+
+@configclass
+class FrankaDieLiftJointD8BigRelativeAntipodalEnvCfg_PLAY(FrankaDieLiftJointD8BigRelativeAntipodalEnvCfg):
+    """Smaller, non-corrupted-observation variant for eval/play (same
+    num_envs=50/env_spacing=2.5/enable_corruption=False pattern as every
+    other _PLAY class in this file)."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.scene.num_envs = 50
+        self.scene.env_spacing = 2.5
+        self.observations.policy.enable_corruption = False
+
+
 # ---------------------------------------------------------------------------
 # Task 1 (docs/superpowers/plans/2026-07-19-target-selection-clutter-
 # implementation.md): 3-die target-selection clutter scene topology + SO/D1/D2

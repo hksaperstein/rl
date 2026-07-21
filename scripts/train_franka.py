@@ -84,6 +84,7 @@ parser.add_argument(
         "joint-die-d8-big-exploration-bonus",
         "joint-die-d8-big-antipodal",
         "die-d8-big-taskspace-antipodal",
+        "joint-die-d8-big-relative-antipodal",
         "joint-die-d10-big",
         "joint-die-d12-big",
         "joint-die-d12-d20-mixed",
@@ -156,6 +157,16 @@ parser.add_argument(
         "transfers onto Franka/d8 (FrankaDieLiftD8BigTaskspaceAntipodalEnvCfg, same plan/spec as "
         "joint-die-d8-big-antipodal above - NOT gated on that condition's own result, both run to completion "
         "unconditionally). "
+        "joint-die-d8-big-relative-antipodal: H_relative (Task 1) - IDENTICAL scene/object/rewards/observations/"
+        "events/terminations/PPO recipe to joint-die-d8-big-antipodal (same new ContactSensorCfg wiring + "
+        "antipodal_grasp_quality reward term) but under RELATIVE/delta joint-space arm control "
+        "(RelativeJointPositionActionCfg, scale=0.1, use_zero_offset=True) instead of Condition A's inherited "
+        "ABSOLUTE JointPositionActionCfg - stays genuinely joint-space, isolating delta-vs-absolute action "
+        "semantics from the joint-space-vs-task-space axis joint-die-d8-big-antipodal/die-d8-big-taskspace-"
+        "antipodal already tested. Tests whether this fixes the root-cause doc's own diagnosed "
+        "configuration-dependent absolute-target collapse mechanism (FrankaDieLiftJointD8BigRelativeAntipodalEnvCfg, "
+        "docs/superpowers/plans/2026-07-20-d8-relative-joint-action-implementation.md; spec: "
+        "docs/superpowers/specs/2026-07-20-d8-relative-joint-action-design.md). "
         "joint-die-d12-d20-mixed: Task 6 RL fine-tune env - the same ONE-env, deterministic-round-robin "
         "d12/d20 mixed-population env Task 5's distillation training ran against "
         "(FrankaDieLiftJointD12D20MixedEnvCfg, tasks/franka/dice_lift_joint_env_cfg.py), meant to be "
@@ -281,6 +292,10 @@ def main() -> None:
         from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftD8BigTaskspaceAntipodalEnvCfg
 
         env_cfg = FrankaDieLiftD8BigTaskspaceAntipodalEnvCfg()
+    elif args_cli.variant == "joint-die-d8-big-relative-antipodal":
+        from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftJointD8BigRelativeAntipodalEnvCfg
+
+        env_cfg = FrankaDieLiftJointD8BigRelativeAntipodalEnvCfg()
     elif args_cli.variant == "joint-die-d10-big":
         from tasks.franka.dice_lift_joint_env_cfg import FrankaDieLiftJointD10BigEnvCfg
 
@@ -337,6 +352,7 @@ def main() -> None:
         "joint-die-d8-big-exploration-bonus": "_jointdied8bigexplorationbonus",
         "joint-die-d8-big-antipodal": "_jointdied8bigantipodal",
         "die-d8-big-taskspace-antipodal": "_died8bigtaskspaceantipodal",
+        "joint-die-d8-big-relative-antipodal": "_jointdied8bigrelativeantipodal",
         "joint-die-d10-big": "_jointdied10big",
         "joint-die-d12-big": "_jointdied12big",
         "joint-die-d12-d20-mixed": "_jointdied12d20mixed",

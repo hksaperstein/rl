@@ -42,49 +42,60 @@ article summarizes the verdicts and why they matter for the North Star's
    particular miss, but a real asset-rigor gap worth correcting on
    principle.
 
-2. **Jaw-mimic constraint — confirmed, never enforced, root cause of the
-   *symptom* found; root cause of the underlying *physical* asymmetry
-   still open.** Three architecturally distinct fixes were tried across
-   Experiments 17-22 and all failed or were reverted: the native URDF
-   `<mimic>` tag (confirmed unenforced by Isaac Sim's USD import despite
-   `parse_mimic=True`), a PhysX-level `PhysxMimicJointAPI` constraint
-   (Experiment 19 — both tested configs made jaw divergence measurably
-   *worse* than the uncoupled baseline, reverted), and a software
-   leader-follower action term (Experiment 22 — introduced a new
-   "reactive lag" failure mode, then a corrected zero-lag version was found
-   to be a structural no-op and retired before ever training, per
-   `tasks/ar4/pickplace_graspgoal_env_cfg.py:100-117`'s own docstring).
-   **The genuinely revealing finding**: AR4's default RL gripper action
-   (`BinaryJointPositionActionCfg`, identical commanded target sent to
-   both jaw joints) is *structurally identical* to Franka's own validated
-   gripper action (`tasks/franka/lift_env_cfg.py:173-177`,
-   `open_command_expr={"panda_finger_.*": 0.04}`) — neither platform uses
-   a real mimic joint at the RL-action level. So the RL action-space
-   design was never the point of difference; AR4's asymmetric jaw
-   behavior happens "at the physics/actuator level under contact," per
-   `pickplace_graspgoal_env_cfg.py:108-109`'s own diagnosis — a real,
-   asset-specific defect distinct from Franka's asset, but the *specific*
-   physical cause (contact-geometry asymmetry between the two jaw links?
-   friction mismatch? something else?) was never isolated in three
-   attempts. This is the strongest single piece of evidence supporting the
-   pivot's "AR4 asset defect, not RL/reward-design difficulty" framing —
-   but the defect itself remains only located, not explained.
+2. **Jaw-mimic constraint — UPDATE 2026-07-21: a real `PhysxMimicJointAPI`
+   does exist on the currently-built asset; the actual bug is a joint-limit
+   mismatch, not absence of the constraint.** Direct USD inspection
+   (`docs/superpowers/specs/research/2026-07-21-ar4-usd-asset-debugging.md`,
+   built the asset fresh on today's pinned Isaac Lab v2.3.1/Isaac Sim 5.1.0
+   stack and opened it via `pxr`/`PhysxSchema`) found `gripper_jaw2_joint`
+   genuinely carries a `PhysxMimicJointAPI:rotX` instance —
+   `referenceJoint=gripper_jaw1_joint`, `gearing=-1.0`, `offset=0.0` — a
+   real, correctly-targeted spring-based constraint. This directly
+   contradicts the 2026-07-09-era belief (restated as "confirmed" in the
+   2026-07-20 root-cause doc below) that the mimic constraint was never
+   enforced by the importer; whether that was an older-version artifact or
+   simply never checked at the prim level is not resolved. **The actual
+   defect**: jaw2's own hard `physics:lowerLimit`/`upperLimit`, as
+   imported, are `[-0.0028, 0.0168]` — but the mimic formula
+   (`q2 = -q1`) applied to jaw1's real range `[0, 0.014]` maps to
+   `[-0.014, 0]`, which does not fit inside jaw2's own limits. PhysX's hard
+   limit clamp overrides the spring constraint, so jaw2 can only track
+   jaw1 for the first ~20% of its stroke (`q1` up to `0.0028m`) before
+   getting stuck at its own limit — a concrete, direct mechanism for the
+   asymmetry Experiments 17/19/22 each independently hit but never
+   root-caused this specifically. Fixed in `scripts/build_asset.py`
+   (`_fix_gripper_jaw2_mimic_limits`, re-derives jaw2's limits from jaw1's
+   own limits under the already-authored gearing/offset) and statically
+   re-verified in the rebuilt USD. A live dynamic test (a bare
+   `isaacsim.core.api.World` scene, not the full IsaacLab task pipeline)
+   showed jaw1 moving normally but jaw2 reading back as exactly `0.0`
+   throughout — an unresolved discrepancy (test-rig readback issue, or a
+   real remaining engagement problem outside this specific test scene) —
+   flagged as the concrete next step, not swept under the static fix.
+   **The originally-revealing action-space finding still stands**: AR4's
+   default RL gripper action (`BinaryJointPositionActionCfg`, identical
+   commanded target to both jaws) remains structurally identical to
+   Franka's own validated gripper action — the RL action-space design was
+   never the point of difference between the two platforms.
 3. **Jaw collision geometry ("unverified convex-hull approximation") —
-   still inconclusive, on both platforms.** The claim traces to exactly
-   one place in this repo's history (the 2026-07-11 joint-space-lift
-   research doc, itself labeled "unverified"), and was never confirmed by
-   directly inspecting the built AR4 USD asset's `MeshCollisionAPI`
-   approximation attribute — `scripts/build_asset.py` sets no explicit
-   collision-approximation for the AR4 gripper import at all (only the
-   unrelated wedge die shape gets an explicit `convexHull`). The same fact
-   is equally undocumented for Isaac Lab's own shipped Franka asset, and
-   not inspectable from the Pi (`/home/saps/IsaacLab` unreachable from this
-   machine). Tellingly, this project's own d4 grasp work on Franka doesn't
-   trust the stock finger collision mesh either — it built a
-   purpose-authored, geometry-known notch fixture
-   (`tasks/franka/notch_fixture.py`) rather than reading contact force off
-   the stock finger mesh directly. This item was carried into the pivot
-   rationale as if established; it was not, on either platform.
+   UPDATE 2026-07-21: confirmed real on the AR4 side (Franka's own shipped
+   asset still unexamined).** Direct instance-proxy stage traversal
+   (`docs/superpowers/specs/research/2026-07-21-ar4-usd-asset-debugging.md`)
+   found `UsdPhysics.MeshCollisionAPI.approximation = "convexHull"` really
+   is authored on `gripper_jaw1_link`, `gripper_jaw2_link`, and
+   `gripper_base_link`'s collision meshes — resolving the "unverified"
+   status this item carried since the pivot. What remains open: the
+   authored attribute only tells PhysX to compute a hull from the
+   referenced mesh at simulation start — the hull's own vertex/face count
+   isn't stored in the USD, so whether it meaningfully distorts the jaw's
+   real (possibly non-convex) fingertip surface still needs an offline
+   convex-hull computation against the raw mesh points (e.g.
+   `scipy.spatial.ConvexHull`) as a follow-up — not yet done. Franka's own
+   shipped asset is still unexamined (not inspectable from the Pi,
+   `/home/saps/IsaacLab` unreachable from this machine) — this project's
+   own d4 grasp work on Franka still doesn't trust the stock finger
+   collision mesh either, building a purpose-authored notch fixture
+   instead of reading contact force off it directly.
 
 ## Does this support the pivot decision?
 
@@ -111,14 +122,21 @@ not cleanly resolved in favor of the former.
 
 ## Open follow-up
 
-Resolving Hypothesis 3 (and the still-open physical cause beneath
-Hypothesis 2) needs a live Isaac Sim session on both platforms: direct USD
-`MeshCollisionAPI` inspection of the built gripper/finger collision shapes,
-plus a live instrumented grasp comparing measured contact-force directions
-against true geometric surface normals. Not attempted in this pass
-(read-only, no GPU used) — a well-defined next step if this project ever
-returns to the AR4 asset, or wants to close the loop on whether Franka's
-own finger collision mesh has the same latent risk.
+As of 2026-07-21: the jaw-mimic joint-limit bug is fixed and statically
+verified (see UPDATE above), but full live dynamic confirmation (actually
+watching jaw2 track jaw1 through a real simulated grasp) is still open —
+needs testing inside the actual IsaacLab task env cfg pipeline rather than
+an isolated bare-scene test rig. The convex-hull distortion question is
+now narrowed to a concrete, cheap, GPU-free follow-up (compute the real
+convex hull of the jaw's own mesh points and compare face counts against
+the original mesh) rather than a fully open question. Link_5/Link_6's
+missing collision (a fourth defect found during the concurrent
+`ar4-franka-fixes-transfer` task's build smoke test the same day) is now
+also fixed with a substitute box collider — see
+`docs/superpowers/specs/research/2026-07-21-ar4-usd-asset-debugging.md`
+for the full detail on all of the above. Comparing Franka's own shipped
+asset's collision approximation remains unexamined either way (not
+inspectable from the Pi).
 
 ## Related concepts
 
@@ -142,4 +160,6 @@ broader action-space history.
 ## Sources
 
 `docs/superpowers/specs/research/2026-07-20-ar4-vs-franka-root-cause-comparison.md`
-(full citations), `CLAUDE.md` ("Platform pivot" section).
+(full citations for the original three hypotheses), `docs/superpowers/specs/research/2026-07-21-ar4-usd-asset-debugging.md`
+(direct USD-level inspection/fixes for Hypotheses 2 and 3, plus the
+Link_5/Link_6 collision fix), `CLAUDE.md` ("Platform pivot" section).

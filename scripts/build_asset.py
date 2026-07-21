@@ -271,6 +271,153 @@ def _apply_visual_colors(base_usd_path: str, color_map: dict) -> None:
         print(f"[colors] WARNING: {len(unmatched)} visual mesh name(s) had no URDF color match: {sorted(unmatched)}")
 
 
+def _fix_gripper_jaw2_mimic_limits(output_usd: str) -> None:
+    """Correct gripper_jaw2_joint's own hard physics limits so they are
+    mathematically consistent with its authored PhysxMimicJointAPI.
+
+    Direct USD inspection (docs/superpowers/specs/research/
+    2026-07-21-ar4-usd-asset-debugging.md) found that ``parse_mimic=True``
+    on the URDF import DOES author a real ``PhysxMimicJointAPI`` on
+    ``gripper_jaw2_joint`` (referenceJoint=gripper_jaw1_joint, gearing=-1.0,
+    offset=0.0) - contrary to this project's earlier (2026-07-09 era)
+    belief that the mimic constraint was never enforced by the importer.
+    However, the SAME import also authors jaw2's own hard
+    ``physics:lowerLimit``/``physics:upperLimit`` as ``[-0.0028, 0.0168]``,
+    which does not contain the mimic formula's own mapped range of jaw1's
+    real limits (``q2 = gearing*q1 + offset`` over jaw1's ``[0, 0.014]`` ->
+    ``[-0.014, 0]``). PhysX's hard joint-limit clamp takes priority over the
+    (spring-based, dampingRatio/naturalFrequency-driven) mimic constraint,
+    so jaw2 hits its own limit at just ~20% of jaw1's real travel
+    (q1=0.0028m) and cannot track jaw1 for the remaining ~80% of the
+    gripper's closing stroke - a concrete, direct mechanism for this
+    project's long-standing, never-root-caused jaw asymmetry defect
+    (three prior fix attempts - URDF-native mimic reliance, a manually-
+    authored PhysX mimic API, software leader-follower mirroring - never
+    diagnosed this specific limit/gearing mismatch).
+
+    Fix: re-derive jaw2's limits directly from jaw1's own limits under the
+    ALREADY-authored gearing/offset (not a guessed constant), so the two
+    joints' allowed ranges are self-consistent for the mimic constraint's
+    entire operating range.
+    """
+    from pxr import PhysxSchema, Usd
+
+    stage = Usd.Stage.Open(output_usd)
+    jaw1 = stage.GetPrimAtPath("/mk5/root_joint/joints/gripper_jaw1_joint")
+    jaw2 = stage.GetPrimAtPath("/mk5/root_joint/joints/gripper_jaw2_joint")
+    if not jaw1.IsValid() or not jaw2.IsValid():
+        print("[mimic-fix] WARNING: gripper jaw joint prims not found at the expected paths - skipping fix")
+        return
+
+    lower1 = jaw1.GetAttribute("physics:lowerLimit").Get()
+    upper1 = jaw1.GetAttribute("physics:upperLimit").Get()
+    if lower1 is None or upper1 is None:
+        print("[mimic-fix] WARNING: gripper_jaw1_joint limits unreadable - skipping fix")
+        return
+
+    mimic = PhysxSchema.PhysxMimicJointAPI.Get(jaw2, "rotX")
+    if not mimic:
+        print(
+            "[mimic-fix] WARNING: no PhysxMimicJointAPI:rotX found on gripper_jaw2_joint - skipping fix "
+            "(this Isaac Lab/Isaac Sim version's URDF importer may not be producing a mimic constraint "
+            "from parse_mimic=True; jaw symmetry would then need a different enforcement mechanism "
+            "entirely, e.g. tasks/ar4/actions.py's MirroredGripperAction)"
+        )
+        return
+    gearing = mimic.GetGearingAttr().Get()
+    offset = mimic.GetOffsetAttr().Get()
+
+    mapped_a = gearing * lower1 + offset
+    mapped_b = gearing * upper1 + offset
+    new_lower, new_upper = min(mapped_a, mapped_b), max(mapped_a, mapped_b)
+
+    old_lower = jaw2.GetAttribute("physics:lowerLimit").Get()
+    old_upper = jaw2.GetAttribute("physics:upperLimit").Get()
+    jaw2.GetAttribute("physics:lowerLimit").Set(new_lower)
+    jaw2.GetAttribute("physics:upperLimit").Set(new_upper)
+    stage.GetRootLayer().Save()
+    print(
+        f"[mimic-fix] gripper_jaw2_joint limits corrected: [{old_lower:.4f}, {old_upper:.4f}] -> "
+        f"[{new_lower:.4f}, {new_upper:.4f}] (mimic-consistent with gripper_jaw1_joint's own "
+        f"[{lower1:.4f}, {upper1:.4f}] under gearing={gearing}, offset={offset})"
+    )
+
+
+def _add_substitute_link_collision(output_usd: str, link_name: str) -> None:
+    """Add a simple box collider to a link that has no collision geometry
+    at all in the current upstream mesh checkout.
+
+    ``Link_5_Col.STL``/``Link_6_Col.STL`` genuinely do not exist in the
+    ``annin_ar4_description`` package's meshes directory as of the pinned
+    upstream commit (confirmed by direct USD inspection - both links'
+    ``collisions`` scopes import as empty instanceable prototypes with zero
+    mesh children, not merely an unresolved-reference warning; see
+    docs/superpowers/specs/research/2026-07-21-ar4-usd-asset-debugging.md).
+    This leaves link_5/link_6 (the wrist links immediately upstream of the
+    gripper) with a genuine blind spot in any ground/self-collision safety
+    check. Fix: derive an axis-aligned box from the link's own (correctly
+    resolved) VISUAL sub-meshes' combined bounding box, in the link's local
+    frame, and author it as a plain ``UsdGeom.Cube`` collider (an analytic
+    PhysX shape, no mesh-approximation risk) - computed fresh from whatever
+    visual geometry actually resolved, not a hardcoded guess, so this stays
+    correct if the upstream checkout's meshes ever change.
+    """
+    from pxr import Gf, Usd, UsdGeom, UsdPhysics
+
+    stage = Usd.Stage.Open(output_usd)
+    link_prim = stage.GetPrimAtPath(f"/mk5/root_joint/{link_name}")
+    if not link_prim.IsValid():
+        print(f"[collision-fix] WARNING: {link_name} prim not found - skipping")
+        return
+    visuals_prim = link_prim.GetChild("visuals")
+    if not visuals_prim:
+        print(f"[collision-fix] WARNING: {link_name}/visuals not found - skipping")
+        return
+
+    xf_cache = UsdGeom.XformCache()
+    pts_local = []
+    visuals_path_str = str(visuals_prim.GetPath())
+    for sub in stage.Traverse(Usd.TraverseInstanceProxies()):
+        if str(sub.GetPath()).startswith(visuals_path_str) and sub.IsA(UsdGeom.Mesh):
+            mesh = UsdGeom.Mesh(sub)
+            pts = mesh.GetPointsAttr().Get()
+            if not pts:
+                continue
+            local_to_link = xf_cache.ComputeRelativeTransform(sub, link_prim)[0]
+            for pt in pts:
+                pts_local.append(local_to_link.Transform(pt))
+
+    if not pts_local:
+        print(f"[collision-fix] WARNING: no resolved visual mesh points found under {link_name}/visuals - skipping")
+        return
+
+    xs = [p[0] for p in pts_local]
+    ys = [p[1] for p in pts_local]
+    zs = [p[2] for p in pts_local]
+    lo = Gf.Vec3d(min(xs), min(ys), min(zs))
+    hi = Gf.Vec3d(max(xs), max(ys), max(zs))
+    center = (lo + hi) * 0.5
+    size = hi - lo
+
+    box_path = link_prim.GetPath().AppendChild("substitute_collision_box")
+    cube = UsdGeom.Cube.Define(stage, box_path)
+    cube.CreateSizeAttr(1.0)
+    # "guide" purpose: a collision-only proxy, not meant to be rendered
+    # (this link's own visual meshes already render normally and are
+    # untouched by this fix).
+    cube.CreatePurposeAttr("guide")
+    cube.AddTranslateOp().Set(center)
+    cube.AddScaleOp().Set(Gf.Vec3f(size[0], size[1], size[2]))
+    UsdPhysics.CollisionAPI.Apply(cube.GetPrim())
+
+    stage.GetRootLayer().Save()
+    print(
+        f"[collision-fix] added substitute box collider for {link_name}: "
+        f"center={tuple(center)} size={tuple(size)} (from {len(pts_local)} resolved visual mesh "
+        "points; the source STL collision mesh for this link is genuinely missing from the upstream repo)"
+    )
+
+
 def _locate_base_layer(usd_out_dir: str) -> str:
     """Return the configuration sub-layer that defines the imported geometry
     and materials (``*_base.usd``; falls back to the largest .usd)."""
@@ -341,6 +488,13 @@ def main() -> None:
         color_map = _build_urdf_color_map(urdf_path)
         base_layer = _locate_base_layer(USD_OUT_DIR)
         _apply_visual_colors(base_layer, color_map)
+
+        # Two direct USD-level asset fixes, see docs/superpowers/specs/
+        # research/2026-07-21-ar4-usd-asset-debugging.md for the full
+        # findings each is grounded in.
+        _fix_gripper_jaw2_mimic_limits(output_usd)
+        _add_substitute_link_collision(output_usd, "link_5")
+        _add_substitute_link_collision(output_usd, "link_6")
 
         manifest_path = os.path.join(USD_OUT_DIR, "usd_path.txt")
         with open(manifest_path, "w") as f:

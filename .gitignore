@@ -24,3 +24,10 @@ __pycache__/
 !site/assets/**
 !tasks/franka/assets/
 !tasks/franka/assets/**
+
+# toy_env/ (CPU-only proxy RL environment, see kb/wiki/concepts/toy-kinematic-proxy-env.md):
+# its own dedicated venv and trained-model/run artifacts are local-only, same
+# convention as data//models/ above.
+/toy_env/.venv/
+/toy_env/runs/
+/toy_env/renders/

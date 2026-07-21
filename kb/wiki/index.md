@@ -262,6 +262,13 @@ see the coverage boundary note below.)*
   spatially opposed; the generalized lesson from Experiment 25's
   pre-training dead-zone catch (2026-07-09, also post-dates the rest of
   this first pass).
+- [[toy-kinematic-proxy-env]] — infra, not an RL experiment: a new
+  CPU-only, physics-free `toy_env/` proxy environment (pure-kinematics
+  N-link arm, 3 action modes, Gymnasium-compatible) for fast algorithm/
+  action-space prototyping without GPU/cloud cost, built to test whether the
+  real absolute-joint-vs-task-space training pathology
+  ([[d8-antipodal-grasp-quality]]'s root-cause finding) is reproducible
+  cheaply; explicitly a hypothesis generator, not a substitute for Isaac Sim.
 - [[asset-build-material-import]] — the shared AR4 USD asset rendered as a
   flat white silhouette because this Isaac Sim version's URDF importer
   discards per-visual `<material><color>` values (no ImportConfig flag

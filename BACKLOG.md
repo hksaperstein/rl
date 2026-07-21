@@ -566,3 +566,57 @@ possible when these AR4 questions were first shelved.
   pick-and-place is solved") — not premature exactly, since the user
   raised it directly, but a bigger scope call than the other three
   options, worth a deliberate decision rather than folding in casually.
+
+---
+
+## AR4 gripper mimic-vs-actuator dynamics conflict (2026-07-21, deferred, not fixed)
+
+`ar4-franka-fixes-transfer` plan Task 5 found (and fixed) a real
+command-sign bug: every AR4 env cfg commanded `gripper_jaw2_joint` to the
+identical signed value as `gripper_jaw1_joint`, when jaw2's real
+`PhysxMimicJointAPI` (`gearing=-1.0`) requires the negated value. Fixed at
+the shared source (`tasks/ar4/robot_cfg.py`'s new
+`GRIPPER_OPEN_COMMAND_EXPR`/`GRIPPER_CLOSED_COMMAND_EXPR`), verified
+empirically (fresh reset now shows perfect jaw1/jaw2 mirroring).
+
+**But a live dynamic rollout after the fix (`scripts/_verify_gripper_mirror_fix.py`)
+found the sign fix is NOT sufficient**: jaw2 does not track its own
+(now-correct) commanded target under real physics at all — it gets pinned
+near one of its two hard limits regardless of target (stuck near its open
+extreme through a full CLOSE command; jumps to and sticks at its own
+upper hard limit during an OPEN command, the opposite end from the
+commanded target), while jaw1 tracks its own target normally. Full
+trajectory data and analysis in
+`kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s 2026-07-21
+"later" UPDATE section.
+
+**Candidate mechanism, not confirmed**: the PhysX `MimicJointAPI` spring
+constraint and the independent `ImplicitActuatorCfg` PD actuator on
+`gripper_jaw2_joint` are both trying to drive the same joint
+simultaneously, and something in that interaction (not either mechanism's
+target in isolation) dominates and drives jaw2 into a hard limit.
+
+**Why not fixed now**: candidate fixes (retuning the mimic constraint's
+own damping/naturalFrequency parameters, retuning the gripper actuator's
+stiffness/damping, or dropping the mimic constraint entirely in favor of
+pure independent per-joint actuation with a software-level mirroring
+action) are all real, but each is a genuine architectural change requiring
+its own investigation/verification — well beyond a "fix the sign bug"
+pass, and explicitly deferred by controller decision (2026-07-21) so
+Task 5's actual training runs (Condition A2/B, both proceeding on the
+real, currently-asymmetric dynamics) weren't blocked on it. RL training
+itself doesn't need "correct" gripper tracking — it observes real
+`joint_pos`/`joint_vel` and rewards off real measured contact forces
+regardless of why the joint ended up where it did — so this is a genuine
+root-cause research question, not a training blocker.
+
+**Where to pick this up**: `tasks/ar4/robot_cfg.py`'s `AR4_MK5_CFG`
+(`ImplicitActuatorCfg` for `gripper_jaw[12]_joint`, currently
+`stiffness=1000, damping=50`) and the built USD's own
+`PhysxMimicJointAPI` parameters (inspect via the same `pxr`/`PhysxSchema`
+direct-USD-read pattern `docs/superpowers/specs/research/
+2026-07-21-ar4-usd-asset-debugging.md` already established). Also two
+more, not-yet-fixed instances of the ORIGINAL (pre-this-entry) symmetric-
+command sign bug, found but out of scope for Task 5's fix: `tasks/ar4/
+actions.py`'s `MirroredGripperAction` and `scripts/
+interactive_joint_control.py` (both flagged in the kb doc above).

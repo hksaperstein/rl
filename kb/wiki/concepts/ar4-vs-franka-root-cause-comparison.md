@@ -120,13 +120,121 @@ project's own final AR4 data point was genuinely confounded between an
 asset-defect and a reward-design explanation when the decision was made,
 not cleanly resolved in favor of the former.
 
+## UPDATE 2026-07-21 (later, ar4-franka-fixes-transfer plan, Task 5): a SECOND, independent gripper-mirror bug found and fixed, PLUS live dynamic confirmation now done — and it surfaces a new, more concrete root-cause candidate than either of the above.
+
+**Bug 1 (fixed): every AR4 env cfg commanded gripper_jaw2_joint to the
+IDENTICAL signed value as gripper_jaw1_joint, not jaw2's own mirrored
+(negated) value.** Surfaced as a hard crash the moment this task tried to
+build `Ar4PickPlaceGraspGoalEnvCfg` on the freshly-rebuilt (post-64ab5cc)
+asset: `gripper_jaw2_joint`'s default position (+0.014, from
+`GRIPPER_OPEN_POS` applied identically to both jaws in
+`tasks/ar4/robot_cfg.py`'s `init_state` and in every env cfg's
+`open_command_expr`) fell outside 64ab5cc's own newly-corrected,
+mimic-consistent jaw2 hard limits (`[-0.014, 0.000]`). Given jaw2's
+`PhysxMimicJointAPI` has `gearing=-1.0, offset=0.0` (confirmed by 64ab5cc's
+own direct USD inspection, above), jaw2's physically-correct commanded
+position is always `-1.0 * jaw1's`, not the same signed constant — the
+OLD, pre-64ab5cc jaw2 hard limits (`[-0.0028, 0.0168]`) happened to
+tolerate the wrong `+0.014` without erroring, masking this second,
+independent sign bug for as long as this project's own original
+(also-wrong) jaw2 limits stood. **This means the gripper's commanded
+"open" state has likely been asymmetric since this constant was
+introduced, in every AR4 experiment that used it** — a candidate
+explanation, on its own, for exactly the kind of asymmetric single-jaw
+contact this project's diagnostics have repeatedly found (e.g. Experiment
+21's own diagnostic: jaw1 registered zero contact force across 750 rollout
+steps while jaw2 registered contact intermittently).
+
+Fixed at the shared source (`tasks/ar4/robot_cfg.py`'s new
+`GRIPPER_OPEN_COMMAND_EXPR`/`GRIPPER_CLOSED_COMMAND_EXPR`, mechanically
+propagated to all 15 other AR4 env cfg files that had the same pattern),
+controller-authorized as a cross-experiment fix outside this task's
+original plan scope. Verified empirically, not just asserted: a fresh
+`env.reset()` now shows perfect mirroring —
+`jaw1=+0.01400  jaw2=-0.01400  jaw1+jaw2=+0.00000`.
+
+**Bug 2 (found, NOT fixed — out of this pass's authorized scope, flagged
+for a future pass): the identical symmetric-command bug independently
+exists in `tasks/ar4/actions.py`'s `MirroredGripperAction` (its
+`process_actions` sets
+`self._processed_actions[:, 1] = jaw1_commanded_target` — jaw1's raw
+value, not its negation) and in `scripts/interactive_joint_control.py`
+(`gripper_target_t = torch.tensor([[gripper_target_val,
+gripper_target_val]], ...)` — same value for both sliders' target).**
+Neither is used by `Ar4PickPlaceGraspGoalEnvCfg` or its Condition A2/B
+variants (which use plain `ProximityGatedBinaryJointPositionActionCfg`),
+so out of scope for this fix, but the same bug pattern is confirmed
+present in at least two more places.
+
+**Bigger finding: the sign fix is necessary but NOT sufficient — live
+dynamic behavior remains broken/asymmetric even with the correct target.**
+A direct, real rollout (`scripts/_verify_gripper_mirror_fix.py`, driving
+`robot.set_joint_position_target` + `sim.step` directly and reading real
+joint positions every 10 steps, not a shaped metric) inside the actual
+`Ar4PickPlaceGraspGoalEnvCfg` task env cfg found:
+
+```
+[reset, fixed init_state]   jaw1=+0.01400  jaw2=-0.01400  jaw1+jaw2=+0.00000
+  [CLOSE step   0] jaw1=+0.01373  jaw2=-0.01388  target=[[0.0, -0.0]]
+  [CLOSE step  10] jaw1=+0.00911  jaw2=-0.01400  target=[[0.0, -0.0]]
+  [CLOSE step  20] jaw1=+0.00562  jaw2=-0.01393  target=[[0.0, -0.0]]
+  [CLOSE step  30] jaw1=+0.00315  jaw2=-0.01397  target=[[0.0, -0.0]]
+  [CLOSE step  40] jaw1=+0.00139  jaw2=-0.01399  target=[[0.0, -0.0]]
+  [CLOSE step  50] jaw1=+0.00016  jaw2=-0.01394  target=[[0.0, -0.0]]
+  [CLOSE step  59] jaw1=+0.00007  jaw2=-0.01305  target=[[0.0, -0.0]]
+  [OPEN step   0] jaw1=+0.00024  jaw2=-0.01293  target=[[0.014, -0.014]]
+  [OPEN step  10] jaw1=+0.00630  jaw2=-0.00643  target=[[0.014, -0.014]]
+  [OPEN step  20] jaw1=+0.01198  jaw2=-0.00000  target=[[0.014, -0.014]]
+  [OPEN step  30] jaw1=+0.01159  jaw2=-0.00000  target=[[0.014, -0.014]]
+  [OPEN step  40] jaw1=+0.01128  jaw2=+0.00000  target=[[0.014, -0.014]]
+  [OPEN step  50] jaw1=+0.01107  jaw2=+0.00000  target=[[0.014, -0.014]]
+  [OPEN step  59] jaw1=+0.01094  jaw2=+0.00000  target=[[0.014, -0.014]]
+```
+
+jaw1 tracks its own commanded target cleanly in both phases (a normal PD
+convergence curve). **jaw2 does not track its target at all in either
+phase** — during CLOSE it stays pinned near its *open* extreme (~-0.013 to
+-0.014) despite a `0.0` target; during OPEN it moves quickly to and then
+sticks exactly at `0.00000` — its own hard *upper* limit, the opposite end
+from its `-0.014` target — and stays there. In both phases jaw2 ends up
+parked at one of its two hard limits, essentially independent of what it
+was actually commanded to do.
+
+**Candidate mechanism (not yet confirmed): the PhysX `MimicJointAPI` spring
+constraint (`gearing=-1.0`) and the independent `ImplicitActuatorCfg` PD
+actuator are both trying to drive the same joint (`gripper_jaw2_joint`)
+simultaneously, and something in that interaction — not either mechanism's
+own target in isolation — is winning and driving jaw2 into its own hard
+limit.** This is now a more concrete, more directly-measured root-cause
+candidate for AR4's long-standing jaw-asymmetry problem than either
+Hypothesis 2's original joint-limit-mismatch framing or Hypothesis 3's
+still-unverified collision-geometry question above — it would explain
+*why* three separate command-level fix attempts (Experiments 19, 22, and
+this task's own re-confirmation) all failed to produce symmetric contact:
+none of them addressed a physics-solver-level conflict between two
+independent constraint mechanisms on the same joint.
+
+**Deliberately not pursued further in this pass** (controller decision,
+2026-07-21): tuning the mimic constraint's own damping/naturalFrequency
+parameters, or the gripper actuator's stiffness/damping, or dropping the
+mimic constraint in favor of pure per-joint actuation, are all real
+candidate fixes but constitute a genuine architectural change beyond a
+"fix the sign bug" pass — logged to `BACKLOG.md` as a distinct, separate
+follow-up rather than attempted here. Training proceeded on the real,
+currently-asymmetric dynamics regardless (RL observes real `joint_pos`/
+`joint_vel` and rewards off real measured contact forces, not off whether
+a target was "correctly" reached), per controller instruction.
+
 ## Open follow-up
 
-As of 2026-07-21: the jaw-mimic joint-limit bug is fixed and statically
-verified (see UPDATE above), but full live dynamic confirmation (actually
-watching jaw2 track jaw1 through a real simulated grasp) is still open —
-needs testing inside the actual IsaacLab task env cfg pipeline rather than
-an isolated bare-scene test rig. The convex-hull distortion question is
+As of 2026-07-21 (updated later the same day, see UPDATE above): the
+jaw-mimic joint-limit bug is fixed and statically verified, and a second,
+independent command-sign bug (this section's own finding) is now also
+fixed and empirically verified. Full live dynamic confirmation (actually
+watching jaw2 track jaw1 through a real simulated grasp) is DONE (see
+above) and found a new open question (mimic-vs-actuator conflict) rather
+than closing the topic — that new question is the follow-up now, tracked
+in `BACKLOG.md`, not this doc. The convex-hull distortion question is
 now narrowed to a concrete, cheap, GPU-free follow-up (compute the real
 convex hull of the jaw's own mesh points and compare face counts against
 the original mesh) rather than a fully open question. Link_5/Link_6's

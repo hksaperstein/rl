@@ -24,6 +24,14 @@ identical action-space mechanism needed no fix), the IK-miss claim was
 real but overstated in its precision and was a classical-script/DLS
 control-algorithm limitation rather than a URDF defect, and the
 collision-geometry claim was never actually verified on either platform.
+A direct 2026-07-21 follow-up (`ROADMAP.md`'s Task 7, also covered in
+[[ar4-vs-franka-root-cause-comparison]]) tested whether Franka's own
+confirmed grasp-discoverability fix (`RelativeJointPositionActionCfg`)
+transfers back to AR4's historical null — **it does not (FALSIFIED,
+H_ar4_relative)** — closing the AR4-vs-Franka investigation without a
+positive transfer result and leaving the jaw-mimic-vs-actuator dynamics
+conflict and the classical-IK positioning miss as the more likely
+remaining explanations.
 
 **Phase 2 (current): the Franka Emika Panda**, per the platform-pivot
 decision recorded in [CLAUDE.md](../../CLAUDE.md) — built on a dedicated
@@ -113,9 +121,53 @@ flowchart TD
 14. [[experiment-14-reach-skip-curriculum]] — one-shot IK reset to a
     pregrasp pose, skipping reach; no improvement on the success criterion,
     plus a new base-collapse failure mode.
-
-*(Experiments 15 through 24 are not yet compiled into their own articles —
-see the coverage boundary note below.)*
+15. [[experiment-15-ground-penalty-base-proximity]] — wires in
+    `ground_penalty`, adds `base_proximity_penalty`, raises antipodal/
+    stillness weights; best outcome-metric scalars of the arc so far, but
+    the new base-proximity penalty saturates in the wrong direction and
+    reproduces Experiment 14's base-collapse pattern under a structurally
+    different mechanism.
+16. [[experiment-16-proven-recipe-replication]] — from-scratch replication
+    of two independently-proven Isaac Lab/IsaacGymEnvs recipes; initially
+    read as the arc's first genuine lift, then CORRECTED same-day: the cube
+    is wedged against the wrist/gripper housing, never gripped by the
+    fingers. Also confirms the gripper's two jaws are not mechanically
+    coupled despite the source URDF's mimic constraint.
+17. [[experiment-17-antipodal-grasp-gate]] — gates lift/goal-tracking on
+    genuine bilateral antipodal contact, closing Experiment 16's exploit;
+    the gate works exactly as designed but never fires once across 1500
+    iterations — exploration difficulty, not a gate bug.
+18. [[experiment-18-pregrasp-readiness-shaping]] — dense pre-grasp-readiness
+    shaping (proximity × gripper-closedness) on top of Experiment 17's gate;
+    the term is strongly learned but lift stays at exactly 0/1500, falsifying
+    the missing-gradient hypothesis.
+19. [[experiment-19-mimic-joint-physx-fix]] — a real PhysX-level
+    `PhysxMimicJointAPI` fix for the confirmed jaw-decoupling defect; two
+    independently-tested configurations both make jaw-tracking measurably
+    WORSE than the unfixed baseline.
+20. [[experiment-20-vertical-orientation-lock]] — constrains the gripper's
+    approach toward vertical/top-down; a hard IK pose-lock is found unstable
+    mid-experiment and replaced with a soft reward-bias term, which
+    saturates cleanly but lift still stays at 0/1500; surfaces a new
+    asymmetric one-jaw-never-touches failure.
+21. [[experiment-21-proximity-gated-gripper]] — hard-gates the gripper open
+    during approach, closing only within 5cm of the cube; resolves
+    Experiment 20's one-jaw asymmetry (both jaws now register contact) but
+    the jaws still never contact simultaneously.
+22. [[experiment-22-software-jaw-mirroring]] — a software control-loop jaw
+    synchronization (jaw2 tracks jaw1's measured position) replacing
+    Experiment 19's falsified physics-level fix; verified genuinely active,
+    but exposes a new reactive-lag failure mode instead of eliminating the
+    asymmetry.
+23. [[experiment-23-warmstarted-residual-rl]] — residual RL over a classical
+    5-waypoint controller with the literature-specified warm-start
+    Experiment 13 was missing; the warm-start mechanism is independently
+    verified genuinely working, and lift still stays at 0/1500.
+24. [[experiment-24-scripted-oracle-gate1]] — Experiment 24 Gate 1: a
+    non-learned reactive-differential-IK oracle meant to bootstrap BC
+    pretraining stalls before reaching the grasp waypoint in nearly every
+    episode; three architecturally distinct fixes fail; root-cause points to
+    a genuine fixed point of the receding-horizon IK control loop.
 
 25. [[experiment-25-touch-goal-reach]] — direct user structural decision to
     drop grasp/lift entirely after six prior mechanism-fix attempts (17-22)
@@ -143,6 +195,11 @@ see the coverage boundary note below.)*
   pre-declared permitted failure). First perception-in-the-loop pick on
   this platform; scripted controller, not RL — Phase I (detector state
   inside a trained policy) stays open.
+- [[franka-ik-dice-line-demo]] (2026-07-21, unnumbered/scripted demo) —
+  classical IK-only pick, line-up, and relocate of all 5 dice; 8/10
+  pick-and-place ops succeeded, d4 failed both attempts (well-documented
+  hardest grasp case); found and fixed a cloud OOM-by-frame-buffering bug
+  along the way.
 - [[joint-space-die-lift]] (2026-07-12, `franka-panda-pivot`) — swaps
   Isaac Lab's validated Franka lift recipe from task-space IK to direct
   joint-position control, on the physics-baked 30.3mm d20 die; falsified
@@ -253,6 +310,12 @@ see the coverage boundary note below.)*
 - [[reward-hacking-and-sparse-discoverability]] — the tradeoff between a
   dense reward term being exploitable and a correct term being too sparse
   to ever be found by exploration.
+- [[shape-classifier-perception-debugging]] — a separate, perception-side
+  saga (not grasp/RL): the shape classifier misclassifying cube/rect_prism
+  as "sphere" against real depth data, root-caused to real geometry (an
+  oblique side-wall sliver), fixed structurally (3/4 shapes correct, a new
+  wedge regression found), with a LiDAR side-investigation confirming
+  RGB-D as the only viable modality in this stack.
 - [[citation-verification-practice]] — the recurring pattern of senior
   review catching fabricated or overstated citations in delegated
   literature research, across nearly every research pass this session.
@@ -324,57 +387,42 @@ see the coverage boundary note below.)*
 ## Scope of this first pass
 
 This pass (compiled 2026-07-07) covers the numbered AR4 pick-and-place
-experiments documented in `ROADMAP.md` through Experiment 14. **Not yet
-covered** (per `kb/README.md`'s stated scope): the perception/shape-
-classifier debugging saga, the LiDAR investigation, and the
-literature-research docs under `docs/superpowers/specs/research/` beyond
-what's cited from individual experiment/concept articles. Experiment 15 is
-still training as of this pass and has no ROADMAP entry yet — not covered
-here, to be added in a later pass. See `kb/README.md` for the wiki's
-structure and conventions, and `ROADMAP.md` for the full, unabridged
-chronological source record.
+experiments documented in `ROADMAP.md` through Experiment 14. See
+`kb/README.md` for the wiki's structure and conventions.
 
-## Coverage boundary as of 2026-07-09
+## Coverage boundary as of 2026-07-09 — CLOSED 2026-07-22
 
-`ROADMAP.md`'s "Known follow-ups" section has grown substantially since the
-2026-07-07 pass above — it now runs through item 11, covering (at minimum)
-Experiment 24 Gate 1's scripted-oracle stall (item 6), the classical
-(non-RL) IK reachability investigation (items 7-8), a 2026-07-09
-physics-fidelity verification pass (item 9), Experiment 25's
-touch-goal-reach structural pivot (item 10), and Experiment 26's gripper
-reintroduction (item 11). **Items 6-8, and the numbered Experiments 15
-through 24 that fall between this wiki's first pass and Experiment 25, are
-not individually compiled into their own articles yet** — that backfill is
-a separate, larger gap left for a future pass, not attempted here. Three
-exceptions exist so far: item 9's physics-fidelity content (dt/decimation,
-collision offsets, EE-frame verification methodology, and a settle-time/dt
-coupling bug class) is covered in [[sim-physics-fidelity]], with item 9's
-classical-IK contact-sensor finding cross-linked from
-[[reach-grasp-lift-gap]]'s closing sections; item 10 (Experiment 25) is
-covered in [[experiment-25-touch-goal-reach]], with its structural-pivot
-narrative folded into [[reach-grasp-lift-gap]]'s closing sections and its
-running-max dead-zone finding generalized in
-[[staged-reward-co-satisfiability]]; and item 11 (Experiment 26) is covered
-in [[experiment-26-gripper-reintroduction]], with its "fast reach that
-never holds or converts to grasp" finding folded into
-[[reach-grasp-lift-gap]]'s newest closing section as a new point on that
-article's whole throughline. Silence on
-items 6-8 and Experiments 15-24 here means "not yet compiled," not "nothing
-happened" — see `ROADMAP.md` itself for the full record of those items in
-the meantime.
+`ROADMAP.md`'s "Known follow-ups" section grew substantially past this
+first pass, through Experiment 24 Gate 1's scripted-oracle stall, a
+classical (non-RL) IK reachability investigation, a physics-fidelity
+verification pass, Experiment 25's touch-goal-reach structural pivot, and
+Experiment 26's gripper reintroduction. **The gap this section used to
+flag — Experiments 15 through 24, and the classical-IK investigation, not
+yet individually compiled — was closed 2026-07-22** as part of the
+ROADMAP/BACKLOG restructure
+(`docs/superpowers/specs/2026-07-22-roadmap-backlog-restructure-design.md`):
+Experiments 15-24 now each have their own article (see the numbered list
+above), the classical-IK investigation is folded into
+[[reach-grasp-lift-gap]] and [[sim-physics-fidelity]], and the perception/
+shape-classifier debugging saga (also previously uncompiled, see
+`kb/README.md`'s prior Status note) now has its own article,
+[[shape-classifier-perception-debugging]]. Experiment 25 is covered in
+[[experiment-25-touch-goal-reach]] and Experiment 26 in
+[[experiment-26-gripper-reintroduction]], both cross-linked from
+[[reach-grasp-lift-gap]]'s closing sections.
 
 ## Coverage boundary as of 2026-07-15
 
 The Franka-phase (Phase 2) content compiled so far is: [[dice-pick-demo]],
-[[joint-space-die-lift]], [[asset-bisect]], [[size-curriculum]],
-[[cloud-training]], [[vision-platform]], and [[isaac-viewport-freezes]] —
-covering the perception-driven pick demo, the joint-space/asset-bisect/
-size-curriculum experiment line on the d20 die, the GCP cloud training
-pipeline (including its 2026-07-14/15 re-verification and per-SKU pricing
-findings), the `vision/` monorepo subtree, and the viewport-freeze
-diagnosis. **Not yet compiled**: the AR4-era gap already noted above
-(items 6-8, Experiments 15-24) remains open, and no numbered "Experiment
-27+" line has started for the Franka phase yet — its milestones so far are
-unnumbered/scripted or object-property investigations rather than staged
-RL experiments in the Tier-1 spec/plan sense. See `ROADMAP.md` for the full
-Franka-phase record in the meantime.
+[[franka-ik-dice-line-demo]], [[joint-space-die-lift]], [[asset-bisect]],
+[[size-curriculum]], [[cloud-training]], [[vision-platform]], and
+[[isaac-viewport-freezes]] — covering the perception-driven pick demo, the
+classical-IK dice-line demo, the joint-space/asset-bisect/size-curriculum
+experiment line on the d20 die, the GCP cloud training pipeline (including
+its 2026-07-14/15 re-verification and per-SKU pricing findings), the
+`vision/` monorepo subtree, and the viewport-freeze diagnosis. The
+unified-multi-die-specialist-distillation, target-selection-clutter,
+d8-d10-demo-warmstart, exploration-bonus-grasp-discovery,
+d8-antipodal-grasp-quality, and ar4-vs-franka-root-cause-comparison
+articles (all listed above) cover the rest of the Franka-phase record
+through Task 7 (2026-07-21). See `ROADMAP.md` for current status.

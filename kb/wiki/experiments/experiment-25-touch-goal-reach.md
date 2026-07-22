@@ -99,7 +99,10 @@ landed.
 Also flagged in the same review: the goal was being read from the cube's
 **live** position every step, but the cube is a dynamic (non-kinematic)
 `RigidObject` — an incidental touch-contact nudge could silently move the
-"fixed" goal mid-episode.
+"fixed" goal mid-episode. And: no existing test exercised the touch gate's
+*positive* branch at all — the only smoke test in place used all-zero
+actions throughout, so the touch latch actually flipping true had never
+been exercised by any test before this review.
 
 **Fix** (commit `7170b6b`, plus a trivial follow-up constant-drift fix):
 extracted the reward math into a new Isaac-Lab-free module
@@ -124,12 +127,15 @@ randomly.**
 
 Two training runs. Run 1 (`episode_length_s=5.0`, copied from
 `pickplace_mirror_env_cfg.py`) showed `goal_reached` peak at ~0.37-0.39
-then decline to ~0.01-0.03, with episodes running to the timeout almost
-every time — stopped before completion. Run 2 (`episode_length_s=20.0`,
+then decline to ~0.01-0.03, with `Mean episode length` sitting at 248-250
+of the 250-step max for most of the run — episodes running to the timeout
+almost every time. Stopped before completion, at iteration ~979/1500,
+once the decline pattern was clear. Run 2 (`episode_length_s=20.0`,
 re-derived from Isaac Lab's own reference-task episode-length conventions
 — see [[hyperparameter-registry]]) completed cleanly: `goal_reached`
-climbed and held at ~0.55-0.65, finishing at 0.5987, with
-`Loss/value_function` small and bounded throughout.
+climbed and held at ~0.55-0.65, finishing at 0.5987 (`time_out` finishing
+complementarily at 0.4015), with `Loss/value_function` small and bounded
+throughout.
 
 An instrumented rollout of the trained checkpoint found the training-time
 rate reflects PPO's own exploration-noise sampling, not the deployed
@@ -157,9 +163,12 @@ don't trust a self-report) this project applies elsewhere. See
 [[staged-reward-co-satisfiability]] for the generalized lesson, and
 [[hyperparameter-registry]] for the episode-length derivation.
 
-Superseded by a direct user decision to reintroduce the gripper next
-(grasp/lift back in scope) rather than continue narrowing the goal
-tolerance on this reduced task.
+Two candidate next steps were identified but not tried: widening
+`GOAL_TOLERANCE` (the simplest lever, directly targeting the observed
+~0.0175-0.0285m overshoot), or continuing training longer to sharpen
+precision under the existing tolerance. Superseded by a direct user
+decision to reintroduce the gripper next (grasp/lift back in scope)
+rather than continue narrowing the goal tolerance on this reduced task.
 
 ## Related concepts
 

@@ -101,7 +101,12 @@ listed above, not just check the wiki against itself.
 ## Status
 
 Initial build (2026-07-07): first compilation pass covers the AR4
-experiment history. Not yet covering: the perception/shape-classifier
-debugging saga, the LiDAR investigation, or literature-research docs under
-`docs/superpowers/specs/research/`. Explicitly iterative — expand coverage
-in later passes rather than blocking the first pass on completeness.
+experiment history. The perception/shape-classifier debugging saga and the
+LiDAR investigation (both flagged as not-yet-covered here originally) were
+compiled 2026-07-22 as `kb/wiki/concepts/shape-classifier-perception-debugging.md`,
+as part of closing out the `ROADMAP.md`/`BACKLOG.md` restructure's coverage
+gap (see `kb/wiki/index.md`'s "Coverage boundary" notes). Individual
+literature-research docs under `docs/superpowers/specs/research/` beyond
+what's cited from experiment/concept articles remain out of scope by
+design — see "What counts as raw" above. Explicitly iterative — expand
+coverage in later passes rather than blocking on completeness.

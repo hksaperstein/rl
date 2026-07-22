@@ -106,6 +106,46 @@ this project (a new arm's EE offset, a new gripper's jaw-pinch-point
 offset, etc.), not just a one-off validation of this specific `0.036`
 value.
 
+## 4. Reachability claims need direct forward-kinematics verification, not just a stalled solver
+
+A related methodological pattern, surfaced by ROADMAP.md items 7-8
+(2026-07-09, the classical non-RL IK-reachability investigation that
+directly precedes item 9's own pass — see [[reach-grasp-lift-gap]]'s
+extended writeup of items 7-8 for the full narrative): **when an iterative
+solver plateaus short of a target, that alone is evidence about the
+solver, not evidence that the target is unreachable.** Item 7's rebuilt
+`scripts/grasp_demo.py` (fixing a stale-joint-state bug and the same
+unbounded-Cartesian-jump bug `oracle_rollout.py` had already found)
+consistently plateaued well short of the cube's grasp pose even after
+bounding the per-round IK step — a result that, taken alone, reads as
+"this position may not be reachable," the fourth independent script/
+mechanism to hit the same stall signature.
+
+Item 8 refuted that reading with a direct, non-iterative measurement
+instead of a fifth iterative attempt: `scripts/measure_reach_envelope.py`
+computes the arm's reach envelope from forward kinematics alone (no IK
+solver involved, so it cannot get stuck in a local minimum) and found the
+cube target comfortably within reach (0.538m max vs. 0.344m needed).
+The actual blocker was then isolated to the DLS Newton-step iteration
+getting trapped in a local minimum independent of starting direction (a
+geometrically-aimed seeded start barely helped) — resolved with a direct
+forward-kinematics grid search (625 points, `scripts/ik_grid_search.py`)
+that found a configuration within 3.5-6cm of the target, which a DLS
+polish then closed to 3.648cm before plateauing again at the same
+bit-exact fixed-point signature every prior attempt had shown.
+
+The general, reusable lesson: **a local iterative solver's failure to
+converge and a target's genuine unreachability are two different claims,
+and only a direct, non-iterative measurement (forward kinematics here) can
+tell them apart.** Treating a stalled solver as proof of unreachability —
+without first checking via direct measurement — risks concluding a task is
+impossible when it is actually just poorly solved. This is the same
+"verify with instrumentation/direct measurement, don't trust a plausible-
+looking failure" discipline as the other verification patterns in this
+article (the collision-offset drop test, the EE-frame numeric+visual
+check), applied here to a solver-convergence claim instead of a physics or
+frame-offset claim.
+
 ## The settle-time-must-scale-with-dt bug class
 
 While instrumenting `scripts/interactive_joint_demo.py` with gripper
@@ -158,11 +198,13 @@ image."
 ## Related concepts
 
 [[reach-grasp-lift-gap]] — the zero-contact-force classical-IK grasp miss
-this pass's contact-sensor instrumentation surfaced, a related but distinct
-finding from physics-fidelity itself.
+this pass's contact-sensor instrumentation surfaced (item 9), and the full
+items 7-8 stall/reachability narrative this article's own section 4
+summarizes the reusable methodology from.
 
 ## Related follow-ups
 
-ROADMAP.md item 9 is the source record for this whole pass; item 8
-(preceding it) is the classical-IK grasp-approach investigation this pass's
-contact-sensor finding connects to.
+ROADMAP.md item 9 is the source record for this whole pass; items 7-8
+(preceding it) are the classical-IK reachability investigation this pass's
+contact-sensor finding connects to, and the source of section 4's
+reachability-verification methodology above.

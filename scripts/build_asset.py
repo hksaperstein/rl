@@ -351,6 +351,79 @@ def _remove_gripper_jaw2_mimic_constraint(output_usd: str) -> None:
     )
 
 
+def _add_gripper_jaw2_drive(output_usd: str) -> None:
+    """Author a UsdPhysics.DriveAPI:linear on gripper_jaw2_joint, mirroring
+    gripper_jaw1_joint's own authored drive.
+
+    Root cause found live-testing the mimic-removal fix above (2026-07-22,
+    ar4-vs-franka-root-cause-comparison.md's own UPDATE for that date): with
+    the arm base genuinely held fixed (a separate confound - see that doc -
+    the arm's own default actuator gains are too weak to hold its pose
+    against gravity, which was masking this joint's real behavior under an
+    apparent "opposite-end"/Coriolis-coupling signature in two earlier live
+    tests), gripper_jaw2_joint turned out to be COMPLETELY unresponsive to
+    any commanded PD target at all, in any of 3 tested target values (0,
+    -0.014, -0.007) - not mistracking, not sign-inverted, just inert.
+
+    Direct USD inspection (`prim.GetAppliedSchemas()`) explains why:
+    gripper_jaw1_joint carries `PhysicsDriveAPI:linear` (type=acceleration,
+    stiffness=625.0, damping=0.0, maxForce=3.4e38) from the URDF importer;
+    gripper_jaw2_joint carries NO DriveAPI schema instance at all (only
+    PhysicsJointStateAPI:linear, PhysxJointAPI, IsaacJointAPI). This makes
+    sense in hindsight: before this fix, jaw2 was a URDF mimic joint (see
+    the removed PhysxMimicJointAPI docs above) - importers generally only
+    author an independent DriveAPI on a mimic joint's REFERENCE joint
+    (jaw1), since the mimic's own gearing constraint was meant to be jaw2's
+    sole actuation mechanism. `_remove_gripper_jaw2_mimic_constraint`
+    (above) stripped that mimic constraint but never gave jaw2 an
+    independent drive to replace it - Isaac Lab's ImplicitActuatorCfg
+    happily calls `set_dof_stiffnesses`/`set_dof_dampings` on jaw2's DOF
+    with no error or warning (confirmed by reading
+    isaaclab/assets/articulation/articulation.py's actuator-processing
+    path - no DriveAPI/HasAPI check anywhere in that call chain), but with
+    no PhysX drive object ever created for this axis in the first place,
+    those writes are an apparent silent no-op at the PhysX level - jaw2
+    just sits wherever it starts, never actually driven toward any target.
+
+    Fix: author the missing DriveAPI directly, using jaw1's own authored
+    values as the starting point (Isaac Lab's ImplicitActuatorCfg
+    overwrites the numeric stiffness/damping at scene-creation time
+    regardless, per the same source reading above - these authored values
+    only matter for giving PhysX a real drive object to attach the
+    ImplicitActuatorCfg's own gains to, not as the actual runtime gains).
+    """
+    from pxr import Usd, UsdPhysics
+
+    stage = Usd.Stage.Open(output_usd)
+    jaw1 = stage.GetPrimAtPath("/mk5/root_joint/joints/gripper_jaw1_joint")
+    jaw2 = stage.GetPrimAtPath("/mk5/root_joint/joints/gripper_jaw2_joint")
+    if not jaw1.IsValid() or not jaw2.IsValid():
+        print("[jaw2-drive-fix] WARNING: gripper jaw joint prims not found at the expected paths - skipping fix")
+        return
+
+    jaw1_drive = UsdPhysics.DriveAPI.Get(jaw1, "linear")
+    if not jaw1_drive:
+        print("[jaw2-drive-fix] WARNING: gripper_jaw1_joint has no linear DriveAPI to mirror - skipping fix")
+        return
+    if UsdPhysics.DriveAPI.Get(jaw2, "linear"):
+        print("[jaw2-drive-fix] gripper_jaw2_joint already has a linear DriveAPI - nothing to do")
+        return
+
+    jaw2_drive = UsdPhysics.DriveAPI.Apply(jaw2, "linear")
+    jaw2_drive.CreateTypeAttr(jaw1_drive.GetTypeAttr().Get())
+    jaw2_drive.CreateStiffnessAttr(jaw1_drive.GetStiffnessAttr().Get())
+    jaw2_drive.CreateDampingAttr(jaw1_drive.GetDampingAttr().Get())
+    jaw2_drive.CreateMaxForceAttr(jaw1_drive.GetMaxForceAttr().Get())
+    jaw2_drive.CreateTargetPositionAttr(0.0)
+    stage.GetRootLayer().Save()
+    print(
+        "[jaw2-drive-fix] gripper_jaw2_joint: authored a new linear DriveAPI mirroring gripper_jaw1_joint's own "
+        f"(type={jaw1_drive.GetTypeAttr().Get()}, stiffness={jaw1_drive.GetStiffnessAttr().Get()}, "
+        f"damping={jaw1_drive.GetDampingAttr().Get()}, maxForce={jaw1_drive.GetMaxForceAttr().Get()}) - "
+        "jaw2 now has a real PhysX drive object for Isaac Lab's ImplicitActuatorCfg to write runtime gains into."
+    )
+
+
 def _add_substitute_link_collision(output_usd: str, link_name: str) -> None:
     """Add a simple box collider to a link that has no collision geometry
     at all in the current upstream mesh checkout.
@@ -501,6 +574,7 @@ def main() -> None:
         # research/2026-07-21-ar4-usd-asset-debugging.md for the full
         # findings each is grounded in.
         _remove_gripper_jaw2_mimic_constraint(output_usd)
+        _add_gripper_jaw2_drive(output_usd)
         _add_substitute_link_collision(output_usd, "link_5")
         _add_substitute_link_collision(output_usd, "link_6")
 

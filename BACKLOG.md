@@ -82,6 +82,21 @@ one-line pointer, not the reasoning inline.
   multi-env pipeline the same way.
   `kb/wiki/experiments/unified-multi-die-specialist-distillation.md`.
 
+## AR4 arm actuator gains (2026-07-22 finding, not yet fixed)
+
+- **Arm `ImplicitActuatorCfg` (stiffness=40, damping=4,
+  effort_limit_sim=20.0, `tasks/ar4/robot_cfg.py`) can't hold the arm's own
+  pose statically against gravity** — confirmed live: gripper height sagged
+  +0.4748m -> +0.1988m over ~1-2s of sim time with a single commanded
+  target held (not re-issued every step, unlike RL's own control loop).
+  Found while isolating the gripper-jaw2-drive bug (see
+  `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s 2026-07-22
+  "later" UPDATE) — not yet known whether this affects RL training itself
+  (a policy re-issues targets every control step, which may compensate)
+  or is purely a static-diagnostic artifact. Candidate follow-up: bump arm
+  stiffness/damping, or confirm via eval video that trained AR4 policies
+  don't show visible arm droop mid-episode.
+
 ## Perception / interactive-demo loose ends (pre-Franka-pivot, AR4 era)
 
 - **`interactive_demo.py` live GUI drag verification never performed** —

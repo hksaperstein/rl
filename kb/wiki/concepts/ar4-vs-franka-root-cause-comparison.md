@@ -481,6 +481,151 @@ decides the desktop outage is expected to persist, to scope a real
 from-scratch cloud AR4 build as its own explicit task rather than folding
 it silently into this one.
 
+## UPDATE 2026-07-22 (later, same day): desktop reachable again — mid-range sweep run, TWO real confounds found and fixed, jaw2 now tracks its own target CORRECTLY
+
+Desktop confirmed reachable this session (`ssh desktop` succeeds, GPU idle,
+no stray tmux). Before running anything: found the on-disk asset at
+`~/projects/rl`'s own checkout was untouched since 2026-07-09 — it
+predates every fix in this entire investigation (`64ab5cc`, `2576e94`,
+etc.), because none of this workstream's actual work ever happened in that
+directory. The real, already-rebuilt (2026-07-21 23:00, right after
+`2576e94`) asset lives in a separate worktree, `~/projects/rl-ar4-fixes-transfer`
+on the desktop — fast-forwarded to current `origin/main` and used for
+everything below. Flagging this for future sessions: **check
+`stat -c '%y' assets/ar4_mk5/ar4_mk5.usd` against the fix commits' own
+dates before trusting any "live re-test" result** — this asset/worktree
+mismatch could easily have produced a confidently-wrong verdict if not
+caught.
+
+**The mid-range sweep ran, but its first two results were themselves
+confounded — not by the sweep design, but by the arm's own physics.**
+Chronological order of what actually happened:
+
+1. **First live run (matches the exact prior "opposite end" signature)**:
+   jaw2 barely moved during CLOSE (stuck near -0.014, tiny drift to
+   -0.0132) and swung all the way to the *opposite* end (0.00000) during
+   OPEN — reproducing the earlier finding byte-for-byte. Added
+   instrumentation (jaw link world z, cube-filtered contact-sensor forces)
+   before concluding anything, per this task's own "don't force-fit a
+   theory the data doesn't support" instruction.
+2. **Instrumentation revealed the real confound**: `jaw1_cube_force`/
+   `jaw2_cube_force` were exact `0.0000N` throughout (rules out cube
+   contact), but `gripper_jaw1_link`/`gripper_jaw2_link` world z fell from
+   **+0.4748m to +0.1988m over just 120 sim steps** — the entire arm was
+   in an uncontrolled free-fall/swing under gravity. This script only ever
+   commanded a joint-position target for the *gripper* joints, never the
+   *arm* joints, and the arm's own actuator gains
+   (`ImplicitActuatorCfg(stiffness=40, damping=4, effort_limit_sim=20.0)`,
+   `tasks/ar4/robot_cfg.py`) are too weak to hold this arm's own weight
+   statically. An arm swinging/rotating this violently injects real
+   Coriolis/base-acceleration coupling into the child gripper joints —
+   fully capable of making a joint LOOK like it's tracking "the opposite
+   end" when it's actually just being passively dragged by its own moving
+   base, unrelated to its own commanded target.
+3. **First attempted fix (explicitly commanding the arm to hold its reset
+   joint positions every step) was a no-op** — produced byte-for-byte
+   identical trajectories to the un-held run. This itself is informative:
+   Isaac Lab's `env.reset()` already sets the articulation's joint-position
+   targets to the initial state by default, so the explicit hold command
+   was redundant, not missing — the arm's actuator gains are genuinely too
+   weak to hold this pose statically, even with an active target already
+   commanded.
+4. **Second fix (test-local only, not touching the shared
+   `tasks/ar4/robot_cfg.py`): temporarily boosted the arm actuator's own
+   stiffness/damping (40/4 -> 4000/200) inside the diagnostic script
+   before constructing the env.** This held the arm genuinely fixed
+   (`arm_max_drift` settled at ~0.0127 rad and stayed flat, confirmed via a
+   new printed diagnostic field) — and revealed jaw2's TRUE, unconfounded
+   behavior for the first time: **completely frozen at -0.014 across ALL
+   three commanded targets (0, -0.014, -0.007)** — not sign-inverted, not
+   slow, just inert. This single result retroactively explains every prior
+   "opposite end"/"pinned at a limit" signature in this workstream as an
+   artifact of the arm-swing confound, not evidence about jaw2's own drive
+   at all.
+
+**Root cause, found via direct USD inspection (a fast, lock-free,
+GPU-free `SimulationApp({"headless": True})` + `pxr` check — no need for
+the full task env): `gripper_jaw1_joint` carries a real `PhysicsDriveAPI:linear`
+(`prim.GetAppliedSchemas()` includes it, type=acceleration,
+stiffness=625.0, damping=0.0, maxForce=3.4e38); `gripper_jaw2_joint`
+carries NO DriveAPI schema instance at all** (only
+`PhysicsJointStateAPI:linear`, `PhysxJointAPI`, `IsaacJointAPI`). Both
+joints are `PhysicsPrismaticJoint`s (axis X) — confirming the 0.014 unit is
+a real 14mm linear stroke, not degrees, and that the `PhysxMimicJointAPI`'s
+own `:rotX` instance name (removed in `2576e94`) was just PhysX's mimic
+schema's generic multi-purpose-axis naming convention, not evidence the
+joints were revolute.
+
+This makes sense in hindsight: before `2576e94`, `gripper_jaw2_joint` was a
+URDF mimic joint — the importer only authors an independent `DriveAPI` on
+a mimic joint's *reference* joint (jaw1), since the mimic's own gearing
+constraint was meant to be jaw2's sole actuation mechanism. Removing the
+mimic constraint (`2576e94`, itself a real and necessary fix — the
+mimic-vs-actuator physics conflict it targeted was genuinely real) stripped
+jaw2's only actuation mechanism and never gave it an independent one to
+replace it. Confirmed via a targeted research subagent read of Isaac Lab's
+own source
+(`isaaclab/assets/articulation/articulation.py`'s actuator-processing
+path): `ImplicitActuatorCfg` writes `stiffness`/`damping` via
+`root_physx_view.set_dof_stiffnesses`/`set_dof_dampings` unconditionally,
+with no `DriveAPI`/`HasAPI` check anywhere in that call chain — it silently
+"succeeds" (no error, no warning) writing gains to a DOF whose PhysX drive
+object was apparently never created in the first place, an apparent silent
+no-op at the PhysX level (closed-source PhysX internals beyond what Isaac
+Lab's own Python source can confirm further).
+
+**Fix**: new function `_add_gripper_jaw2_drive` in `scripts/build_asset.py`
+(called right after `_remove_gripper_jaw2_mimic_constraint` in `main()`),
+authoring `UsdPhysics.DriveAPI.Apply(jaw2, "linear")` mirroring jaw1's own
+authored type/stiffness/damping/maxForce (these authored values only need
+to give PhysX a real drive object to attach to — `ImplicitActuatorCfg`
+overwrites the actual runtime gains regardless, per the same source
+reading). Applied directly to the already-built asset in the
+`rl-ar4-fixes-transfer` worktree via a small standalone script calling the
+new function (avoids a full URDF re-import; the committed `build_asset.py`
+change means any *future* full rebuild includes this fix automatically).
+
+**Re-ran `scripts/_verify_gripper_mirror_fix.py` after the fix — clean,
+complete win, no remaining asymmetry:**
+
+```
+[CLOSE step   0] jaw1=+0.01383  jaw2=-0.01383
+[CLOSE step  30] jaw1=+0.00000  jaw2=-0.00000
+[CLOSE step  59] jaw1=+0.00000  jaw2=+0.00000
+[OPEN  step   0] jaw1=+0.00017  jaw2=-0.00017
+[OPEN  step  30] jaw1=+0.01400  jaw2=-0.01400
+[OPEN  step  59] jaw1=+0.01400  jaw2=-0.01400
+MIRROR CHECK (jaw1 ~= -jaw2 in both states, sum ~= 0): PASS
+[MID(-0.007) step   0] jaw2=-0.01392
+[MID(-0.007) step  30] jaw2=-0.00685
+[MID(-0.007) step  59] jaw2=-0.00701
+-> jaw2 converged TOWARD -0.007 (correct tracking)
+```
+
+jaw1 and jaw2 mirror each other at every single printed step in both
+CLOSE and OPEN, not just at the final settled value, and the isolated
+mid-range sweep shows jaw2 converging cleanly to its own commanded target
+with a normal PD convergence shape matching jaw1's. **This closes the
+jaw-mimic-vs-actuator dynamics conflict question (ROADMAP item 4) with a
+positive, verified result** — not a partial fix or a new open question.
+
+**Separate, not-yet-fixed finding, flagged but out of this pass's scope**:
+the arm's own actuator gains (`stiffness=40, damping=4,
+effort_limit_sim=20.0`, `tasks/ar4/robot_cfg.py`'s "arm" actuator) are too
+weak to hold the arm's pose statically against gravity — real physical
+sag confirmed (+0.4748m -> +0.1988m gripper height over ~1-2 seconds of
+sim time with the arm's last commanded target never re-issued). Whether
+this matters for RL training itself is unclear and NOT tested here — a
+policy issues fresh joint targets every control step (unlike this static
+diagnostic, which sets one target and holds it), which may compensate in
+practice, and `tasks/ar4/pickplace_graspgoal_env_cfg.py`'s own
+`arm_ground_contact_penalty`/"heavily punish it for collision w the
+ground" comments suggest the project's reward design already anticipates
+arm gravity-sag as a real hazard. Logged to `BACKLOG.md` as a candidate
+follow-up (bump arm stiffness/damping, or confirm via video that RL
+training doesn't exhibit visible arm droop) rather than fixed here —
+out of this pass's scope (gripper jaw fix only).
+
 ## Related concepts
 
 [[reach-grasp-lift-gap]] — this comparison is the direct follow-up

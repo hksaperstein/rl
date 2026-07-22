@@ -118,6 +118,29 @@ def main() -> None:
     print(f"MIRROR CHECK (jaw1 ~= -jaw2 in both states, sum ~= 0): {'PASS' if mirror_ok else 'FAIL'}")
     print("=" * 70)
 
+    # Diagnostic follow-up (added after the above FAILED even post-mimic-
+    # removal): jaw2 moved substantially but consistently landed at the
+    # OPPOSITE end from its own commanded target in both phases (target=0
+    # -> stayed near -0.014; target=-0.014 -> moved to 0). That is the
+    # signature of an inverted actuator-drive sign for this specific joint
+    # (drive applies force as if tracking -target, not target), not of a
+    # limit-pinning defect. Test this directly: hold jaw1 fixed and sweep
+    # jaw2 to a MID-RANGE target (-0.007) where "converges toward -0.007"
+    # vs. "moves toward the opposite endpoint (0)" unambiguously
+    # distinguishes correct tracking from an inverted drive.
+    print("DIAGNOSTIC: isolated jaw2 mid-range target sweep (jaw1 held fixed)")
+    jaw1_hold = open_pos[0]
+    mid_target_expr = {GRIPPER_JOINT_NAMES[0]: jaw1_hold, GRIPPER_JOINT_NAMES[1]: -0.007}
+    with torch.inference_mode():
+        mid_pos = _settle(env, robot, gripper_cfg, mid_target_expr, label="MID(-0.007)")
+    print(f"[commanded jaw2=-0.007, settled] jaw1={mid_pos[0]:+.5f}  jaw2={mid_pos[1]:+.5f}")
+    print(
+        "  -> jaw2 converged TOWARD -0.007 (correct tracking)"
+        if abs(mid_pos[1] - (-0.007)) < 0.003
+        else "  -> jaw2 did NOT converge toward -0.007 (still not tracking its own target correctly)"
+    )
+    print("=" * 70)
+
     simulation_app.close()
 
 

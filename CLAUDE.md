@@ -269,43 +269,37 @@ file, e.g.:
 flock -o /tmp/rl_isaac_sim.lock -c "PYTHONUNBUFFERED=1 /home/saps/IsaacLab/isaaclab.sh -p scripts/<script>.py ..."
 ```
 
-The `-o` flag is mandatory (2026-07-12 finding): without it, every child
-process of the locked command inherits the lock's file descriptor, and
-Isaac Sim spawns a detached long-lived **Omniverse Hub daemon** that keeps
-that fd open forever — the lock then stays held even after the training
-process exits cleanly, silently blocking every queued job. `-o` closes the
-fd before exec so only the flock process itself holds the lock. If a
-queued flock is stuck and `lsof /tmp/rl_isaac_sim.lock` shows the holder
-is an `Omniverse Hub` process (0% CPU, no GPU compute apps, no live
-python/kit training process), `kill -TERM` that Hub pid — it's a
-relaunch-on-demand asset service, safe to kill when no Isaac app is
-starting up.
+The `-o` flag is mandatory: without it, a detached Omniverse Hub daemon
+that Isaac Sim spawns keeps the lock's file descriptor open forever,
+blocking every queued job even after the training process exits cleanly.
+If a queued flock is stuck and `lsof /tmp/rl_isaac_sim.lock` shows the
+holder is an `Omniverse Hub` process (0% CPU, no GPU compute apps, no
+live python/kit process), `kill -TERM` that Hub pid — it's a
+relaunch-on-demand asset service, safe to kill.
 
 This blocks natively (kernel-level mutex, zero polling) until the lock is
 free, then runs, then releases automatically on exit — this is how
-concurrent Senior threads under this repo's fan-out model (see
-"Claude's role" above) should coordinate GPU access, instead of each one
-independently `ps aux`-polling in a sleep loop (2026-07-09 finding: a
+concurrent Senior threads under this repo's fan-out model should
+coordinate GPU access, instead of each one independently `ps
+aux`-polling in a sleep loop (a Junior once burned ~40 minutes/72 tool
+calls doing exactly that while another thread's unlocked process held
+the GPU).
 
-**Known gap: a hung process still holds the lock.** Isaac Sim has a known
-failure mode (hit repeatedly this session) where it hangs during its own
-Kit/extension shutdown teardown *after* the script's actual work is
-already done and written to disk — the process keeps holding the flock
-lock indefinitely, blocking every other queued job with no indication
-anything is wrong. If a queued job seems stuck for an unusually long time,
-check the suspected holder's actual GPU/CPU activity (`nvidia-smi` for GPU
-utilization, `ps` for CPU%), not just whether the process exists —
-near-idle GPU/CPU with the process still alive and its log already
-showing a completion/`[DONE]` line means it's hung in teardown, not doing
-real work. `kill -TERM <pid>` is safe in that case (the real output was
-already written before the hang) and releases the lock immediately for
-the next queued job.
-Junior burned ~40 minutes/72 tool calls doing exactly that while another
-thread's unlocked process held the GPU). Include this exact pattern in
-every dispatch prompt that might launch Isaac Sim. Plain Isaac-Sim-free
-scripts (e.g. a `gymnasium`/`stable_baselines3` toy prototype) don't need
-the lock at all and are the better choice when a research question
-doesn't specifically require Isaac Sim's physics.
+**Known gap: a hung process still holds the lock.** Isaac Sim sometimes
+hangs during its own shutdown teardown *after* the script's actual work
+is already done and written to disk. If a queued job seems stuck for an
+unusually long time, check the suspected holder's actual GPU/CPU activity
+(`nvidia-smi`, `ps`), not just whether the process exists — near-idle
+GPU/CPU with the process still alive and its log already showing
+completion means it's hung in teardown, not working. `kill -TERM <pid>`
+is safe in that case and releases the lock immediately. Include this
+exact pattern in every dispatch prompt that might launch Isaac Sim.
+
+Plain Isaac-Sim-free scripts (e.g. a `gymnasium`/`stable_baselines3` toy
+prototype) don't need the lock at all and are the better choice when a
+research question doesn't specifically require Isaac Sim's physics.
+
+Full background on both failure modes: `docs/ops/isaac-sim-process-management.md`.
 
 ## Git conventions
 

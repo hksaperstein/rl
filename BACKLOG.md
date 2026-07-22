@@ -620,3 +620,41 @@ more, not-yet-fixed instances of the ORIGINAL (pre-this-entry) symmetric-
 command sign bug, found but out of scope for Task 5's fix: `tasks/ar4/
 actions.py`'s `MirroredGripperAction` and `scripts/
 interactive_joint_control.py` (both flagged in the kb doc above).
+
+---
+
+## AR4 Franka-fixes transfer (H_ar4_relative), FALSIFIED — concrete next hypothesis, deferred (2026-07-21)
+
+`ar4-franka-fixes-transfer`'s Task 7 closing verdict (see `ROADMAP.md`'s
+matching entry and `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s
+"H_ar4_relative transfer test" section) found Franka's own confirmed
+`RelativeJointPositionActionCfg` fix does NOT transfer to AR4's Experiment
+26 null — 2/3 Condition-B seeds reproduce the identical all-zero
+`cube_reached_goal`/contact-frequency collapse Condition A2 (absolute
+joint-space) also shows, and the one partial exception (seed 7: real
+contact, ~0.9751 contact_freq) never reaches real antipodal geometry
+(antipodal_freq stays exact 0.0). This is consistent with — and adds a
+concrete new data point to — this same workstream's own earlier finding
+(above) that jaw2 is likely pinned near its hard limits by a conflict
+between its `PhysxMimicJointAPI` spring constraint and its independent
+`ImplicitActuatorCfg` PD actuator, regardless of commanded target.
+
+**Concrete next hypothesis, NOT started here** (per CLAUDE.md's standing
+decision that AR4 investigation is not the active priority while the
+Franka pivot is underway — logged as flagged-but-deferred, not executed):
+**test jaw-mimic vs. independent-actuator by disabling the
+`PhysxMimicJointAPI` mimic constraint entirely (falling back to pure,
+independent per-joint PD actuation on both jaws, software-mirrored via
+the action term instead of a physics-level constraint) and re-running
+Condition B (relative joint-space) once.** If seed 7's Signature-2
+pattern (real contact, zero antipodal fraction) is caused by the mimic-
+vs-actuator conflict specifically, removing the mimic constraint should
+either (a) let jaw2 track its commanded target correctly, producing real
+antipodal contact in more than 1/3 seeds, or (b) leave the pattern
+unchanged, which would point back toward the jaw collision geometry
+(Hypothesis 3, still only "confirmed present," not shown to distort
+contact directions) or the classical-IK positioning miss as the more
+likely remaining explanation instead. A real, well-motivated Tier-1
+candidate experiment (new mechanism = new hypothesis + spec + plan per
+CLAUDE.md's workflow) if AR4 investigation is ever reprioritized — not
+decided or scoped further here.

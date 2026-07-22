@@ -709,3 +709,10 @@ as a whole), `CLAUDE.md`'s North Star (H_relative's own CONFIRMED result is
 direct evidence that closing the North Star's "drop in a new arm, train
 immediately" bar does not require an arm-specific IK/task-space controller
 layer as a hidden prerequisite).
+[[ar4-vs-franka-root-cause-comparison]] (2026-07-21 follow-up: this
+H_relative fix was tested for transfer to AR4's own historical
+Experiment 26 null — H_ar4_relative is FALSIFIED, 2/3 AR4 seeds reproduce
+the identical all-zero collapse this Franka result resolved, and the one
+partial exception never reaches real antipodal geometry either; full
+per-seed data and the 3-signature jaw-mimic classification live in that
+article's own dated section, not duplicated here).

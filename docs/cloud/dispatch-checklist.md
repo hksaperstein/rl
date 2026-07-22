@@ -188,3 +188,22 @@ or assume it's implied by other context.)
   not a GPU-detach/quota problem) — check `dpkg -l | grep linux-modules-nvidia`
   for an `iF`/broken state first before assuming a deeper GPU-attachment
   issue.
+- **A blocking `zenity` "Kit appears to be hanging" GUI dialog can pop
+  mid-training on an unattended, non-headless run and freeze it
+  indefinitely** (found 2026-07-21, `ar4-franka-fixes-transfer` Task 6,
+  desktop dispatch, condition-B/seed42, ~iteration 1461/1500). This is
+  Kit's own internal hang-watchdog — distinct from CLAUDE.md's already-
+  documented "hangs quietly during teardown, flock lock still held, no
+  visible symptom" pattern: here the process is not silently stuck, it is
+  actively blocked on a GUI dialog with nobody present to click it, on a
+  run this project's own "run non-headless — the user wants to watch"
+  convention deliberately keeps non-headless. If a queued/dispatched
+  non-headless job seems stuck for an unusually long time, check for a
+  live `zenity` process (not just the training process's own CPU/GPU
+  activity) before assuming a teardown hang. Recovery: kill the `zenity`
+  dialog process first; if the training process doesn't resume cleanly on
+  its own afterward, `kill -9` it and resume from the last good checkpoint
+  via `--checkpoint` (as done here: `model_1450.pt` → clean completion at
+  `model_1499.pt`, no data lost). No fix has been built to suppress the
+  watchdog dialog itself (e.g. a Kit/Isaac Sim launch flag) — flagged here
+  as a recognize-and-recover pattern, not yet a prevention.

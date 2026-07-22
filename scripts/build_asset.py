@@ -271,34 +271,35 @@ def _apply_visual_colors(base_usd_path: str, color_map: dict) -> None:
         print(f"[colors] WARNING: {len(unmatched)} visual mesh name(s) had no URDF color match: {sorted(unmatched)}")
 
 
-def _fix_gripper_jaw2_mimic_limits(output_usd: str) -> None:
-    """Correct gripper_jaw2_joint's own hard physics limits so they are
-    mathematically consistent with its authored PhysxMimicJointAPI.
+def _remove_gripper_jaw2_mimic_constraint(output_usd: str) -> None:
+    """Remove gripper_jaw2_joint's PhysxMimicJointAPI entirely and set its
+    hard physics limits to mirror gripper_jaw1_joint's own limits directly.
 
-    Direct USD inspection (docs/superpowers/specs/research/
-    2026-07-21-ar4-usd-asset-debugging.md) found that ``parse_mimic=True``
-    on the URDF import DOES author a real ``PhysxMimicJointAPI`` on
-    ``gripper_jaw2_joint`` (referenceJoint=gripper_jaw1_joint, gearing=-1.0,
-    offset=0.0) - contrary to this project's earlier (2026-07-09 era)
-    belief that the mimic constraint was never enforced by the importer.
-    However, the SAME import also authors jaw2's own hard
-    ``physics:lowerLimit``/``physics:upperLimit`` as ``[-0.0028, 0.0168]``,
-    which does not contain the mimic formula's own mapped range of jaw1's
-    real limits (``q2 = gearing*q1 + offset`` over jaw1's ``[0, 0.014]`` ->
-    ``[-0.014, 0]``). PhysX's hard joint-limit clamp takes priority over the
-    (spring-based, dampingRatio/naturalFrequency-driven) mimic constraint,
-    so jaw2 hits its own limit at just ~20% of jaw1's real travel
-    (q1=0.0028m) and cannot track jaw1 for the remaining ~80% of the
-    gripper's closing stroke - a concrete, direct mechanism for this
-    project's long-standing, never-root-caused jaw asymmetry defect
-    (three prior fix attempts - URDF-native mimic reliance, a manually-
-    authored PhysX mimic API, software leader-follower mirroring - never
-    diagnosed this specific limit/gearing mismatch).
+    UPDATE 2026-07-21 (later, ar4-grasp-fix task): this supersedes the
+    original ``_fix_gripper_jaw2_mimic_limits`` fix above/below in history.
+    That fix corrected jaw2's hard limits to be mathematically consistent
+    with its authored ``PhysxMimicJointAPI`` (referenceJoint=gripper_jaw1_joint,
+    gearing=-1.0, offset=0.0), but a live dynamic rollout after that fix
+    (``scripts/_verify_gripper_mirror_fix.py``, see
+    kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md's 2026-07-21
+    "later" UPDATE) found jaw2 still does not track its own commanded PD
+    target at all under real physics - it gets pinned near one of its two
+    hard limits regardless of target. The identified candidate mechanism:
+    the PhysxMimicJointAPI spring constraint and the independent
+    ImplicitActuatorCfg PD actuator (tasks/ar4/robot_cfg.py) are BOTH
+    trying to drive gripper_jaw2_joint simultaneously, and something in
+    that interaction dominates and drives jaw2 into a hard limit rather
+    than either mechanism's own target in isolation.
 
-    Fix: re-derive jaw2's limits directly from jaw1's own limits under the
-    ALREADY-authored gearing/offset (not a guessed constant), so the two
-    joints' allowed ranges are self-consistent for the mimic constraint's
-    entire operating range.
+    Fix: remove the PhysxMimicJointAPI constraint entirely, removing the
+    physics-level tug-of-war outright, and rely purely on the
+    software-level mirrored command (GRIPPER_OPEN_COMMAND_EXPR /
+    GRIPPER_CLOSED_COMMAND_EXPR in tasks/ar4/robot_cfg.py) driving BOTH
+    jaws as independent ImplicitActuatorCfg PD targets. jaw2's own hard
+    limits are still re-derived from jaw1's own limits under the
+    known mirror geometry (gearing=-1.0, offset=0.0) so its physical
+    range of motion is still correct - only the physics-level spring
+    constraint is removed, not the limit correction from the original fix.
     """
     from pxr import PhysxSchema, Usd
 
@@ -306,26 +307,31 @@ def _fix_gripper_jaw2_mimic_limits(output_usd: str) -> None:
     jaw1 = stage.GetPrimAtPath("/mk5/root_joint/joints/gripper_jaw1_joint")
     jaw2 = stage.GetPrimAtPath("/mk5/root_joint/joints/gripper_jaw2_joint")
     if not jaw1.IsValid() or not jaw2.IsValid():
-        print("[mimic-fix] WARNING: gripper jaw joint prims not found at the expected paths - skipping fix")
+        print("[mimic-removal] WARNING: gripper jaw joint prims not found at the expected paths - skipping fix")
         return
 
     lower1 = jaw1.GetAttribute("physics:lowerLimit").Get()
     upper1 = jaw1.GetAttribute("physics:upperLimit").Get()
     if lower1 is None or upper1 is None:
-        print("[mimic-fix] WARNING: gripper_jaw1_joint limits unreadable - skipping fix")
+        print("[mimic-removal] WARNING: gripper_jaw1_joint limits unreadable - skipping fix")
         return
 
+    # Known mirror geometry (gearing=-1.0, offset=0.0), confirmed by direct
+    # USD inspection in the 2026-07-21 asset debugging doc. Read it off the
+    # mimic API itself if still present, so we don't hardcode a value that
+    # could silently drift from what the importer actually authored.
+    gearing, offset = -1.0, 0.0
     mimic = PhysxSchema.PhysxMimicJointAPI.Get(jaw2, "rotX")
-    if not mimic:
+    if mimic:
+        gearing = mimic.GetGearingAttr().Get()
+        offset = mimic.GetOffsetAttr().Get()
+        removed = jaw2.RemoveAPI(PhysxSchema.PhysxMimicJointAPI, "rotX")
+        print(f"[mimic-removal] PhysxMimicJointAPI:rotX removed from gripper_jaw2_joint (success={removed})")
+    else:
         print(
-            "[mimic-fix] WARNING: no PhysxMimicJointAPI:rotX found on gripper_jaw2_joint - skipping fix "
-            "(this Isaac Lab/Isaac Sim version's URDF importer may not be producing a mimic constraint "
-            "from parse_mimic=True; jaw symmetry would then need a different enforcement mechanism "
-            "entirely, e.g. tasks/ar4/actions.py's MirroredGripperAction)"
+            "[mimic-removal] WARNING: no PhysxMimicJointAPI:rotX found on gripper_jaw2_joint to remove "
+            f"(nothing to strip; proceeding to set limits from the known gearing={gearing}, offset={offset} geometry anyway)"
         )
-        return
-    gearing = mimic.GetGearingAttr().Get()
-    offset = mimic.GetOffsetAttr().Get()
 
     mapped_a = gearing * lower1 + offset
     mapped_b = gearing * upper1 + offset
@@ -337,9 +343,11 @@ def _fix_gripper_jaw2_mimic_limits(output_usd: str) -> None:
     jaw2.GetAttribute("physics:upperLimit").Set(new_upper)
     stage.GetRootLayer().Save()
     print(
-        f"[mimic-fix] gripper_jaw2_joint limits corrected: [{old_lower:.4f}, {old_upper:.4f}] -> "
-        f"[{new_lower:.4f}, {new_upper:.4f}] (mimic-consistent with gripper_jaw1_joint's own "
-        f"[{lower1:.4f}, {upper1:.4f}] under gearing={gearing}, offset={offset})"
+        f"[mimic-removal] gripper_jaw2_joint limits set independently of any mimic constraint: "
+        f"[{old_lower:.4f}, {old_upper:.4f}] -> [{new_lower:.4f}, {new_upper:.4f}] (mirrors "
+        f"gripper_jaw1_joint's own [{lower1:.4f}, {upper1:.4f}] under gearing={gearing}, offset={offset}; "
+        f"jaw2 is now driven purely by its own independent ImplicitActuatorCfg PD actuator + the "
+        f"software-level mirrored command, with no competing physics-level constraint)"
     )
 
 
@@ -492,7 +500,7 @@ def main() -> None:
         # Two direct USD-level asset fixes, see docs/superpowers/specs/
         # research/2026-07-21-ar4-usd-asset-debugging.md for the full
         # findings each is grounded in.
-        _fix_gripper_jaw2_mimic_limits(output_usd)
+        _remove_gripper_jaw2_mimic_constraint(output_usd)
         _add_substitute_link_collision(output_usd, "link_5")
         _add_substitute_link_collision(output_usd, "link_6")
 

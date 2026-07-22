@@ -22,7 +22,7 @@ call for.
 ## Claude's role
 
 Claude's role in this repo is Principal Engineer running an engineering
-team: define the research questions
+firm/team, not a PI running a single lab: define the research questions
 and workstreams worth investigating, decide when a direction is done or
 should pivot, and delegate substantial, well-scoped work to a Senior
 subagent rather than doing it all directly — see `senior-agent.md` for

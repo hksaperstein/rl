@@ -105,6 +105,23 @@ def grid_search_then_polish(env, ik_controller, robot_entity_cfg, ik_jacobi_idx,
         env.step(action)
 
     # DLS polish.
+    #
+    # REGRESSION GUARD (added 2026-07-22, after a live run found the polish
+    # loop making BOTH waypoints worse than the grid search's own coarse
+    # seed - grasp 0.035m -> 0.160m, pregrasp 0.005m -> 0.041m - and the
+    # subsequent scripted-grasp episode never brought the gripper near the
+    # cube at all, confirmed in the recorded video). The loop below had no
+    # "keep best" tracking at all: it reported whatever the LAST round
+    # landed on as final, even if an earlier round (or the pre-polish grid
+    # seed itself) was closer - a real bug independent of the classical-IK
+    # single-step-DLS-local-minimum problem this project has documented
+    # elsewhere (kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md's
+    # Hypothesis 1), though it can compound with it. Track the best
+    # (residual, joint config) seen across every round INCLUDING the grid
+    # seed itself, and restore it at the end if the last round wasn't the
+    # best one found.
+    best_polish_residual = best_dist
+    best_polish_q = list(best_q)
     final_residual = best_dist
     for round_num in range(POLISH_ROUNDS):
         current_joint_pos = robot.data.joint_pos[:, robot_entity_cfg.joint_ids].clone()
@@ -131,8 +148,27 @@ def grid_search_then_polish(env, ik_controller, robot_entity_cfg, ik_jacobi_idx,
             robot.data.root_pose_w[:, 0:3], robot.data.root_pose_w[:, 3:7], ee_pose_w_now[:, 0:3], ee_pose_w_now[:, 3:7]
         )
         final_residual = torch.norm(ee_pos_b_now - target_pos_b[0], dim=-1).item()
+        if final_residual < best_polish_residual:
+            best_polish_residual = final_residual
+            best_polish_q = robot.data.joint_pos[0, robot_entity_cfg.joint_ids].tolist()
         if final_residual < 0.01:
             break
+
+    if best_polish_residual < final_residual:
+        print(
+            f"  [POLISH] last round ({final_residual:.5f}m) was worse than the best round found "
+            f"({best_polish_residual:.5f}m) - restoring the best config instead of the last one"
+        )
+        restore_q = torch.tensor([best_polish_q], device=env.device)
+        robot.write_joint_position_to_sim(
+            restore_q, joint_ids=robot_entity_cfg.joint_ids, env_ids=torch.tensor([0], device=env.device)
+        )
+        for _ in range(POLISH_SETTLE_STEPS * 2):
+            action = torch.zeros(env.num_envs, num_arm_joints + 1, device=env.device)
+            action[:, :num_arm_joints] = restore_q
+            action[:, num_arm_joints] = GRIPPER_OPEN
+            env.step(action)
+        final_residual = best_polish_residual
 
     print(f"  [POLISH] final residual: {final_residual:.5f}m")
     return robot.data.joint_pos[0, robot_entity_cfg.joint_ids].tolist(), final_residual
@@ -141,6 +177,21 @@ def grid_search_then_polish(env, ik_controller, robot_entity_cfg, ik_jacobi_idx,
 def main() -> None:
     env_cfg = Ar4GraspVerifyEnvCfg()
     env_cfg.sim.device = args_cli.device
+
+    # Test-local actuator-gain override (2026-07-22, not touching the shared
+    # tasks/ar4/robot_cfg.py): the arm's own default gains (stiffness=40,
+    # damping=4) were confirmed too weak to hold/track a commanded pose
+    # under gravity during the jaw2-drive diagnostic this same session (see
+    # kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md's 2026-07-22
+    # "later" UPDATE) - PHASE 2 of this script's own run (moving from
+    # pregrasp to grasp_q) showed a 1.42rad max joint error at the end of a
+    # 90-step settle, well beyond normal PD convergence, and the gripper
+    # never got near the cube in the recorded video. Boosting gains here
+    # only (a scripted validation tool, not a training-time change) to test
+    # whether that's the actual blocker for this specific classical-IK demo.
+    env_cfg.scene.robot.actuators["arm"].stiffness = 4000.0
+    env_cfg.scene.robot.actuators["arm"].damping = 200.0
+
     env = ManagerBasedEnv(cfg=env_cfg)
 
     robot = env.scene["robot"]

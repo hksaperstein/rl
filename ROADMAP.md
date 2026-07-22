@@ -40,7 +40,9 @@ Roughly in the order they'd likely be picked up:
    Principal (the original scope-narrowing rationale is documented in
    `kb/wiki/experiments/unified-multi-die-specialist-distillation.md`'s
    Task 4 section; not yet revisited).
-4. **AR4 gripper mimic-vs-actuator dynamics conflict — RESOLVED, 2026-07-22.**
+4. **AR4 gripper mimic-vs-actuator dynamics conflict — RESOLVED, 2026-07-22.
+   Scripted grasp validation attempted next, blocked on a different,
+   pre-existing, already-documented problem (Hypothesis 1).**
    The mimic constraint was removed entirely (`2576e94`,
    `scripts/build_asset.py`'s `_remove_gripper_jaw2_mimic_constraint`), but
    this left `gripper_jaw2_joint` with NO PhysX drive at all (it was
@@ -58,12 +60,29 @@ Roughly in the order they'd likely be picked up:
    authoring a `DriveAPI:linear` on jaw2 mirroring jaw1's own. Verified
    live: jaw1/jaw2 now mirror at every step in both CLOSE/OPEN, and an
    isolated mid-range sweep shows jaw2 converging cleanly to its own
-   commanded target with a normal PD curve. Full detail, including the
-   arm-actuator-gain finding logged as a separate follow-up (`BACKLOG.md`):
-   `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s 2026-07-22
-   "later" UPDATE. Next step: scripted (non-RL) IK grasp+lift validation
-   with jaw2 now fixed, reusing Experiment 11's incremental differential-IK
-   precedent.
+   commanded target with a normal PD curve.
+
+   **Scripted (non-RL) grasp validation attempted next** (`scripts/grasp_demo_v2.py`,
+   Experiment 11's incremental-IK precedent): found and fixed a real
+   regression bug in the demo's own DLS-polish loop (no "keep best across
+   rounds" tracking), and re-confirmed the arm-actuator-gain weakness
+   matters for real multi-joint tracking too (1.42rad error dropped to
+   0.026rad with a test-local stiffness boost) — but the cube still never
+   moved. Root cause: a ~3.3cm classical-IK positioning residual, nearly 3x
+   the cube's own 12mm size — this project's own longstanding Hypothesis 1
+   (single-Newton-step DLS trapped in a local minimum in standalone
+   classical scripts), now cleanly isolated as the sole remaining blocker,
+   with both the gripper-drive and arm-actuator confounds that used to
+   obscure it independently fixed/worked around. Does not necessarily block
+   RL-driven grasping — Experiment 11 already showed continuous incremental
+   IK driven by an RL policy every control tick produces real antipodal
+   contact on this platform.
+
+   Full detail: `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s
+   2026-07-22 UPDATE and its "Scripted (non-RL) grasp validation" follow-up
+   section. Arm-actuator-gain and classical-IK-precision follow-ups both
+   logged to `BACKLOG.md` (the latter requires Tier 1 process — a
+   methodology change, not a parameter tweak — before any implementation).
 
 See `BACKLOG.md` for further-out candidates not yet on this list.
 

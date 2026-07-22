@@ -95,7 +95,38 @@ one-line pointer, not the reasoning inline.
   (a policy re-issues targets every control step, which may compensate)
   or is purely a static-diagnostic artifact. Candidate follow-up: bump arm
   stiffness/damping, or confirm via eval video that trained AR4 policies
-  don't show visible arm droop mid-episode.
+  don't show visible arm droop mid-episode. **Corroborating evidence
+  (same day, `scripts/grasp_demo_v2.py`'s scripted-grasp validation)**:
+  same default gains produced a 1.42rad joint-tracking error moving to a
+  real multi-joint grasp pose (not just static holding) — a test-local
+  stiffness/damping boost (4000/200) dropped this to 0.026rad. This is a
+  real dynamic-tracking gap, not only a static-hold one; raises the
+  priority of deciding whether to bump these gains for real (a judgment
+  call on production `tasks/ar4/robot_cfg.py` values, flagged rather than
+  changed unilaterally, since it could affect existing trained checkpoints/
+  dynamics fidelity across the whole AR4 task suite).
+
+## AR4 classical-IK positioning precision (Hypothesis 1, longstanding — re-surfaced 2026-07-22)
+
+- With the gripper-jaw2-drive bug and the arm's actuator-gain weakness
+  both fixed/worked-around (see above and
+  `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s 2026-07-22
+  UPDATE), a scripted grasp attempt (`scripts/grasp_demo_v2.py`) still
+  never touched the cube — the remaining ~3.3cm IK positioning residual
+  (grid-search + bounded-step DLS polish) is nearly 3x the cube's own
+  12mm size. This is this project's own longstanding Hypothesis 1
+  (single-Newton-step DLS trapped in a local minimum in standalone
+  classical scripts), now cleanly isolated as the sole remaining blocker
+  for a scripted (non-RL) grasp on this asset — not a new problem.
+  Candidate next step (Tier 1 process required — this is a methodology
+  change, not a parameter tweak): a better classical IK solving method
+  (finer grid, analytic/closed-form solver, or different global-
+  optimization approach) for these standalone demo scripts specifically.
+  Note this does NOT necessarily block RL-driven grasping — Experiment 11
+  already showed continuous incremental IK driven by an RL policy every
+  control tick produces real sustained antipodal contact on this platform,
+  suggesting this positioning problem may be specific to single-big-jump
+  classical scripts.
 
 ## Perception / interactive-demo loose ends (pre-Franka-pivot, AR4 era)
 

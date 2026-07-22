@@ -626,6 +626,73 @@ follow-up (bump arm stiffness/damping, or confirm via video that RL
 training doesn't exhibit visible arm droop) rather than fixed here —
 out of this pass's scope (gripper jaw fix only).
 
+### Scripted (non-RL) grasp validation, same session: jaw2 fix confirmed sufficient at the gripper level, but a pre-existing classical-IK precision problem (Hypothesis 1) blocks an actual grasp
+
+With jaw2 now tracking correctly, ran `scripts/grasp_demo_v2.py` (grid
+search + bounded-step DLS polish, then a phased pick/lift/hold/release
+sequence — Experiment 11's incremental-IK precedent, reused as-is) against
+the fixed asset, three times, watching the recorded video each time (not
+trusting printed metrics alone):
+
+1. **First run**: both waypoints' DLS *polish* step made the IK residual
+   WORSE than the grid search's own coarse seed (grasp 0.035m → 0.160m,
+   pregrasp 0.005m → 0.041m) — a real bug in the polish loop itself (no
+   "keep best across rounds" tracking, so a late divergent round could
+   overwrite an earlier, better one). Video confirmed the gripper never
+   approached the cube at all.
+2. **Fix**: added a regression guard to `grid_search_then_polish` — track
+   the best (residual, joint config) seen across every round including
+   the grid seed itself, and restore that if the last round wasn't the
+   best. Re-ran: residuals correctly stayed at the grid search's own good
+   values (0.035m / 0.005m) instead of regressing. But PHASE 2 (moving
+   from pregrasp to grasp_q) still showed a 1.42rad max joint tracking
+   error after a 90-step settle — the arm never actually reached its
+   commanded pose — and the cube still never moved in the video. This is
+   the SAME arm-actuator-gain weakness found above (jaw2 diagnostic),
+   showing up here as a large tracking error during a real multi-joint
+   move, not just static droop.
+3. **Applied the same test-local stiffness/damping boost (40/4 → 4000/200,
+   arm actuator only, not committed to `tasks/ar4/robot_cfg.py`) used for
+   the jaw2 diagnostic.** PHASE 2's max joint error dropped to 0.026rad —
+   the arm now genuinely reaches its commanded pose. **But the cube still
+   never moved** (`cube z` exact `0.0060m` throughout CLOSE/lift/hold,
+   confirmed in the video). The remaining IK residual (0.033m grasp,
+   0.007m pregrasp) is the reason: the cube is `0.012m` (12mm) per edge —
+   a 33mm positioning miss is nearly 3x the cube's own size, more than
+   enough to close the gripper around empty air next to it.
+
+**Verdict: this is Hypothesis 1 (the classical-IK positioning miss),
+already documented above as this project's own longest-standing AR4
+finding — a single-Newton-step DLS solver trapped in a local minimum in a
+poorly-conditioned kinematic region, a property of the standalone
+waypoint-jumping demo scripts specifically (not the asset, not the
+gripper, not — as of this session — the arm's actuator gains, both now
+independently fixed/confirmed-adequate).** This session's two real fixes
+(gripper jaw2 drive, arm actuator gains for this validation) were
+necessary to even cleanly ISOLATE this as the remaining blocker — before
+them, weak/absent actuation on one or both of the arm and gripper would
+have made it impossible to tell whether a failed grasp was a positioning
+problem or an actuation problem. Now it's unambiguous: positioning is the
+sole remaining blocker for a scripted grasp on this asset.
+
+**Deliberately not pursued further in this pass**: improving the classical
+IK methodology itself (finer grid search, a proper analytic/closed-form
+solver, or a different global-optimization approach) would be a genuine
+new mechanism/methodology change, not a parameter tweak or bug fix —
+CLAUDE.md's Tier 1 gate (falsifiable hypothesis + literature/precedent
+research before implementation) applies to that kind of change, and it's
+outside this task's authorized scope (fix the gripper-jaw diagnostic,
+validate with the existing scripted-grasp tooling). Flagged to
+`BACKLOG.md`/`ROADMAP.md` as the concrete next step for whoever picks this
+up: either invest in a better classical-IK solving method for these
+standalone scripts (following Tier 1 process), or note that this doesn't
+block RL-driven grasping specifically — Experiment 11's own finding
+(this same article, Hypothesis 1) is that continuous incremental IK
+*driven by an RL policy every control tick* already produces real
+sustained antipodal contact on this platform, so this positioning problem
+may be specific to single-big-jump classical scripts rather than a
+fundamental limit for AR4 grasping generally.
+
 ## Related concepts
 
 [[reach-grasp-lift-gap]] — this comparison is the direct follow-up

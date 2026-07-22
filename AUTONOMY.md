@@ -63,9 +63,11 @@ user do deciding that's already possible to do directly.
   the scientific-method gate is satisfied, without a stop between
   stages.
 - Moving from one experiment's conclusion directly into designing and
-  running the next, chained end to end. A session's job doesn't end
-  when an experiment does; it ends when there's a genuine external
-  blocker (see below) or the user says stop.
+  running the next, chained end to end. A finished report isn't a
+  natural stopping point any more than a clean result is — the
+  ROADMAP's own open questions are the real stopping point. A session's
+  job doesn't end when an experiment does; it ends when there's a
+  genuine external blocker (see below) or the user says stop.
 
 ## What still gets stopped on and flagged
 

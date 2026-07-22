@@ -40,13 +40,34 @@ Roughly in the order they'd likely be picked up:
    Principal (the original scope-narrowing rationale is documented in
    `kb/wiki/experiments/unified-multi-die-specialist-distillation.md`'s
    Task 4 section; not yet revisited).
-4. **AR4 gripper mimic-vs-actuator dynamics conflict** — test whether
-   disabling the `PhysxMimicJointAPI` mimic constraint (pure independent
-   per-joint actuation, software-mirrored) resolves the jaw2 hard-limit
-   pinning found during Task 7 — the concrete next Tier-1 candidate that
-   investigation's own closing verdict identified. Not yet started, per
-   CLAUDE.md's standing decision that AR4 investigation isn't the active
-   priority while the Franka pivot is underway.
+4. **AR4 gripper mimic-vs-actuator dynamics conflict** — IN PROGRESS, stale
+   "not yet started" corrected 2026-07-22. The mimic constraint has since
+   been removed entirely (`2576e94`, `scripts/build_asset.py`'s
+   `_remove_gripper_jaw2_mimic_constraint` — both jaws now fully
+   independent `ImplicitActuatorCfg` PD targets). A live re-test
+   (`d16aa76`'s message) found jaw2 still lands at the OPPOSITE end from
+   its own commanded target in both phases — the signature of an inverted
+   drive sign, not a limit-pinning defect — and a targeted mid-range
+   (-0.007) sweep diagnostic was written (`d16aa76`,
+   `scripts/_verify_gripper_mirror_fix.py`) to confirm this but never run.
+   **2026-07-22 session: blocked before running it** — the desktop
+   (`saps@home.local`), the only machine with a GPU, a working Isaac Lab
+   install, the already-built AR4 USD asset, and the external
+   `annin_ar4_description` ROS package `build_asset.py` depends on
+   (`/home/saps/projects/annin_ws/...`, not in this repo, no GCS mirror),
+   was confirmed unreachable (DNS/mDNS/SSH all failed identically across
+   ~20 min of retries — not a brief reboot blip). Standing GPU-dispatch
+   policy (CLAUDE.md) says fall back to cloud on desktop-unreachable, but
+   AR4 has never run in cloud before and has no proven recipe (unlike
+   Franka's `docs/cloud/franka-cloud-shakedown.md`) — cloud fallback here
+   means building an entire new AR4 asset-build+sim pipeline from scratch
+   (re-cloning the external ROS description package, verifying xacro/URDF
+   import parity with the desktop's already-fixed asset, etc.), a
+   cross-cutting infra investment flagged back to Principal rather than
+   started unilaterally. See
+   `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s
+   2026-07-22 section for full detail. Next step once the desktop is
+   reachable again: run the mid-range sweep diagnostic exactly as written.
 
 See `BACKLOG.md` for further-out candidates not yet on this list.
 

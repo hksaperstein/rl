@@ -400,6 +400,87 @@ the mimic constraint entirely and re-running Condition B once.
 verified. See `ROADMAP.md`'s matching Task 7 entry (2026-07-21) for the
 same synthesis in the project-status ledger.
 
+## UPDATE 2026-07-22: mimic constraint removed, sign-inversion signature found, then blocked on desktop unreachability before the confirming diagnostic could run
+
+Continuing directly from the "Bigger finding" above (mimic-vs-actuator
+physics conflict candidate). Two more steps landed since:
+
+- `64ab5cc`/`928af41` (already covered above) were confirmed insufficient
+  by a live dynamic test: jaw2 didn't track its own commanded target at
+  all, staying pinned near a hard limit regardless of target, while jaw1
+  (unaffected by any coupling) tracked normally.
+- `2576e94` removed the `PhysxMimicJointAPI` mimic constraint from
+  `gripper_jaw2_joint` entirely (`scripts/build_asset.py`'s new
+  `_remove_gripper_jaw2_mimic_constraint`, replacing the old
+  `_fix_gripper_jaw2_mimic_limits`) — both jaws are now driven as fully
+  independent `ImplicitActuatorCfg` PD targets, software-mirrored via
+  `tasks/ar4/robot_cfg.py`'s `GRIPPER_OPEN_COMMAND_EXPR`/
+  `GRIPPER_CLOSED_COMMAND_EXPR`. Jaw2's hard limits are still correctly
+  re-derived from jaw1's under the known mirror geometry.
+- **First live re-test after the mimic removal (commit `d16aa76`'s
+  message) still failed, but with a different, more specific signature**:
+  jaw2 now moves substantially in both phases (unlike the pre-removal
+  test), but consistently lands at the OPPOSITE end from its own
+  commanded target (commanded `0` → stays near `-0.014`; commanded
+  `-0.014` → moves to `0`) — the signature of an inverted actuator-drive
+  sign specifically for this joint, not a limit-pinning defect this time.
+  This is a genuinely new candidate root cause, distinct from both the
+  joint-limit-mismatch (Hypothesis 2's original finding) and the
+  command-sign bug already fixed in `928af41` (that one was about the
+  *commanded value* sent to the joint, not the *joint's own drive-to-
+  motion sign* once commanded correctly).
+- `d16aa76` added a mid-range (`-0.007`) isolated sweep to
+  `scripts/_verify_gripper_mirror_fix.py`, holding jaw1 fixed, specifically
+  to distinguish "jaw2 converges toward `-0.007`" (normal tracking,
+  something else is wrong) from "jaw2 moves toward the opposite endpoint
+  (`0`) regardless" (confirms sign inversion) — **this diagnostic was
+  written but never run**; the prior session was stopped right after
+  writing it.
+
+**This session (2026-07-22): blocked before running the diagnostic.**
+Tasked with running the mid-range sweep live and continuing the debug
+loop, but the desktop (`saps@home.local`, ssh alias `desktop`) — the only
+machine in this project with a GPU, a working Isaac Lab install, the
+already-built AR4 USD asset, and the external `annin_ar4_description` ROS
+package `scripts/build_asset.py` requires
+(`AR4_DESCRIPTION_PATH=/home/saps/projects/annin_ws/src/ar4_ros_driver/annin_ar4_description`
+— not in this git repo, no GCS mirror found) — was confirmed unreachable:
+DNS resolution (`ssh`, `getent ahosts`), mDNS resolution (`avahi-resolve`),
+and mDNS service browsing (`avahi-browse -a`, which does show ~15 other
+LAN devices/services, just nothing matching the desktop) all failed
+identically across roughly 20 minutes of retries spread over two bounded
+polling windows — consistent with a genuine outage (powered off or
+network-disconnected), not a brief reboot blip (a reboot completing
+during that window would have re-registered via mDNS at some point).
+
+**Why this didn't get resolved by falling through to the standing
+desktop-first/cloud-fallback policy.** That policy (CLAUDE.md's
+"Pi-as-primary-agent GPU dispatch" section) is designed for compute that's
+agnostic to which machine runs it — e.g. Franka RL training, which has a
+proven, repeatable cloud recipe (`docs/cloud/franka-cloud-shakedown.md`).
+AR4's diagnostic/grasp-validation work is not that: it depends on
+desktop-resident *state*, not just desktop *compute* — the already-built,
+already-fixed USD asset and the external ROS description package it's
+built from both live only on the desktop's local disk, with no proven
+cloud recipe and no cheaper GCS-hosted copy found. Standing up a
+from-scratch cloud AR4 pipeline (re-cloning the external ROS package,
+running `scripts/build_asset.py` fresh, confirming byte-for-byte or at
+least functional parity with the desktop's already-fixed asset before
+trusting any diagnostic run against it) is a materially larger, unproven,
+real-cost undertaking than "run an already-written diagnostic script" —
+judged a cross-cutting infrastructure decision to flag back to the
+controller rather than one to take unilaterally as an implementation
+detail of this task.
+
+**Net effect: no new empirical data this session.** The mid-range sweep's
+actual trajectory is still not observed. The concrete next step, unchanged
+from before this session, is to run `scripts/_verify_gripper_mirror_fix.py`
+live via `flock -o /tmp/rl_isaac_sim.lock -c "..."` on the desktop exactly
+as originally planned, once it's reachable again — or, if the controller
+decides the desktop outage is expected to persist, to scope a real
+from-scratch cloud AR4 build as its own explicit task rather than folding
+it silently into this one.
+
 ## Related concepts
 
 [[reach-grasp-lift-gap]] — this comparison is the direct follow-up

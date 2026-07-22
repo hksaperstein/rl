@@ -76,3 +76,38 @@ Next step, not yet built: an object-size curriculum, training where
 discovery is reliable (48mm and/or cube-like) and annealing toward the
 30mm d20.
 ```
+
+## Frontmatter gallery addition — IK dice-line demo (2026-07-21)
+
+```yaml
+  - section: "Scripted IK demo"
+    file: "/assets/videos/projects/franka-dice-pick/dice-line-pick-and-place.mp4"
+    description: "Classical differential IK, no learned policy: the arm picks all 5 dice from a scattered layout and lines them up, then re-picks each one and relocates the whole line to a rotated, shifted position. 8/10 pick-and-place operations landed within a few mm to ~11cm of target across both passes; d4 — this project's own hardest grasp case — never got a clean grip in either attempt, exactly the failure mode documented earlier on this project."
+```
+
+## Prose section — "A scripted choreography demo, and d4's grip problem again"
+
+```markdown
+## A scripted choreography demo, and d4's grip problem again
+
+Not every result here is from a trained policy. This one is a straight
+Cartesian-waypoint controller — approach, descend, close, lift, carry,
+descend, release, retract — driving the same Franka+dice scene through two
+acts: line the 5 dice up, then re-pick the whole line and move it somewhere
+else, rotated 90 degrees. No vision, no RL — ground-truth poses read
+straight out of the simulator, reusing the exact staged-IK mechanism
+(joint-space prep before any Cartesian move, canonical straight-down
+orientation, the V-notch fingertip fixture) already proved out on the
+single-die pick demo above.
+
+8 of 10 pick-and-place operations across both passes landed within a few
+millimeters of their target, occasionally worse (~11cm on one d20 attempt —
+Isaac's physics isn't perfectly deterministic run to run, and this project
+hasn't chased that down). d4 is the outlier again: every IK waypoint
+converged cleanly, but the gripper never actually captured the die — it
+just stayed where it started, both times I asked for it. This is the same
+grasp-precision problem the V-notch fixture above was built to fix, still
+showing up here. I moved d4 to the last pick of the sequence once I saw
+this live, so the video doesn't open on a stall — a sequencing choice, not
+a fix.
+```

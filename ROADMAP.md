@@ -8,6 +8,34 @@ follow-ups below.
 
 - **AR4 pick-and-place** (perception + RL training/eval/interactive demo) —
   working end-to-end.
+- **Franka IK dice-line pick-and-place demo** (`scripts/demo_franka_ik_dice_line.py`,
+  2026-07-21) — fun/demo deliverable, not a Tier-1/2 experiment (no
+  hypothesis/spec/plan gate applies). A single Franka Panda, driven by
+  classical differential IK (no learned policy, ground-truth poses only, no
+  detector), picks up all 5 canonical dice (d4/d8/d10/d12/d20) from
+  `DiceSceneCfg`'s own scattered default layout and lines them up (Act 1),
+  then re-picks each one from the line and relocates the whole line to a
+  rotated (column→row) and shifted position (Act 2). Reuses
+  `scripts/dice_pick_demo.py`'s validated staged-IK mechanism (joint-space
+  ready-pose prep, canonical straight-down orientation, per-die measured
+  grasp height, d4 V-notch fingertip fixture) via a generalized
+  `pick_and_place()` rather than re-deriving it. Run on GCP (desktop was
+  busy with the concurrent AR4-transfer workstream at dispatch time; a real
+  cloud gap was hit and fixed along the way — buffering all captured video
+  frames in host RAM before encoding OOM-killed the first attempt on a
+  16GB instance, fixed by streaming frames straight to the imageio/ffmpeg
+  writer instead). Real result across 3 cloud runs, most recent shipped:
+  8/10 pick-and-place operations (4 dice × 2 passes) landed within a few mm
+  to ~11cm of their target; **d4 — this project's own well-documented
+  hardest grasp case — failed to be physically grasped in both attempts**
+  (every IK waypoint converged; the die simply never left the table).
+  Sequenced last (not first, its original ascending-size position) once
+  this was observed, so the video doesn't open on a stall — a sequencing
+  fix, not a mechanism fix; d4's underlying grasp reliability is unchanged.
+  Video: `outputs/dice_demo/ik_dice_line/franka_ik_dice_line_demo.mp4`
+  (gitignored, durable local copy) and
+  `site/assets/videos/projects/franka-dice-pick/dice-line-pick-and-place.mp4`
+  (committed, portfolio-site content-pack convention).
 
 ## Known follow-ups
 

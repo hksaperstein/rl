@@ -117,7 +117,9 @@ Senior/Principal research.
 ## Where to look first
 
 - `CLAUDE.md` — full project conventions and current North Star.
-- `ROADMAP.md` — living status doc, what's built and what's open.
+- `ROADMAP.md` — forward-looking planning doc: active workstreams, what's
+  planned next, and a one-line-each "recently landed" list. Full experiment
+  history lives in `kb/wiki/` and `docs/superpowers/specs|plans/`, not here.
 - `.superpowers/sdd/progress.md` — running ledger of what's already been
   tried and found across past experiments; check it before assuming
   something hasn't been attempted before.

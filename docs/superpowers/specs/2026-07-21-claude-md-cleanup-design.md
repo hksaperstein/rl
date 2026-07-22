@@ -109,6 +109,18 @@ layering — one clean present-tense statement), the citation-handling
 policy (short, already fairly tight), and a pointer to AUTONOMY.md for
 the history of how this model was arrived at.
 
+## Date handling
+
+CLAUDE.md's rule/state text should not carry inline provenance dates
+("the `-o` flag is mandatory (2026-07-12 finding)") — a date attached to
+a standing rule is pure per-turn token cost with no behavioral value,
+since the rule is simply true now regardless of when it was found. Dates
+stay only where they're the actual content: `AUTONOMY.md`'s chronological
+decision-log entries, and the two new `docs/ops/*.md` reference docs
+(read on demand, not loaded every turn, and provenance genuinely helps
+there). Strip dates from every CLAUDE.md-bound replacement text in the
+plan; leave them in AUTONOMY.md/docs/ops content.
+
 ## Sections left essentially as-is
 
 "Workflow" (Tier 1/2 gate — load-bearing, already reasonably tight),

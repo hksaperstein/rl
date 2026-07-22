@@ -139,6 +139,39 @@ Reading those instructions together, not narrowly:
   dispatched the one gap-closing task standing before the next step —
   all in the same turn, not proposed and held for approval.
 
+## Operating-model history: fan-out delegation
+
+Distinct from the "decide, don't ask" instructions above, this is the
+history of *how work gets structured and delegated* in this repo —
+`CLAUDE.md`'s "Claude's role" section and `senior-agent.md` state the
+current model; this is where it came from.
+
+- **2026-07-09** — fan-out delegation model adopted, superseding an
+  earlier Principal-does-all-research-directly model: Principal defines
+  research questions/workstreams and decides when a direction is done or
+  pivots; a Senior subagent owns each question end-to-end (research +
+  implementation), reporting back on completion rather than gating every
+  step through Principal.
+
+- **2026-07-11** — junior-engineer tier removed, direct user decision.
+  Neither Principal nor Seniors dispatch junior-engineer subagents
+  anymore; Seniors do their own implementation work directly. What's kept
+  from the old split: independent verification (Principal still checks
+  claimed evidence directly) and a separate review pass by a different
+  senior-engineer instance on substantial diffs. What's removed is the
+  extra dispatch layer, not the verification discipline.
+
+- **2026-07-18** — reframed as "Principal Engineer running an engineering
+  firm, not a PI running a single lab": multiple concurrent Senior
+  workstreams genuinely ship independently on their own owner's judgment,
+  rather than every workstream's spec/plan/decision funneling through one
+  person's review queue. Concrete precedent that established this wasn't
+  just aspirational: the desktop-side GPU-status-server effort
+  (`docs/superpowers/specs/2026-07-18-gpu-status-server-design.md`) wrote
+  its own design doc, built and tested it, and took a system-wide-policy
+  decision straight to the user itself — without routing through
+  Principal first.
+
 ## What still gets stopped on and flagged
 
 None of the instructions above were about money, other people's

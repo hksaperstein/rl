@@ -167,9 +167,7 @@ This blocks natively (kernel-level mutex, zero polling) until the lock is
 free, then runs, then releases automatically on exit — this is how
 concurrent Senior threads under this repo's fan-out model should
 coordinate GPU access, instead of each one independently `ps
-aux`-polling in a sleep loop (a Junior once burned ~40 minutes/72 tool
-calls doing exactly that while another thread's unlocked process held
-the GPU).
+aux`-polling in a sleep loop.
 
 **Known gap: a hung process still holds the lock.** Isaac Sim sometimes
 hangs during its own shutdown teardown *after* the script's actual work

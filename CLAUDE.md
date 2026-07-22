@@ -2,64 +2,27 @@
 
 ## North Star
 
-The long-term goal is a **general, reusable robotics manipulation research
-platform** built on Isaac Lab / Isaac Sim — not a one-off AR4 demo. Over time
-this means multiple manipulation tasks, multiple objects, multiple robot
-arms, and eventually mobility, all sharing the same research approach and
-infrastructure patterns.
+This project exists to explore RL development for robotic manipulation.
+Concretely, that means Isaac Lab / Isaac Sim as the platform, dice
+manipulation (pick up, organize, stack) as the anchor task, and an open
+exploration space around it:
 
-**The bar for "generalizes" is high: drop in a new arm, or a new task, and
-training should succeed immediately, without arm-specific or task-specific
-retuning.** This is a real technical target, not just "support other arms/
-tasks eventually" — it argues for favoring approaches/architectures that
-generalize across both morphology and task (e.g. task-space/Cartesian
-action formulations, reward designs that don't hardcode arm-specific
-geometry or task-specific object/goal assumptions, methodology validated to
-transfer) over ones that only happen to work because they were hand-tuned
-to the AR4's specific kinematics or to this specific pick-and-place task.
-Keep this in mind when a design choice for the current AR4/cube work could
-go either a generalizable way or an AR4-or-task-specific-shortcut way.
+- **Arms:** train one arm well first; extending to others is a
+  hypothesis to validate once the methodology is solid, not a hard
+  constraint on every current design choice.
+- **Observation/sensing:** move beyond sim-state-only training toward
+  real sensors, richer scene setups, and broader use of Isaac Sim's own
+  capabilities.
+- **Objects/physics:** beyond dice — other shapes (e.g. a torus), and
+  soft-body vs. rigid-body dynamics.
 
-**Scope discipline: one thing at a time, in sequence, not in parallel.**
-Current focus is narrow and explicit: one arm, one cube, pick it up and
-move it to a goal location. Multi-object and multi-arm generalization are
-real, intended future phases — but they come *after* single-arm/single-object
-pick-and-place is actually solved, not alongside it. Don't broaden scope
-(new objects, new arms, new tasks) until the current phase's goal is met;
-don't lose sight of the fact that the current narrow phase is in service of
-the broader platform, not the whole point.
-
-**Platform pivot (2026-07-09): Franka Emika Panda replaces the AR4 as the
-primary arm, moving forward.** Direct user decision, made after mounting
-evidence that this project's grasp-discoverability problem (Experiments
-17-26) is substantially explained by AR4-asset-specific defects rather
-than a fundamental RL/reward-design difficulty: a classical closed-form-IK
-grasp attempt misses the cube by 17-27mm (unresolved root cause as of the
-pivot), the gripper's jaw-mimic constraint has never been confirmed
-correctly enforced (Experiments 17-22), and the jaw collision geometry
-uses an unverified convex-hull approximation that may distort contact-force
-directions read by the antipodal grasp check. Franka is Isaac Lab's own
-officially-supported, validated reference platform for manipulation
-(`isaaclab_tasks.manager_based.manipulation.lift.config.franka`) — using
-it removes an entire class of custom-asset/calibration risk this project
-hit repeatedly building and tuning the AR4's own asset from a raw URDF,
-and gives a known-good baseline to compare this project's own reward/task
-design against directly. This work was built on a dedicated `franka-panda-pivot` branch and
-**merged to `main` 2026-07-13 (fast-forward, direct user decision:
-"take everything from franka")** — the pivot proved out (vision-driven
-4/5 dice picking, first learned d20 lift+carry at real 30.3mm size,
-cloud pipeline, datagen-v2 detector win). Work continues straight on
-`main` per the normal convention (see Git conventions below). The AR4-specific investigations (IK positioning bug,
-jaw-mimic defect, gripper contact geometry) are not abandoned — they may
-still matter if this project returns to AR4 later, or as a concrete test
-of the North Star's own "drop in a new arm, training should succeed
-immediately" bar once Franka is working — but are not the active priority
-while this pivot is underway.
+No fixed order across these — pursue what the evidence and the moment
+call for.
 
 ## Claude's role
 
 Claude's role in this repo is Principal Engineer running an engineering
-firm/team, not a PI running a single lab: define the research questions
+team: define the research questions
 and workstreams worth investigating, decide when a direction is done or
 should pivot, and delegate substantial, well-scoped work to a Senior
 subagent rather than doing it all directly — see `senior-agent.md` for

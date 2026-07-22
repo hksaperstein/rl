@@ -109,6 +109,31 @@ layering — one clean present-tense statement), the citation-handling
 policy (short, already fairly tight), and a pointer to AUTONOMY.md for
 the history of how this model was arrived at.
 
+## Mid-session revisions (supersede the sections below where they conflict)
+
+Two regions were redesigned through live conversation with the user
+after this spec was first written, superseding what "Claude's role" and
+"Platform pivot" below say:
+
+- **Claude's role** no longer condenses in place. It's minimized to just
+  Principal's identity and a pointer to delegate; a new `senior-agent.md`
+  at the repo root now owns everything about what a Senior does (its
+  ownership model, independent verification, citation handling, domain
+  skills). The removed junior-engineer tier isn't mentioned as a live
+  rule anywhere — it stays only as history in `AUTONOMY.md`.
+- **North Star** is fully rewritten, not just its Platform Pivot
+  paragraph condensed. Gone: the "general reusable platform" framing,
+  the strict arm-generalization gate, the "one thing at a time"
+  sequencing rule, and the Franka-over-AR4 pivot narrative (dropped
+  entirely — judged sufficiently preserved in `ROADMAP.md`/git history,
+  no new home created for it). In its place: an "explore RL development
+  for robotic manipulation" framing naming three open axes (arms,
+  observation/sensing, objects/physics) with no prescribed order across
+  them.
+
+See `docs/superpowers/plans/2026-07-21-claude-md-cleanup.md`'s Tasks 3
+and 4 for the exact resulting text.
+
 ## Date handling
 
 CLAUDE.md's rule/state text should not carry inline provenance dates

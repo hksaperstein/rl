@@ -23,17 +23,26 @@ no tests to run — verification is diff/grep/byte-count based.
   `CLAUDE.md` itself, not just in an extracted doc — these are copied
   into subagent dispatch prompts and a dispatch prompt won't go read a
   separate file mid-task.
-- **Deviation from spec, noted here for transparency:** the spec said the
-  "Platform pivot" paragraph's rationale moves to `AUTONOMY.md`. On
-  reading `AUTONOMY.md`'s actual content (Task 0 below), its scope is
-  specifically "how Claude operates autonomously, and why" — a history of
-  autonomy-granting instructions. The Franka-pivot rationale is a
-  technical/strategic decision, not an autonomy-mandate instruction, and
-  doesn't fit that file's theme. Verdict: condense the Platform Pivot
-  paragraph in place (Task 4) instead of moving it. The "Claude's role"
-  section's fan-out-delegation/junior-removal/engineering-firm-reframe
-  history genuinely *is* about the operating model and does move to
-  `AUTONOMY.md` (Task 3) — that part of the original spec stands.
+- **Deviations from spec, noted here for transparency (both from live
+  mid-session user direction, superseding the original spec text for
+  these two regions):**
+  - **Claude's role** (Task 3): rather than condensing in place, this
+    section is minimized to identity + a delegation pointer; a new
+    `senior-agent.md` at the repo root now carries everything about what
+    a Senior owns/does (ownership model, independent verification,
+    citation handling, domain skills). No mention of the removed
+    junior-engineer tier anywhere except `AUTONOMY.md`'s existing
+    historical entry.
+  - **North Star** (Task 4): fully rewritten, not just the Platform
+    Pivot paragraph condensed. The old "general reusable platform" /
+    strict arm-generalization-bar / "one thing at a time" sequencing
+    framing is replaced with an "explore RL development for robotic
+    manipulation" framing naming three open exploration axes (arms,
+    observation/sensing, objects/physics) with no prescribed order. The
+    Platform Pivot paragraph (Franka-over-AR4 rationale) is dropped
+    entirely, not relocated — it remains available in ROADMAP.md and git
+    history, which was judged sufficient; no new home was created for it
+    in this pass.
 - Every task ends by re-reading the edited file section to confirm the
   edit applied cleanly (no dangling markdown, no broken cross-references).
 - Commit after each task — four commits, not one at the end.
@@ -46,11 +55,15 @@ no tests to run — verification is diff/grep/byte-count based.
   mechanics, GPU status server contract, known infra gaps.
 - Create: `docs/ops/isaac-sim-process-management.md` — full flock/`-o`
   rationale and hung-teardown known gap, with dates and incident notes.
+- Create: `senior-agent.md` (repo root) — what a Senior subagent owns and
+  how it operates: ownership model, independent verification, citation
+  handling, domain skills.
 - Modify: `AUTONOMY.md` — append one new section with the fan-out-
   delegation operating-model history.
-- Modify: `CLAUDE.md` — condense four regions: the Platform Pivot
-  paragraph (in North Star), the Claude's role section, the Pi GPU
-  dispatch section, and the flock passage in Environment conventions.
+- Modify: `CLAUDE.md` — condense/rewrite four regions: North Star
+  (full rewrite), the Claude's role section (minimized to identity +
+  pointer), the Pi GPU dispatch section, and the flock passage in
+  Environment conventions.
 
 ---
 
@@ -405,15 +418,85 @@ git commit -m "docs: extract Isaac Sim lock rationale, fix corrupted sentence in
 
 ---
 
-### Task 3: Extract fan-out delegation history to AUTONOMY.md, condense Claude's role
+### Task 3: Create senior-agent.md, minimize Claude's role in CLAUDE.md, append operating-model history to AUTONOMY.md
+
+**Revised mid-execution (see user exchange in session — this supersedes
+what an earlier draft of this task said):** the original plan condensed
+"Claude's role" in place. The user instead wants CLAUDE.md's role section
+reduced to almost nothing (Principal's identity + a pointer to delegate),
+with everything about what a Senior owns/does moved to a new dedicated
+file, `senior-agent.md`, at the repo root. No mention of the removed
+junior-engineer tier anywhere except AUTONOMY.md's existing historical
+entry (added by this same task) — its absence doesn't need restating as
+a live rule.
 
 **Files:**
+- Create: `senior-agent.md` (repo root, alongside `CLAUDE.md`/`AUTONOMY.md`)
 - Modify: `AUTONOMY.md` (append new section)
-- Modify: `CLAUDE.md:59-151` (the `## Claude's role` section)
+- Modify: `CLAUDE.md` (the `## Claude's role` section — locate by content,
+  not line number; Tasks 1-2 already shifted line numbers from the
+  original plan draft)
 
 **Interfaces:** none.
 
-- [ ] **Step 1: Append to `AUTONOMY.md`**
+- [ ] **Step 1: Create `senior-agent.md`**
+
+```markdown
+# senior-agent.md
+
+What a Senior subagent owns and how it operates in this repo, once
+Principal delegates a research question, workstream, or implementation
+task to one.
+
+## Ownership
+
+A Senior owns one assigned research question, workstream, or
+implementation task end-to-end:
+
+- Its own literature and implementation-precedent research (papers,
+  GitHub repos/READMEs, engineering blog posts, reputable tech-news
+  coverage — sources aren't restricted to formal academic literature,
+  especially for "how this is actually built/tuned in practice"
+  questions academic venues often don't cover).
+- Hands-on build/experiment/iteration work itself.
+- Shipping it (commits/merges per this repo's git conventions) without
+  waiting for a Principal go-ahead on each step.
+
+Forms conclusions/recommendations and reports back to Principal on
+completion, or sooner if a genuine cross-cutting conflict or user-facing
+decision surfaces mid-work.
+
+Multiple Seniors run in parallel across different questions/workstreams/
+directions — including as agents on other machines (e.g. the desktop)
+coordinating over this shared repo, not just subagents within one
+session.
+
+## Independent verification
+
+Principal still checks claimed evidence directly (open the images, read
+the logs), and substantial diffs get a separate review pass by a
+*different* senior-engineer instance than the one that implemented.
+Owning a workstream end-to-end doesn't mean shipping it unverified.
+
+## Citation handling
+
+A citation from a real, credible source (peer-reviewed journal/
+proceedings, meaningfully cross-referenced or cited elsewhere) should be
+trusted and learned from, not second-guessed once identified as such.
+The one check that still matters, given this project's own history of
+subagents occasionally inventing or overstating a citation (see
+`kb/wiki/concepts/citation-verification-practice.md`), is a lightweight
+existence/accuracy check — confirm the citation is real and the claim
+attributed to it is what the source actually says.
+
+## Domain skills
+
+`rl-for-manipulators` (algorithm/reward/hyperparameter judgment),
+`isaac-lab-manipulator-research` (Isaac Sim/Lab specifics) feed
+Senior/Principal research.
+```
+
+- [ ] **Step 2: Append to `AUTONOMY.md`**
 
 Insert the following new section immediately before the existing
 `## What still gets stopped on and flagged` heading (i.e. after the
@@ -425,8 +508,8 @@ ends `...all in the same turn, not proposed and held for approval.`):
 
 Distinct from the "decide, don't ask" instructions above, this is the
 history of *how work gets structured and delegated* in this repo —
-`CLAUDE.md`'s "Claude's role" section states the current model; this is
-where it came from.
+`CLAUDE.md`'s "Claude's role" section and `senior-agent.md` state the
+current model; this is where it came from.
 
 - **2026-07-09** — fan-out delegation model adopted, superseding an
   earlier Principal-does-all-research-directly model: Principal defines
@@ -455,87 +538,40 @@ where it came from.
   Principal first.
 ```
 
-- [ ] **Step 2: Condense `CLAUDE.md`'s Claude's role section**
+- [ ] **Step 3: Minimize `CLAUDE.md`'s Claude's role section**
 
-Replace the entire section from `## Claude's role` (line 59) through
-`...(Isaac Sim/Lab specifics).` (line 150), up to (not including) the
-`## Workflow` header on line 152, with:
+Find the `## Claude's role` section in the live file (read it first — its
+line numbers have shifted from the original plan draft since Tasks 1-2
+already edited earlier parts of CLAUDE.md). Replace the entire section,
+from the `## Claude's role` header through the paragraph ending
+`...(Isaac Sim/Lab specifics).` — i.e. everything up to (not including)
+the `## Workflow` header — with:
 
 ```markdown
 ## Claude's role
 
-Claude's role in this repo is **Principal Engineer running an engineering
-firm, not a PI running a single lab** — own the direction, take real
-risks on ambitious experiments, decide and act rather than waiting to be
-steered toward the next idea, and treat concurrent workstreams as
-genuinely parallel engineering efforts each with their own ownership.
-Concretely:
+Claude's role in this repo is Principal Engineer running an engineering
+firm/team, not a PI running a single lab: define the research questions
+and workstreams worth investigating, decide when a direction is done or
+should pivot, and delegate substantial, well-scoped work to a Senior
+subagent rather than doing it all directly — see `senior-agent.md` for
+what a Senior owns and how it operates. Principal still handles genuine
+cross-cutting/architectural judgment calls and cross-workstream
+integration directly, and still owns synthesizing multiple Seniors'
+conclusions into a decision when a question was explicitly fanned out
+for that purpose.
 
-- **Generate genuinely new directions, not just refinements.** After any
-  string of failed/null experiments, ask whether the next attempt is a
-  structurally different strategy or just another parameter tweak — and
-  default toward the former. Don't wait for the user to supply the next
-  pivot.
-- **Research both horizontally and vertically, don't pigeonhole.** Survey
-  the full breadth of candidate paradigms for a problem class *and* go
-  deep enough on whichever looks promising to actually understand its
-  mechanism and failure modes. Don't converge early onto one framework.
-- **Decide when something's going wrong and act on it**, including
-  mid-experiment — don't just surface the finding and wait to be told
-  what to do.
-
-Work follows a fan-out delegation model, reflected in this repo's
-`.superpowers/sdd/` practice:
-
-- **Principal** (top-level session): defines the research questions/
-  directions/workstreams worth investigating in parallel, decides when a
-  direction is done or should pivot. Doesn't gate every workstream's
-  spec/plan authorship through itself — a Senior owning its own
-  workstream authors and executes its own spec/plan end-to-end. Still
-  handles genuine cross-cutting/architectural judgment calls and
-  cross-workstream integration directly, and still owns synthesizing
-  multiple Seniors' conclusions when a question was explicitly fanned out
-  for that purpose.
-- **Senior** (research-lead/implementer subagents): each owns one
-  assigned research question, workstream, or implementation task
-  end-to-end — literature/precedent research (papers, GitHub repos/
-  READMEs, engineering blog posts, reputable tech coverage — not
-  restricted to formal academic literature), hands-on build/experiment/
-  iteration, AND ships it (commits/merges) without waiting for a
-  Principal go-ahead on each step. Reports back to Principal on
-  completion, or sooner if a genuine cross-cutting conflict or
-  user-facing decision surfaces mid-work. Multiple Seniors run in
-  parallel, including as agents on other machines (e.g. the desktop)
-  coordinating over this shared repo.
-- **No junior-engineer tier.** Neither Principal nor Seniors dispatch
-  junior-engineer subagents; Seniors do their own implementation work
-  directly. Independent verification is still required: Principal checks
-  claimed evidence directly (open the images, read the logs), and
-  substantial diffs get a separate review pass by a *different*
-  senior-engineer instance than the one that implemented.
-
-**Citation handling:** a citation from a real, credible source (peer-
-reviewed journal/proceedings, meaningfully cross-referenced or cited
-elsewhere) should be trusted and learned from, not second-guessed once
-identified as such. The one check that still matters, given this
-project's own history of subagents occasionally inventing or overstating
-a citation (see `kb/wiki/concepts/citation-verification-practice.md`), is
-a lightweight existence/accuracy check — confirm the citation is real and
-the claim attributed to it is what the source actually says.
-
-Domain skills feed into Senior/Principal research: `rl-for-manipulators`
-(algorithm/reward/hyperparameter judgment), `isaac-lab-manipulator-research`
-(Isaac Sim/Lab specifics).
-
-See `AUTONOMY.md` for how and why this operating model (fan-out
-delegation, the "engineering firm" framing, junior-layer removal) was
-established.
+See `AUTONOMY.md` for the history of this operating model and the
+broader decide-don't-ask mandate that governs day-to-day judgment calls.
 
 ```
 
 (Keep the trailing blank line before `## Workflow` as in the original.)
 
-- [ ] **Step 3: Verify the edit**
+- [ ] **Step 4: Verify the edit**
+
+Run: `wc -l /home/saps/projects/rl/senior-agent.md` (sanity check —
+expect roughly 45-55 lines).
 
 Run: `grep -n "^## " /home/saps/projects/rl/AUTONOMY.md` and confirm the
 new `## Operating-model history: fan-out delegation` section appears
@@ -543,68 +579,87 @@ between `## What this covers in practice` and `## What still gets
 stopped on and flagged`.
 
 Run: `grep -n "^## " /home/saps/projects/rl/CLAUDE.md` and confirm
-`## Workflow` immediately follows the condensed Claude's role section.
+`## Workflow` immediately follows the minimized Claude's role section.
 
-- [ ] **Step 4: Commit**
+Run: `grep -rn "junior" /home/saps/projects/rl/CLAUDE.md
+/home/saps/projects/rl/senior-agent.md` — expect NO matches (the removed
+junior tier isn't mentioned in either file; it stays only in AUTONOMY.md's
+historical entry).
+
+- [ ] **Step 5: Commit**
 
 ```bash
-git add CLAUDE.md AUTONOMY.md
-git commit -m "docs: move fan-out delegation history to AUTONOMY.md, condense Claude's role in CLAUDE.md"
+git add CLAUDE.md AUTONOMY.md senior-agent.md
+git commit -m "docs: create senior-agent.md, minimize Claude's role in CLAUDE.md, add operating-model history to AUTONOMY.md"
 ```
 
 ---
 
-### Task 4: Condense the Platform Pivot paragraph, final verification pass
+### Task 4: Rewrite North Star, final verification pass
+
+**Revised mid-execution (see user exchange in session — this supersedes
+what an earlier draft of this task said):** rather than condensing the
+Platform Pivot paragraph in place, the user chose to rewrite the entire
+`## North Star` section. The old framing (general reusable platform,
+strict arm-generalization bar, "one thing at a time" sequencing, the
+Franka-over-AR4 pivot paragraph) is replaced with an "explore RL
+development for robotic manipulation" framing naming three open
+exploration axes (arms, observation/sensing, objects/physics), no
+prescribed order. **The Platform Pivot paragraph's specific content
+(AR4-defect evidence, merge date, proof points) is intentionally dropped
+by this task, not relocated** — direct user decision, judged sufficiently
+preserved in `ROADMAP.md` and git history already. Do not treat its
+absence from the new file set as an information-preservation gap in Step
+4 below.
 
 **Files:**
-- Modify: `CLAUDE.md:32-57` (the Platform Pivot paragraph inside
-  `## North Star`)
+- Modify: `CLAUDE.md` (the entire `## North Star` section — locate by
+  content, not line number; prior tasks shifted line numbers)
 
 **Interfaces:** none.
 
-- [ ] **Step 1: Condense the Platform Pivot paragraph**
+- [ ] **Step 1: Replace the entire North Star section**
 
-Replace the paragraph starting `**Platform pivot (2026-07-09): Franka
-Emika Panda replaces the AR4 as the primary arm, moving forward.**`
-through `...but are not the active priority while this pivot is
-underway.` with:
+Find the `## North Star` section in the live file (read it first — it
+currently runs from the `## North Star` header through the end of the
+Platform Pivot paragraph, up to but not including `## Claude's role`).
+Replace the whole section with:
 
 ```markdown
-**Platform pivot: Franka Emika Panda replaces the AR4 as the primary
-arm.** Made after mounting evidence that this project's grasp-
-discoverability problem (Experiments 17-26) was substantially explained
-by AR4-asset-specific defects — a classical IK grasp misses the cube by
-17-27mm (unresolved), the gripper's jaw-mimic constraint was never
-confirmed correctly enforced, and the jaw collision geometry uses an
-unverified convex-hull approximation that may distort contact-force
-readings — rather than a fundamental RL/reward-design difficulty. Franka
-is Isaac Lab's own officially-supported reference platform for
-manipulation
-(`isaaclab_tasks.manager_based.manipulation.lift.config.franka`),
-removing an entire class of custom-asset/calibration risk this project
-hit repeatedly building the AR4's own asset from a raw URDF. Built on a
-dedicated `franka-panda-pivot` branch, merged to `main` (fast-forward,
-direct user decision: "take everything from franka") once it proved out
-(vision-driven 4/5 dice picking, first learned d20
-lift+carry at real 30.3mm size, cloud pipeline, datagen-v2 detector win).
-AR4 investigations (IK positioning bug, jaw-mimic defect, gripper contact
-geometry) are paused, not abandoned — relevant again if this project
-returns to AR4 later, or as a concrete test of the North Star's own "drop
-in a new arm, training should succeed immediately" bar once Franka is
-working.
+## North Star
+
+This project exists to explore RL development for robotic manipulation.
+Concretely, that means Isaac Lab / Isaac Sim as the platform, dice
+manipulation (pick up, organize, stack) as the anchor task, and an open
+exploration space around it:
+
+- **Arms:** train one arm well first; extending to others is a
+  hypothesis to validate once the methodology is solid, not a hard
+  constraint on every current design choice.
+- **Observation/sensing:** move beyond sim-state-only training toward
+  real sensors, richer scene setups, and broader use of Isaac Sim's own
+  capabilities.
+- **Objects/physics:** beyond dice — other shapes (e.g. a torus), and
+  soft-body vs. rigid-body dynamics.
+
+No fixed order across these — pursue what the evidence and the moment
+call for.
 ```
 
 - [ ] **Step 2: Verify the edit**
 
-Run: `sed -n '1,58p' /home/saps/projects/rl/CLAUDE.md` and read it —
-confirm the North Star section reads coherently and the paragraph isn't
-truncated mid-sentence.
+Run: `grep -n "^## " /home/saps/projects/rl/CLAUDE.md` and confirm
+`## Claude's role` immediately follows the new North Star section with
+no orphaned text between them.
+
+Read the new North Star section in full to confirm it matches the text
+above exactly and reads coherently.
 
 - [ ] **Step 3: Commit this task's change**
 
 ```bash
 git add CLAUDE.md
-git commit -m "docs: condense Platform Pivot paragraph in CLAUDE.md"
+git commit -m "docs: rewrite North Star as open exploration space, not prescribed sequence"
 ```
 
 - [ ] **Step 4: Full information-preservation check**
@@ -613,12 +668,17 @@ Re-read the pre-Task-1 version of CLAUDE.md (retrieve it with
 `git show <commit-before-task-1>:CLAUDE.md`, using the commit hash from
 right before Task 1's commit — `git log --oneline -- CLAUDE.md` to find
 it) side by side with the current `CLAUDE.md` plus the two new
-`docs/ops/*.md` files plus the new `AUTONOMY.md` section. Confirm every
-concrete fact in the old version (dates, exit codes, file paths, root
-causes, decision rationale, the specific incident anecdotes) is present
-*somewhere* in the new set of files. List any gaps found and fix them
+`docs/ops/*.md` files plus `senior-agent.md` plus the new `AUTONOMY.md`
+section. Confirm every concrete fact in the old version (dates, exit
+codes, file paths, root causes, decision rationale, the specific
+incident anecdotes) is present *somewhere* in the new set of files —
+**except** the old North Star's "bar for generalizes" strict-gate
+language, its "one thing at a time" sequencing rule, and the Platform
+Pivot paragraph's AR4-defect/merge/proof-point content, which Step 1 of
+this task intentionally replaced or dropped per direct user decision (see
+this task's header note). List any *other* gaps found and fix them
 before proceeding — this is the step that catches an extraction that
-silently dropped something.
+silently dropped something it shouldn't have.
 
 - [ ] **Step 5: Verbatim-preservation constraint check**
 

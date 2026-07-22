@@ -134,7 +134,7 @@ file — for zero dependency cost.
   `PYTHONUNBUFFERED=1`, blocks until the checkpoint lands (ported from the
   proven hillclimb poll loop), and extracts the success + stability scalars
   via `sweeps/_extract_scalars.py` (a real script file, not an inline `-c`
-  snippet — START_HERE.md warns inline snippets have hung reproducibly).
+  snippet — senior-agent.md warns inline snippets have hung reproducibly).
 - `sweeps/overrides.py` — the shared, pure-python, unit-tested resolver.
 - `scripts/sweep.py` — orchestrator CLI (plain `python3`).
 - `scripts/sweep_report.py` — coverage/outcome report CLI (plain `python3`).

@@ -6,7 +6,7 @@ Run under Isaac Lab's python (it has tensorboard available):
 
 Prints one tab-separated line per tag: ``<tag>\tLAST\t<last>\tMAX\t<max>``,
 or ``<tag>\tNOT_FOUND``. A dedicated file (not an inline ``-p -c`` snippet)
-per START_HERE.md's note that inline snippets have hung reproducibly.
+per senior-agent.md's note that inline snippets have hung reproducibly.
 """
 
 import glob

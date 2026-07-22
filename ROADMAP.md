@@ -62,27 +62,48 @@ Roughly in the order they'd likely be picked up:
    isolated mid-range sweep shows jaw2 converging cleanly to its own
    commanded target with a normal PD curve.
 
-   **Scripted (non-RL) grasp validation attempted next** (`scripts/grasp_demo_v2.py`,
-   Experiment 11's incremental-IK precedent): found and fixed a real
-   regression bug in the demo's own DLS-polish loop (no "keep best across
-   rounds" tracking), and re-confirmed the arm-actuator-gain weakness
-   matters for real multi-joint tracking too (1.42rad error dropped to
-   0.026rad with a test-local stiffness boost) — but the cube still never
-   moved. Root cause: a ~3.3cm classical-IK positioning residual, nearly 3x
-   the cube's own 12mm size — this project's own longstanding Hypothesis 1
-   (single-Newton-step DLS trapped in a local minimum in standalone
-   classical scripts), now cleanly isolated as the sole remaining blocker,
-   with both the gripper-drive and arm-actuator confounds that used to
-   obscure it independently fixed/worked around. Does not necessarily block
-   RL-driven grasping — Experiment 11 already showed continuous incremental
-   IK driven by an RL policy every control tick produces real antipodal
-   contact on this platform.
+   **Scripted (non-RL) grasp validation, continued 2026-07-22 (same day,
+   later): the "~3.3cm classical-IK residual" diagnosis above was itself
+   wrong — FOUR independent bugs found and fixed, real physical cube
+   contact restored for the first time, but a full stable lift is still not
+   achieved.** In order of impact: (1) `robot.root_physx_view.get_jacobians()`
+   returns the Jacobian in the WORLD frame, but every AR4 classical demo
+   script fed it directly into `DifferentialIKController` alongside
+   ROOT-frame vectors — harmless in Isaac Lab's own tutorial this pattern
+   was copied from (identity-orientation base) but a real sign-mirroring
+   bug for AR4's 180-degree-yaw base, and the actual explanation for the
+   "DLS polish makes things worse"/"joints slam to limits" signature; (2)
+   the original grid search's own "best" reading (`0.033m`, i.e. the
+   "~3.3cm" figure) was itself a transient measurement artifact from only
+   15 unsettled steps per candidate — the true settled residual for that
+   exact reported config was `0.42m`, not `0.033m`; (3) the script's target
+   was `link_6`'s own raw origin, not the actual gripper jaw pinch point
+   36mm away (`_EE_OFFSET`, already used elsewhere but never applied here);
+   (4) `CUBE_POS_W=(0.20,0.28,0.009)`, hardcoded in every classical demo
+   script, doesn't match where the cube actually spawns in the scene these
+   scripts use (`Ar4PickPlaceMirrorSceneCfg` recenters it to
+   `(0.0,0.275,0.006)` for the RL env's own randomization range) — a ~20cm
+   targeting error, independent of and dominating the other three. All four
+   fixed in `scripts/grasp_demo_v2.py`; genuine, reproducible
+   `10.5mm`/`1.8mm` (grasp/pregrasp) precision now verified, and — a first
+   for this entire investigation — the cube visibly moves/gets bumped
+   during CLOSE/lift (confirmed via video, not just printed metrics). Still
+   no full lift: the dominant remaining error is a ~10mm Z-height shortfall
+   in the verified-best basin, and directly testing a lower re-aimed target
+   made it WORSE (the search re-converged to the same joint config,
+   confirming this basin's descent is capped by a joint-limit-style
+   constraint, not a simple offset). Diagnosed as a grasp-ORIENTATION gap
+   (position-only IK has no incentive to pick a sensible pinch geometry),
+   not a positioning-precision gap — a genuinely different, narrower,
+   better-characterized problem than the original Hypothesis 1 framing.
 
    Full detail: `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s
-   2026-07-22 UPDATE and its "Scripted (non-RL) grasp validation" follow-up
-   section. Arm-actuator-gain and classical-IK-precision follow-ups both
-   logged to `BACKLOG.md` (the latter requires Tier 1 process — a
-   methodology change, not a parameter tweak — before any implementation).
+   2026-07-22 (later) UPDATE. Follow-ups logged to `BACKLOG.md`: applying
+   the same 4 fixes to `grasp_demo.py`/`oracle_rollout.py` (confirmed to
+   share Bugs 1 and/or 4; `interactive_joint_demo.py` uses a closed-form
+   3-DOF IK, unaffected), and a `command_type="pose"` orientation-aware IK
+   redesign to close the diagnosed remaining gap. Arm-actuator-gain
+   follow-up (unchanged from before) also still on `BACKLOG.md`.
 
 See `BACKLOG.md` for further-out candidates not yet on this list.
 

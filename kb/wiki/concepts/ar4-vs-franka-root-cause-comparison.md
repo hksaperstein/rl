@@ -722,6 +722,223 @@ test above deliberately did not retest that condition.
 "Related" section cross-links back here rather than duplicating this
 article's table.
 
+## UPDATE 2026-07-22 (later, ar4-grasp-ik-precision task): Hypothesis 1 (the classical-IK positioning miss) re-root-caused entirely — THREE independent bugs found and fixed, real physical contact restored, but a full lift is still not achieved
+
+Tasked with closing the "~3.3cm classical-IK residual, nearly 3x the cube's
+own 12mm size" gap left by the session above and getting a real, verified
+classical-IK grasp+lift working on `scripts/grasp_demo_v2.py`. What
+actually happened supersedes the prior "single-Newton-step DLS trapped in a
+local minimum" characterization almost entirely: the true story is three
+separate, previously-undiagnosed bugs, only one of which is really about
+IK solver mechanics at all.
+
+**Bug 1 (dominant): `robot.root_physx_view.get_jacobians()` returns the
+Jacobian in the WORLD frame, but every AR4 classical demo script feeds it
+directly into `DifferentialIKController` alongside ROOT-frame position/
+orientation vectors (via `subtract_frame_transforms`).** Confirmed against
+Isaac Lab's own reference implementation
+(`source/isaaclab/test/controllers/test_operational_space.py`'s
+`_update_states()`), which explicitly rotates the Jacobian into the root
+frame first (`jacobian_b = ...; jacobian_b[:, :3] = R_root_inv @
+jacobian_w[:, :3]`) before combining it with root-frame quantities. Every
+AR4 script (`grasp_demo.py`, `grasp_demo_v2.py`, `oracle_rollout.py`,
+`interactive_joint_demo.py`'s closed-form-3DOF path excepted - see below)
+copied Isaac Lab's own official tutorial
+(`scripts/tutorials/05_controllers/run_diff_ik.py`) verbatim, which skips
+this rotation - harmless there because that tutorial's Franka/UR10 scene
+uses an identity-orientation base. AR4's base carries a real 180-degree yaw
+(`tasks/ar4/robot_cfg.py`'s `init_state` `rot=(0,0,0,1)`), so skipping the
+rotation silently mirrors the X/Y correction direction of every DLS step.
+
+A live instrumented diagnostic this session (`scripts/_diag_ik_grasp_convergence.py`)
+caught this directly: the polish loop's per-round distance INCREASED
+monotonically for 39 straight rounds (`0.42m -> 0.33m` was actually the
+*good* direction relative to later rounds, which climbed to `0.61m`), with
+joint_2/joint_3 alternating between exact hard-limit values in a stable
+3-round limit cycle (`scripts/_diag_ik_grasp_teleport_trace.py` further
+isolated this as a real, non-transient physical state, not measurement
+noise - see Bug 2 below for why that distinction mattered). Rotating the
+Jacobian into the root frame (`scripts/_diag_polish_jacobian_frame_fix.py`)
+immediately flipped this to genuine, monotonic convergence
+(`0.14m -> 0.03m` in ~15 rounds, then a stable plateau - a real local
+optimum, not a divergence). Multiple different starting seeds converged to
+different local optima in the 1.9cm-3.3cm range depending on the wrist's
+starting orientation - a real property of this redundant 6DOF arm reaching
+a 3DOF position target (multiple basins), not a remaining bug. Fixed via a
+new `_world_jacobian_to_root_frame()` in `scripts/grasp_demo_v2.py`.
+
+**Bug 2: the ORIGINAL grid search's own reported "best" distance
+(`0.033m`, matching the "~3.3cm" figure the prior session's UPDATE
+reported) was itself a measurement artifact - the true settled residual for
+that exact reported config was `0.42m`, a >10x discrepancy.** The original
+`grid_search_then_polish`'s grid loop only allows `GRID_SETTLE_STEPS=15`
+unsettled steps per candidate, in a raster (i,k) traversal that produces a
+discontinuous ~2.5rad jump in joint_3 every time the outer loop (j2)
+advances. With no velocity reset and no teleport between candidates, many
+"good" readings were caught mid-swing while the arm was still decelerating
+from a wildly different previous candidate - not a real static equilibrium
+for the reported joint config at all. Directly confirmed by writing the
+exact reported-best config to the sim via `write_joint_position_to_sim` +
+an explicit `write_joint_velocity_to_sim` zero + a genuine 100-step hold
+(`scripts/_diag_ik_grasp_teleport_trace.py`): joint_2/joint_3 barely moved
+from the commanded values (confirming this WAS a real, low-velocity
+config), yet the settled distance was `0.42m`, not `0.033m` - meaning the
+grid search's own convergence check simply cannot be trusted as written.
+Fixed by replacing the 2D raster grid entirely with a small set of diverse,
+genuinely-settled `(j2, j3, j5)` candidate seeds
+(`_find_best_seed()`/`_settle_at()` in `scripts/grasp_demo_v2.py`, each
+evaluated via a clean teleport + explicit zero-velocity write + a real
+hold) - a multi-seed search is needed (not a single fixed seed) precisely
+because Bug 1's fix still leaves multiple local optima, and picking the
+best among several seeds finds a materially better basin than any one seed
+alone.
+
+**Bug 3 (found via video review, AFTER fixing 1 and 2): this script's
+target was link_6's own raw origin, not the actual gripper jaw pinch
+point.** `robot_entity_cfg` controls body `link_6` directly, and every
+waypoint's Cartesian target was set to put link_6's own origin at the
+computed grasp position - but the real gripper jaw pinch point is offset
+`0.036m` along link_6's local +Z axis (`_EE_OFFSET`, the SAME constant
+`tasks/ar4/pickplace_env_cfg.py`'s `FrameTransformer` already uses for the
+RL env's own observations - measured there, per that module's own comment,
+via direct `robot.data.body_pos_w` readings on the gripper jaw links -
+never previously applied in any classical demo script). After fixing Bugs 1
+and 2, a first live run achieved a clean `<=15mm` link_6-to-target residual
+and genuinely excellent joint tracking (`<=13mm` max joint error in every
+phase) - yet the cube's z-height never changed even a fraction of a
+millimeter across CLOSE/lift/hold. Video review (`ar4_grasp_demo_v2.mp4`,
+top-down `perception_camera`) showed the gripper visibly NOT overlapping
+the cube in any frame across the whole sequence. Fixed via a new
+`_ee_point_pos_and_jacobian()`: computes the true pinch point's position
+(`ee_pos + R @ offset_local`) and its own Jacobian
+(`J_pos - skew(R @ offset_local) @ J_ang`, the standard rigid-offset-point
+velocity relation) and drives THAT toward the target instead of link_6's
+raw origin.
+
+**Bug 4 (found investigating Bug 3's video, turned out to be the single
+biggest position error of all): `CUBE_POS_W = (0.20, 0.28, 0.009)`,
+hardcoded identically in every classical demo script, does not match where
+the cube actually spawns in the scene these scripts use.**
+`tasks/ar4/objects_cfg.py`'s raw `CUBE_CFG` does default to
+`(0.20, 0.28, 0.006)`, but `tasks/ar4/pickplace_mirror_env_cfg.py`'s
+`Ar4PickPlaceMirrorSceneCfg` (the scene `Ar4GraspVerifyEnvCfg` - and hence
+every classical demo script - actually builds on)
+`.replace(init_state=RigidObjectCfg.InitialStateCfg(pos=(0.0, 0.275,
+0.006)))`s it, "recentered to the workspace midpoint" per that module's own
+comment, so `reset_cube_position`'s randomization range in the full RL env
+can cover `_WORKSPACE_X`/`_WORKSPACE_Y` symmetrically. `Ar4GraspVerifyEnvCfg`
+itself has no `events` field at all (confirmed by reading it directly), so
+this bare verification env never randomizes the cube - it just sits,
+unmoving, at this recentered `(0.0, 0.275, 0.006)` point every single reset
+- but every classical demo script's own `CUBE_POS_W` constant still pointed
+at the OLD, pre-recentering default. Confirmed directly: a fresh
+`env.reset()`'s actual `env.scene["cube"].data.root_pos_w` reads
+`[0.0, 0.275, 0.006]`, not `[0.20, 0.28, 0.006]` - a ~20cm real targeting
+error, independent of (and dominating) Bugs 1-3 above. This alone was
+sufficient by itself to guarantee the gripper never got near the cube,
+regardless of how precise the IK solve was. Fixed by correcting
+`CUBE_POS_W` to `(0.0, 0.275, 0.009)` in `scripts/grasp_demo_v2.py`.
+**`grasp_demo.py` has the identical wrong constant
+(`CUBE_POS_W = (0.20, 0.28, 0.009)`, confirmed via direct grep) - not fixed
+there this pass, flagged as a follow-up below.**
+
+**Verified result after all four fixes, multi-seed-retuned for the
+corrected target position:** `PREGRASP` converges to `1.8mm` (excellent -
+well under the 12mm cube). `GRASP` (the much harder waypoint - 9mm off the
+ground, requiring several joints near the edge of their comfortable range)
+converges to a genuine, reproducible `10.5mm` - a real, substantial,
+independently-verified improvement over the divergent (`0.42-0.6m`,
+Bug-1-unfixed), the previously-believed-but-fictional (`3.3cm`,
+Bug-2-unfixed), and the link_6-not-fingertip (`15mm` but 36mm+20cm off the
+real cube, Bugs 3-4 unfixed) baselines. **Real physical contact and cube
+displacement is now confirmed on every run** (cube position/height visibly
+perturbed by 1-3cm and briefly bumped in Z during CLOSE/lift, watched via
+video and cross-checked against printed `cube.data.root_pos_w` - a first
+for this entire investigation; every prior run this session and the one
+before it showed the cube's position exactly unchanged to the last decimal
+throughout CLOSE/lift/hold). **A full stable pinch+lift was NOT achieved**
+- the cube gets pushed/dragged sideways rather than enclosed and lifted;
+`cube z` returns to its resting `0.0060m` in every run after a brief bump.
+
+**Diagnosed remaining gap: grasp ORIENTATION, not position, is now the
+likely blocker - and it is capped by the same basin's own joint-limit
+constraint, not fixable by a simple parameter tweak.** A direct orientation
+check (`scripts/_diag_check_orientation.py`) at the verified-best `GRASP_Q`
+found link_6's approach axis (local +Z, the `_EE_OFFSET` direction) points
+mostly horizontally (dominant `0.943`-magnitude component) with only an
+~18-degree downward tilt, while the jaw-slide axis (local +X) is nearly
+pure horizontal - a side-approach geometry, not a top-down one. Manually
+combining this orientation with `_EE_OFFSET` shows the actual computed
+fingertip lands about `10mm` ABOVE the intended contact height (above the
+cube's own top face at `z=0.012m`) - the dominant component of the
+waypoint's `10.5mm` residual is a Z-height shortfall, not an X/Y bearing
+error, consistent with the gripper's bottom edge clipping the cube's top
+and shoving it rather than enclosing it. **Tested directly: lowering
+`GRASP_AT_HEIGHT` by the diagnosed ~10mm to compensate made the residual
+WORSE (20mm), not better** - the multi-seed search converged to
+essentially the SAME joint configuration regardless of the lower target,
+confirming this specific basin's descent is genuinely capped (most likely
+by the same joint-limit-boundary behavior found throughout this
+investigation - several of this session's local optima pin one or more
+joints at/near their hard limits at this low approach height), not a
+simple re-aim-lower fix. Reverted to the better-verified `0.009m` height.
+
+**What this means for Hypothesis 1's status.** The "single-Newton-step DLS
+trapped in a local minimum" framing from the 2026-07-22 (earlier) UPDATE
+above is now shown to have been almost entirely a MEASUREMENT ARTIFACT
+(Bug 2) compounding a genuine sign/frame bug (Bug 1) and two independent,
+much larger targeting bugs (Bugs 3-4) that had nothing to do with solver
+mechanics at all - "the classical-IK solver gets stuck a few cm short" was
+the wrong diagnosis for what was actually happening. With all four bugs
+fixed, the position-only DLS solver itself now behaves exactly as the
+textbook describes: monotonic convergence to a genuine local optimum,
+`10.5mm`/`1.8mm` precision, well past what's needed to CONTACT a 12mm cube
+(and contact is now confirmed, repeatably, for the first time this
+investigation). What remains - a position-only IK formulation gives the
+solver zero incentive to select a sensible pinch ORIENTATION, and the
+orientation it does select (a side-approach, ~18-degree-tilted geometry)
+happens to fall about 10mm short of full contact depth in a way that's
+capped by a joint limit in this specific basin - is a genuinely different,
+narrower, and better-characterized problem than Hypothesis 1 ever was. A
+proper fix (switching to `command_type="pose"` with a deliberately-chosen
+approach orientation, or searching for a DIFFERENT basin with a more
+favorable elbow/wrist configuration) is a real next step but was judged
+beyond this pass's "fix the classical-IK precision bug" scope - it
+would need to select and justify a target orientation, which starts to
+resemble a small grasp-planning design choice rather than a bug fix,
+and is flagged to `BACKLOG.md` rather than attempted further here given
+this pass's own budget.
+
+**Not yet done, flagged as follow-ups:**
+- `grasp_demo.py` has the identical Bug 1 (no Jacobian frame rotation) and
+  Bug 4 (wrong `CUBE_POS_W`) - not fixed there this pass (this pass's
+  actual grasp+lift validation used `grasp_demo_v2.py` only, per the task's
+  own instruction to "reuse whatever script you just fixed"). `oracle_rollout.py`
+  has Bug 1's pattern too (confirmed via grep: uses `get_jacobians()`
+  directly with no `matrix_from_quat`/`quat_inv` anywhere in the file).
+  `interactive_joint_demo.py` uses a closed-form 3-DOF IK (not
+  Jacobian/DLS-based at all, confirmed via its own docstring/code), so
+  Bug 1 does not apply there.
+- Multiple different cube positions were NOT tested this pass (the task's
+  own instruction to do so was conditioned on "if the first [attempt]
+  succeeds" - this one didn't reach a full lift, so that condition wasn't
+  met). The core fixes (Bugs 1/3/4) are structural/positional and should
+  generalize to any cube position; Bug 2's replacement (multi-seed search)
+  is deliberately seed-list-tunable per target and was re-tuned once
+  already this session when the target position changed
+  (`scripts/_diag_multiseed_corrected_target.py`), demonstrating the
+  methodology transfers, even though the specific seed LIST is
+  target-position-specific.
+- Diagnostic scripts from this investigation kept in `scripts/` as a
+  historical record (matching this repo's existing `_diag_*.py`
+  convention): `_diag_ik_grasp_convergence.py` (Bug 1's discovery),
+  `_diag_ik_grasp_teleport_trace.py` (Bug 2's discovery/confirmation),
+  `_diag_fixed_grid_search.py` (Bug 2's fix test), `_diag_polish_jacobian_frame_fix.py`
+  (Bug 1's fix verification), `_diag_multiseed_corrected_target.py` (Bug 4's
+  seed re-tuning), `_diag_check_orientation.py` (the orientation-gap
+  diagnosis). Several more throwaway intermediate iteration scripts from
+  this session were deleted rather than kept, to avoid clutter.
+
 ## Sources
 
 `docs/superpowers/specs/research/2026-07-20-ar4-vs-franka-root-cause-comparison.md`
@@ -730,4 +947,13 @@ article's table.
 Link_5/Link_6 collision fix), `CLAUDE.md` ("Platform pivot" section),
 `docs/superpowers/specs/2026-07-21-ar4-franka-fixes-transfer-design.md`
 and `docs/superpowers/plans/2026-07-21-ar4-franka-fixes-transfer-implementation.md`
-(the 2026-07-21 H_ar4_relative transfer test above).
+(the 2026-07-21 H_ar4_relative transfer test above). This 2026-07-22
+(later) UPDATE's own sources are entirely this session's own live
+diagnostics (`scripts/_diag_ik_grasp_convergence.py`,
+`scripts/_diag_ik_grasp_teleport_trace.py`, `scripts/_diag_fixed_grid_search.py`,
+`scripts/_diag_polish_jacobian_frame_fix.py`, `scripts/_diag_multiseed_corrected_target.py`,
+`scripts/_diag_check_orientation.py`) plus Isaac Lab's own source
+(`source/isaaclab/test/controllers/test_operational_space.py`,
+`scripts/tutorials/05_controllers/run_diff_ik.py`) and this repo's own
+`tasks/ar4/pickplace_env_cfg.py`/`pickplace_mirror_env_cfg.py`/
+`objects_cfg.py` for Bugs 3/4's ground truth.

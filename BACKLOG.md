@@ -106,27 +106,47 @@ one-line pointer, not the reasoning inline.
   changed unilaterally, since it could affect existing trained checkpoints/
   dynamics fidelity across the whole AR4 task suite).
 
-## AR4 classical-IK positioning precision (Hypothesis 1, longstanding — re-surfaced 2026-07-22)
+## AR4 classical-IK positioning precision (Hypothesis 1 — RESOLVED 2026-07-22, was a measurement/frame-bug artifact, not a solver-mechanics problem)
 
-- With the gripper-jaw2-drive bug and the arm's actuator-gain weakness
-  both fixed/worked-around (see above and
-  `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s 2026-07-22
-  UPDATE), a scripted grasp attempt (`scripts/grasp_demo_v2.py`) still
-  never touched the cube — the remaining ~3.3cm IK positioning residual
-  (grid-search + bounded-step DLS polish) is nearly 3x the cube's own
-  12mm size. This is this project's own longstanding Hypothesis 1
-  (single-Newton-step DLS trapped in a local minimum in standalone
-  classical scripts), now cleanly isolated as the sole remaining blocker
-  for a scripted (non-RL) grasp on this asset — not a new problem.
-  Candidate next step (Tier 1 process required — this is a methodology
-  change, not a parameter tweak): a better classical IK solving method
-  (finer grid, analytic/closed-form solver, or different global-
-  optimization approach) for these standalone demo scripts specifically.
-  Note this does NOT necessarily block RL-driven grasping — Experiment 11
-  already showed continuous incremental IK driven by an RL policy every
-  control tick produces real sustained antipodal contact on this platform,
-  suggesting this positioning problem may be specific to single-big-jump
-  classical scripts.
+- **UPDATE 2026-07-22 (later, same day): the "~3.3cm, DLS-trapped-in-a-
+  local-minimum" diagnosis directly below was itself wrong.** Full
+  investigation in `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s
+  2026-07-22 (later) UPDATE. Four independent bugs found and fixed in
+  `scripts/grasp_demo_v2.py`: (1) a world-frame-vs-root-frame Jacobian
+  mismatch (the actual cause of "DLS polish diverges"/"joints slam to
+  limits"), (2) the original grid search's own "0.033m" reading was a
+  transient/unsettled measurement artifact (true settled residual for that
+  exact config: `0.42m`), (3) the target was `link_6`'s raw origin, not the
+  gripper's actual jaw pinch point 36mm away (`_EE_OFFSET`), (4)
+  `CUBE_POS_W` was hardcoded to a position ~20cm from where the cube
+  actually spawns in the scene these scripts use. With all four fixed:
+  genuine `10.5mm`/`1.8mm` (grasp/pregrasp) precision, real physical cube
+  contact confirmed via video for the first time this whole investigation.
+  **Still not a full lift** — diagnosed as a grasp-ORIENTATION gap
+  (position-only IK has no incentive to select a sensible pinch geometry;
+  the found basin's approach is a ~18-degree-tilted side-approach that
+  lands ~10mm short of full contact depth, capped by a joint-limit-style
+  constraint in that basin, confirmed by testing a re-aimed-lower target
+  which made things worse rather than better).
+
+- **Two concrete follow-ups, not done this pass:**
+  1. **Apply the same 4 fixes to `grasp_demo.py`/`oracle_rollout.py`.**
+     Confirmed (via grep) both share Bug 1's pattern (`get_jacobians()`
+     used directly, no `matrix_from_quat`/`quat_inv` anywhere in either
+     file); `grasp_demo.py` also has Bug 4's identical wrong `CUBE_POS_W`
+     constant. `interactive_joint_demo.py` uses a closed-form 3-DOF IK
+     (confirmed via its own docstring/code), not Jacobian/DLS-based at
+     all — Bug 1 does not apply there.
+  2. **Orientation-aware IK redesign to close the diagnosed remaining
+     gap** — switch `DifferentialIKControllerCfg`'s `command_type` from
+     `"position"` to `"pose"` with a deliberately-chosen approach
+     orientation (e.g. a top-down or a squarely-horizontal pinch,
+     rather than the ~18-degree side-tilt the position-only solver
+     happened to find), or search for a different elbow/wrist basin with
+     a more favorable geometry. Judged a real methodology change (needs a
+     justified choice of target orientation, not just a parameter tweak)
+     — Tier 1 process required before implementation, flagged rather than
+     attempted further in that pass.
 
 ## Perception / interactive-demo loose ends (pre-Franka-pivot, AR4 era)
 

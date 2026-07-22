@@ -146,34 +146,60 @@ positives" entry) via pure offline reanalysis — confirmed first that
 everything the fixed method needs (the raw `heights_*.npy` per-step
 array, plus `episode_length_steps` from the existing summary JSON) was
 already downloaded/synced and unaffected by the bug, so no new GPU
-rollout was needed.
+rollout was needed. Re-ran a line-for-line numpy port of the current
+fixed logic (`EARLY_SETTLE_START=10`, `EARLY_SETTLE_END=45`, MIN-over-
+window `resting_z`, `SUSTAINED_LIFT_STEPS=25` @
+`LIFT_HEIGHT_THRESHOLD_M=0.04`) against all 9 already-synced
+`heights_*.npy`/`.json` pairs — committed as
+`scripts/_diag_settle_reaudit_task35.py` (plain Python + numpy, no
+`isaaclab`/`torch` dependency) for future re-audits.
 
 **Result: 8 of 9 (seed, shape) cells unchanged, all with wide safety
 margin (max height gain 0.003-0.009m vs. the 0.04m threshold — not close
 calls).** d8-big/d10-big confirmed 0/3 seeds each; d12-big seed42/seed7
-confirmed 0/8. **d12-big seed123 corrected from 4/8 to 8/8.** Root
-cause, read directly off the old per-env JSON fields: the flatness scan
-mistook 3 of the 4 previously-uncredited envs' own held-elevated
-plateau for their *resting* state (e.g. one env's reported
-`resting_z_m=0.2415` was actually its held height, not the true
-~0.0175m table-rest), so their real lift-and-hold registered as
-"already resting, zero gain"; the 4th env had an approximately-correct
-individually-detected resting_z but the old code's single *shared*
-`post_settle_start` (driven by the other envs' bad late detections)
-excluded its entire rise-and-fall event from the analysis window.
+confirmed 0/8 (max gains 0.003-0.007m, noise-floor level). **d12-big
+seed123 corrected from 4/8 to 8/8:**
+
+| shape (48mm) | seed 42 | seed 123 | seed 7 | seeds-with-discovery |
+|--------------|---------|----------|--------|-----------------------|
+| d8-big       | 0/8     | 0/8      | 0/8    | 0/3                   |
+| d10-big      | 0/8     | 0/8      | 0/8    | 0/3                   |
+| d12-big      | 0/8     | **8/8**  | 0/8    | 1/3                   |
+
+Root cause, read directly off the old per-env JSON fields: the flatness
+scan mistook 3 of the 4 previously-uncredited envs' own held-elevated
+plateau for their *resting* state — env 2's reported `resting_z_m` was
+`0.1088`, env 3's `0.1116`, env 4's `0.2415`, all actually held heights,
+not the true ~0.0175m table-rest — so their real lift-and-hold
+registered as "already resting, zero gain." The 4th env (env 0) had an
+approximately-correct individually-detected `resting_z` (0.0175, by
+coincidence — its die had already fallen back to the table by the time
+the scan locked on) but the old code's single *shared*
+`post_settle_start` across all 8 envs was `max(settle_step)=196` —
+driven by envs 2/3/4's own bad, late detections — which excluded env 0's
+entire rise-and-fall event (steps ~40-115) from the analysis window
+entirely.
 
 All 4 newly-corrected envs confirmed as genuine physical lifts, not
 noise: all 8 envs in this seed show the same smooth rise starting within
-a 5-step window of each other (steps 38-43) with no teleports. 7 hold
+a 5-step window of each other (steps 38-43), reaching plateau by steps
+54-71, comparable max single-step deltas (0.0135-0.0205m), no teleports
+— one consistent policy behavior firing near-identically across all 8
+parallel envs, not 4 real lifts plus 4 unrelated artifacts. 7 hold
 their elevated position to end-of-episode (matching the already-
 confirmed pattern for the originally-credited 4); the 8th ("env 0") is a
-genuine **lift-then-drop** — rises to ~0.111m, holds long enough to clear
-the 25-consecutive-step sustained-lift bar (37 steps), then smoothly
-descends back to true table-rest by ~step 115. Directly video-confirmed
-(env_0 is the one env this script's camera shows): frame at step 65
-shows a small elevated white sphere near the gripper matching the
-~0.111m reading; frame at step 95 shows it back near table level,
-matching the trajectory's descent.
+genuine **lift-then-drop** — rises smoothly to ~0.111m by step ~68,
+holds long enough to clear the 25-consecutive-step sustained-lift bar
+(37 steps), then descends smoothly (no teleport) back to true
+table-rest (0.0175m) by ~step 115 and stays there. Directly
+video-confirmed (env_0 is the one env this script's fixed camera
+shows): frames extracted at steps 10/40/50/65/82/95/110/150/249 —
+step 10 shows the die resting on the table next to the closed gripper;
+step 65 (zoomed crop) shows a small white sphere elevated near/above the
+gripper, matching the ~0.111m reading; step 95 shows the die back down
+near table level, matching the trajectory's smooth descent to ~0.021m.
+This meets the project's own operational "sustained lift" bar even
+though it doesn't carry to end-of-episode like the other 7.
 
 **Does not change which shapes show discovery** — d8/d10 remain fully
 null (`BACKLOG.md`'s "Task 4 scope decision" to defer them is
@@ -181,9 +207,14 @@ unaffected at the shape-inclusion level), d12 remains the only partial
 (still 1/3 seeds). What changes is d12's own specialist-quality
 characterization: no longer a "weaker echo" of d20's pattern, now a
 full-completeness match — relevant since Task 4 already earmarks this
-exact d12 seed123 checkpoint as a frozen teacher. Full mechanism,
-corrected grid, and root-cause trace: `ROADMAP.md`'s "Task 3.5 re-audit"
-entry.
+exact d12 seed123 checkpoint
+(`joint-die-d12-big/seed123/2026-07-19_06-37-16/model_1499.pt`) as a
+frozen teacher. No new bugs found in the fixed settle-detection method
+itself or in this task's own offline re-derivation script (cross-checked
+step-for-step against `franka_checkpoint_review.py`'s current source;
+the 8 unchanged cells show wide safety margins rather than borderline
+flips, the more likely symptom of a subtle bug in the re-derivation
+itself).
 
 ## d20-big-geom gate task: undiluted-48mm d20 retrain — complete 2026-07-19, result STRONGER than expected
 
@@ -242,8 +273,14 @@ equally-valid alternate given identical 8/8):
 - `gs://rl-manipulation-hks-runs/unified-multi-die-specialists/joint-die-big/seed123/2026-07-19_12-46-42/model_1499.pt`
 - `gs://rl-manipulation-hks-runs/unified-multi-die-specialists/joint-die-big/seed7/2026-07-19_13-17-02/model_1499.pt`
 
-Full grid, mechanism, raw-trajectory numbers, and cost (~$0.91):
-`ROADMAP.md`'s "d20-big-geom gate task" entry.
+Eval artifacts (video/heights json/npy, corrected-measurement versions)
+synced to
+`gs://rl-manipulation-hks-runs/unified-multi-die-specialists/eval-artifacts/joint-die-big/seed{42,123,7}/`.
+
+**Cost: ~$0.91** (2.39hr instance uptime, SPOT g2-standard-4+L4, zero
+preemptions, $0.361/hr compute + ~$0.05 boot-disk overhead), well under
+the ~$12.04 remaining allotment at the time. Full teardown verified via
+`scripts/check_cloud_state.sh`: zero instances/disks/snapshots remained.
 
 ## Open, not yet decided
 
@@ -502,15 +539,19 @@ Found two real bugs under real execution, neither caught by Task 4's own
 2. **NOT fixable as a bug fix — a real architectural blocker.**
    Redispatched with the sequential-reopen fix: hung with zero log output
    for 20+ minutes constructing the run's SECOND `ManagerBasedRLEnv` (the
-   first built/closed cleanly in 8.5s). Independently confirmed via an
-   isolated `num_envs=16` repro (build→close→build, no distillation code
-   at all): first env 1.44s, second env never returns after 9m11s CPU
-   time. Reconstructing a `ManagerBasedRLEnv` in-process after a prior
-   `.close()` does not work in this Isaac Lab installation — not a
-   slowness issue, reproduces at trivial scale. Both hung runs killed
-   cleanly; full desktop teardown independently re-verified both times
-   (GPU-status server, `systemd-inhibit --list`, `nvidia-smi`, lock file
-   all clear).
+   first built/closed cleanly in 8.5s) — CPU pinned ~104% on one thread,
+   all `carb.tasking*` workers idle, GPU 1% util, no error, no progress.
+   Independently confirmed via an isolated `num_envs=16` repro
+   (build→close→build, no distillation code at all): first env 1.44s,
+   second env never returns after 9m11s CPU time, zero output — rules out
+   "just slow at num_envs=4096". Reconstructing a `ManagerBasedRLEnv`
+   in-process after a prior `.close()` does not work in this Isaac Lab
+   installation — not a slowness issue, reproduces at trivial scale. Both
+   hung runs killed cleanly; full desktop teardown independently
+   re-verified both times (`check_gpu_availability.sh` AVAILABLE,
+   `systemd-inhibit --list` clear of `rl-gpu-job`/
+   `rl-gpu-job-auto-detect`, `nvidia-smi --query-compute-apps` empty,
+   `/tmp/rl_isaac_sim.lock` free).
 
 **This invalidates Task 4's own foundational design premise** ("two
 rollout environments side by side") under both readings (simultaneous or
@@ -524,8 +565,10 @@ already-proven `MultiAssetSpawnerCfg(random_choice=False)` mechanism
 (`FrankaDieLiftJointMixedEnvCfg`'s own precedent), which needs
 `object_shape_class_onehot`/`object_geometry_descriptor` extended from a
 single per-cfg-constant broadcast to a per-env-aware read of the actually-
-spawned asset. Full evidence and reasoning: `BACKLOG.md`'s "Task 5 ...
-BLOCKED" entry and `ROADMAP.md`'s matching entry.
+spawned asset. Flagged to the controller rather than picked
+unilaterally, including this task's own (non-binding) lean toward
+option (b) — full evidence and reasoning: `BACKLOG.md`'s "Task 5 ...
+BLOCKED" entry.
 
 **State:** no distilled checkpoint exists. Committed: the
 `franka_checkpoint_review.py` `load_optimizer=False` fix (needed for the
@@ -556,11 +599,14 @@ state has nothing to do with PPO's) — the exact same failure class
 already fixed in `franka_checkpoint_review.py` during Task 5. Fixed with
 a new `--policy_only_checkpoint` flag (`load_optimizer=False`), leaving
 the default `True` behavior unchanged for genuine same-run
-SPOT-preemption resumes. Verified via a bounded 3-iteration smoke test on
-the desktop before the real dispatch. A third gap
+SPOT-preemption resumes. Verified via a bounded 3-iteration smoke test
+(`--num_envs 64 --max_iterations 1502`) on the desktop before the real
+dispatch — loaded cleanly, ran 3 iterations, no crash. Both fixes
+committed (`f836dae`) and pushed before the real run. A third gap
 (`scripts/sync_run_to_gcs.py`'s `VARIANT_MAP` missing the new variant's
-log-dir mapping) was found and fixed in the same pass while syncing the
-result.
+log-dir mapping, `train_franka_jointdied12d20mixed` ->
+`joint-die-d12-d20-mixed`) was found and fixed in the same pass
+(`a55d2c8`) while syncing the result.
 
 **Budget: 1500 PPO iterations** (this project's established from-scratch
 convention, used directly per this task's own default-when-unsure
@@ -603,10 +649,11 @@ Eval artifacts:
 `gs://rl-manipulation-hks-runs/unified-multi-die-specialists/eval-artifacts/finetuned-d12-d20/{joint-die-big,joint-die-d12-big}/`.
 Cost: $0 (desktop-only). Full teardown verified (`nvidia-smi`, `tmux ls`,
 `systemd-inhibit --list`, `check_gpu_availability.sh` all clear/AVAILABLE
-after the run).
-
-Full numeric detail and code-change commits: `ROADMAP.md`'s "Task 6 + FINAL
-VERDICT" entry (search "matches each frozen specialist").
+after the run). Code changes: `scripts/train_franka.py` (`--variant
+joint-die-d12-d20-mixed`, `--policy_only_checkpoint`, commit `f836dae`),
+`scripts/sync_run_to_gcs.py` (`VARIANT_MAP` fix, commit `a55d2c8`). No
+env-cfg or observation-schema changes needed — Task 5 already built
+everything Task 6 needed to consume.
 
 ### FINAL VERDICT for the whole experiment (Tasks 0-6)
 
@@ -633,9 +680,11 @@ commanded d12 or d20 die, indistinguishable in closed-loop discovery from
 two separate single-shape specialists, is real and checkpointed. d8/d10
 remain open, unsolved shapes for a future experiment, with a documented,
 evidence-backed reason to start from (real shape barrier, not a fixable
-pipeline defect) rather than re-litigating from scratch. Total cost: ≈$5.87
-of the original $15 cloud-spend cap. No further work planned under this
-experiment.
+pipeline defect) rather than re-litigating from scratch. **Total cost:
+≈$5.87 of the original $15 cloud-spend cap** (Tasks 2+3+3.5 ≈$4.96, the
+d20-big-geom gate task +$0.91, Task 5 +$0 desktop-only, Task 6 +$0
+desktop-only) — roughly 61% under budget. No further work planned under
+this experiment.
 
 **Update (2026-07-20):** the demonstration-augmented warm-start follow-on
 tested here as an open question was run and falsified for both shapes —

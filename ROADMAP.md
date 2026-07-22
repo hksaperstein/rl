@@ -37,8 +37,9 @@ Roughly in the order they'd likely be picked up:
 3. **Revisit unified-multi-die-specialist-distillation's Task 4 scope**
    to include d8/d10 alongside d12/d20, now that both are proven
    grasp-discoverable via demo-warmstart — an open decision for
-   Principal (`BACKLOG.md`'s "Task 4 scope decision" entry flags this
-   explicitly; not yet made).
+   Principal (the original scope-narrowing rationale is documented in
+   `kb/wiki/experiments/unified-multi-die-specialist-distillation.md`'s
+   Task 4 section; not yet revisited).
 4. **AR4 gripper mimic-vs-actuator dynamics conflict** — test whether
    disabling the `PhysxMimicJointAPI` mimic constraint (pure independent
    per-joint actuation, software-mirrored) resolves the jaw2 hard-limit

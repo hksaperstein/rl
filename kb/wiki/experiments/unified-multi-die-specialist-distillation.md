@@ -202,8 +202,8 @@ This meets the project's own operational "sustained lift" bar even
 though it doesn't carry to end-of-episode like the other 7.
 
 **Does not change which shapes show discovery** — d8/d10 remain fully
-null (`BACKLOG.md`'s "Task 4 scope decision" to defer them is
-unaffected at the shape-inclusion level), d12 remains the only partial
+null (the decision below to defer them from Task 4 is unaffected at the
+shape-inclusion level), d12 remains the only partial
 (still 1/3 seeds). What changes is d12's own specialist-quality
 characterization: no longer a "weaker echo" of d20's pattern, now a
 full-completeness match — relevant since Task 4 already earmarks this
@@ -218,8 +218,8 @@ itself).
 
 ## d20-big-geom gate task: undiluted-48mm d20 retrain — complete 2026-07-19, result STRONGER than expected
 
-Closed Task 3's dilution ambiguity for d20 specifically (see BACKLOG.md's
-"Task 4 scope decision" entry, 2026-07-19): retrained d20 at a single
+Closed Task 3's dilution ambiguity for d20 specifically (see the Task 4
+scope decision below, 2026-07-19): retrained d20 at a single
 undiluted 48mm population WITH Task 1's geometry-descriptor conditioning,
 3 seeds (42/123/7), 1500 iterations, on GCP cloud (SPOT, zero
 preemptions). **No new env cfg class was needed** — direct source read
@@ -317,14 +317,14 @@ experiment has been scoped or run yet — this is research only.
 
 Task 4 (distillation) status per this experiment's own gate discipline:
 d8 and d10 remain fully null at 48mm parity (2/4 candidate shapes,
-deferred per BACKLOG.md's "Task 4 scope decision", not blocking), d12
+deferred per the Task 4 scope decision below, not blocking), d12
 shows one partial positive (1/3 seeds, now full 8/8-within-seed after
 the re-audit correction above), **d20 is now resolved (2/3 seeds, full
 8/8 each)** — the d20-big-geom gate task above closed the last blocker.
 Task 4 proceeds with d12 (seed123, 8/8 — corrected from an originally-
 reported 4/8) and d20 (seed123 or seed7, both 8/8) as its two frozen
-specialists, per BACKLOG.md's "Task 4 scope decision" entry — an explicit
-controller-level decision already made there, not re-litigated here.
+specialists, per the Task 4 scope decision below — an explicit
+controller-level decision already made, not re-litigated here.
 
 **Why d8/d10 fail — dedicated research complete (2026-07-19):**
 `docs/superpowers/specs/research/2026-07-19-d8-d10-grasp-discoverability-literature.md`

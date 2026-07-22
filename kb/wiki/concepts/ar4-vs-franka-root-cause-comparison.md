@@ -246,6 +246,160 @@ for the full detail on all of the above. Comparing Franka's own shipped
 asset's collision approximation remains unexamined either way (not
 inspectable from the Pi).
 
+## H_ar4_relative transfer test (2026-07-21 follow-up): FALSIFIED — Franka's own confirmed relative-joint fix does not transfer to AR4
+
+**What this tests.** The `ar4-franka-fixes-transfer` plan
+(`docs/superpowers/plans/2026-07-21-ar4-franka-fixes-transfer-implementation.md`,
+spec: `docs/superpowers/specs/2026-07-21-ar4-franka-fixes-transfer-design.md`)
+asked whether Franka's own CONFIRMED `RelativeJointPositionActionCfg` fix
+(`kb/wiki/experiments/d8-antipodal-grasp-quality.md`'s H_relative section
+— a genuinely joint-space, no-IK action-term change that resolved
+Franka/d8's exact-zero-contact-forever collapse, 3/3 seeds) transfers to
+AR4's own analogous historical null, [[experiment-26-gripper-reintroduction]]
+(`cube_reached_goal` exact `0.0000`, "the antipodal grasp gate is
+apparently never satisfied"). This is a direct, targeted test of whether
+that section's own three named pivot hypotheses (jaw-mimic constraint,
+jaw collision geometry, classical-IK positioning miss) — rather than a
+joint-space-action-learnability problem of the kind that explained
+Franka's — are the real explanation for AR4's problem, now that both real
+gripper asset defects this article documents above (the jaw2 mimic-limit
+mismatch, `64ab5cc`, and the jaw2 command-sign bug, `928af41`) are fixed.
+
+**Design:** Condition A2 = `Ar4PickPlaceGraspGoalEnvCfg` (Experiment 26)
+unmodified, freshly retrained on the now-fixed asset (not assumed from the
+historical pre-fix run). Condition B = a new leaf,
+`Ar4PickPlaceGraspGoalRelativeEnvCfg`, identical in every other respect
+but swapping the arm action term for `RelativeJointPositionActionCfg`
+(`scale=0.1`) — Franka's own H_relative recipe, transferred directly. 3
+seeds (42, 123, 7) × 2 conditions × 1500 iterations, 5 measured checkpoints
+(iterations 0/100/300/700/1499) per the plan's own falsification
+protocol.
+
+**Result table (final checkpoint, iter 1499):**
+
+| Condition | Seed | contact_freq | antipodal_freq | ever_lifted | `cube_reached_goal` (across all 1500 iters) |
+|---|---|---|---|---|---|
+| A2 (absolute) | 42  | 0.0000 | 0.0000 | 0.0000 | 0.0 (exact last/max/min) |
+| A2 (absolute) | 123 | 0.0002 | 0.0000 | 0.0000 | 0.0 |
+| A2 (absolute) | 7   | 0.0000 | 0.0000 | 0.0000 | 0.0 |
+| B (relative)  | 42  | 0.0000 | 0.0000 | 0.0000 | 0.0 |
+| B (relative)  | 123 | 0.0000 | 0.0000 | 0.0000 | 0.0 |
+| B (relative)  | 7   | **0.9751** (real bilateral jaw contact forces ~0.17-0.27N, confirmed not a sensor artifact) | 0.0000 | 0.0000 | 0.0 |
+
+`cube_reached_goal` is exact `0.0` as the last, max, AND min value across
+the full 1500-iteration trajectory in all 6 runs — the behavioral bar is
+verified flat-zero for the entire run, not just at the 5 sampled
+checkpoints. Critic divergence (the pre-authorized `clip_actions=5.0`
+contingency, carried over from Franka's own real H_relative precedent)
+did **not** occur in any run (`Loss/value_function` max 0.0055-0.1274
+across all 6 runs, nowhere near Franka's own `181→inf` signature).
+
+**Honest gap in this write-up:** the intermediate-checkpoint (iter
+0/100/300/700) `contact_freq`/`antipodal_freq` values Task 6 measured are
+not reproduced above — only final-checkpoint (iter 1499) values were
+carried forward into this closing task's own handoff, and the raw
+per-checkpoint diagnostic artifacts exist only on the now-torn-down cloud
+instance/GCS sync for this run, not locally. This means this section
+cannot assert the exact *shape* of AR4's own curve the way the three-way
+comparison in `d8-antipodal-grasp-quality.md`'s H_relative section could
+(that comparison showed AR4's Franka-side counterpart reproducing
+task-space's own monotonic-rise shape almost point-for-point). The
+falsification verdict itself does not depend on this gap — the
+pre-registered rule only checks the final-checkpoint bar in ≥2/3 seeds —
+but it is flagged rather than silently smoothed over.
+
+**Verdict: H_ar4_relative is FALSIFIED**, per the pre-registered rule
+(falsified if ≥2/3 Condition-B seeds hit the exact-zero bar). Seeds 42
+and 123 do so cleanly; seed 7 is a genuine, confirmed partial exception
+(real, nonzero contact frequency) but still zero antipodal fraction and
+zero `cube_reached_goal` — real gripper contact, never a real antipodal/
+successful grasp — so it does not prevent falsification at the ≥2/3
+threshold.
+
+**3-signature jaw-mimic classification** (all 6 runs): Signature 1
+(near-zero contact — an exploration/action-space-level failure, the arm
+never seriously approaches/contacts the cube) dominates 5/6 runs: all of
+A2, plus condition-B seeds 42 and 123. Signature 2 (nonzero contact, zero
+antipodal fraction — consistent with this workstream's own found jaw-mimic-
+vs-actuator dynamics conflict: jaw2 stays pinned near its hard limits
+regardless of commanded target, so real contact happens but never in an
+antipodal/graspable configuration) appears cleanly in condition-B seed 7
+only. Signature 3 (contact + antipodal + still no lift) was never
+observed in any run — since antipodal contact essentially never occurs at
+all except in that one case, "contact+antipodal+no lift" has no
+opportunity to apply here.
+
+**Known limitation:** close-up video review was NOT performed for the
+condition-B/seed7 exception — `scripts/graspgoal_closeup_video.py` is
+hardcoded to the absolute-action demo env cfg and would need modification
+to correctly load a relative-action checkpoint. The seed7 finding instead
+rests on raw contact-force/antipodal-angle data cross-checked against the
+literal training-time `antipodal_grasp_bonus` reward function's own math —
+a real limitation of this task's verification depth relative to this
+project's usual video-review standard, not glossed over as equivalent.
+
+**What this means for the three hypotheses above.** Condition A2 (fixed
+asset, absolute joint-space) reproduces the identical all-zero
+`cube_reached_goal` pattern as both the pre-asset-fix Condition A and the
+historical [[experiment-26-gripper-reintroduction]] null — **fixing BOTH
+real gripper asset defects this article documents (Hypothesis 2's
+joint-limit mismatch and the independently-found command-sign bug) did
+NOT, by itself, resolve AR4's grasp-discoverability problem.** Condition
+B's result rules out "AR4's problem is the same joint-space-action-
+learnability issue Franka had" as a sufficient explanation on its own — if
+it were, the identical fix should have produced the identical win, and it
+did not in 2/3 seeds. This pushes the explanation back toward this
+article's own asset-level hypotheses: seed 7's Signature-2 pattern
+(contact without antipodal geometry) is directly consistent with the
+jaw-mimic-vs-actuator dynamics conflict found earlier this same workstream
+(the "Bigger finding" in the UPDATE section above) — jaw2 pinned near its
+hard limits regardless of commanded target would produce exactly this
+shape: real contact, never correctly-shaped antipodal contact. The
+jaw-collision-geometry question (Hypothesis 3, still only "confirmed
+present," not shown to distort contact directions) remains equally
+consistent with, and unruled-out by, this same seed7 pattern. The
+classical-IK positioning miss (Hypothesis 1) is not implicated by this
+result at all, since neither condition here uses IK.
+
+**North Star relevance.** Franka's own H_relative result mattered to
+[CLAUDE.md](../../../CLAUDE.md)'s North Star specifically because it was
+a genuinely joint-space fix (no arm-specific IK/kinematic-chain
+controller) that resolved an analogous collapse — real evidence that the
+"drop in a new arm, training should succeed immediately" bar does not
+hinge on an IK/task-space layer as a hidden prerequisite. Since
+H_ar4_relative is FALSIFIED here, **that evidence does not extend to
+AR4** — the identical fix, transferred to a second, structurally
+different arm, does not reproduce the win. This does not overturn the
+North Star finding on Franka/d8 itself, and it does not positively refute
+the North Star's cross-arm bar either — it means AR4's own problem is
+most likely still explained by asset-specific defects (exactly the
+rationale the original platform pivot gave), not by a general property of
+joint-space action learnability that a second arm would also need to
+overcome. [[experiment-11-taskspace-ik]] — AR4's own only prior positive
+result (a genuine, sustained antipodal contact signal, under task-space/
+IK control) — remains the one condition on this platform where the
+antipodal mechanism has ever fired at all; this plan deliberately did not
+retest that condition, since Experiment 26's absolute-joint null was the
+more direct analogue of Franka's own falsified H_joint condition, and
+retesting IK on AR4 wasn't this plan's question.
+
+**Honest next candidate direction (not started here — AR4 investigation
+is not the active priority while the Franka pivot is underway, per
+CLAUDE.md's "Platform pivot" section).** The fix does not transfer; AR4's
+null is not explained by the same joint-space-action mechanism that
+explained Franka's. The asset-level hypotheses this session already
+surfaced — the jaw-mimic-vs-actuator dynamics conflict and the
+still-unverified jaw collision geometry — and/or the still-unresolved
+classical-IK 17-27mm positioning miss remain the more likely
+explanations, consistent with the original Franka-pivot rationale.
+Concrete next hypothesis, logged to `BACKLOG.md` as flagged-but-deferred,
+not executed here: test jaw-mimic vs. independent-actuator by disabling
+the mimic constraint entirely and re-running Condition B once.
+
+**Cost:** ≈$2.07 cumulative against the plan's $10 cap. Full teardown
+verified. See `ROADMAP.md`'s matching Task 7 entry (2026-07-21) for the
+same synthesis in the project-status ledger.
+
 ## Related concepts
 
 [[reach-grasp-lift-gap]] — this comparison is the direct follow-up
@@ -264,10 +418,23 @@ directions that check reads.
 miss was a property of single-step DLS in standalone scripts, not the
 RL-driven continuous IK action term, is a data point for that article's
 broader action-space history.
+[[experiment-26-gripper-reintroduction]] — the historical AR4 null the
+2026-07-21 H_ar4_relative transfer test above freshly reproduces under
+Condition A2, on the newly-fixed asset.
+[[experiment-11-taskspace-ik]] — AR4's own only prior positive antipodal
+result (task-space/IK control), the reason the H_ar4_relative transfer
+test above deliberately did not retest that condition.
+[[d8-antipodal-grasp-quality]] — the Franka-side H_relative result the
+2026-07-21 transfer test above tests transfer of; that article's own
+"Related" section cross-links back here rather than duplicating this
+article's table.
 
 ## Sources
 
 `docs/superpowers/specs/research/2026-07-20-ar4-vs-franka-root-cause-comparison.md`
 (full citations for the original three hypotheses), `docs/superpowers/specs/research/2026-07-21-ar4-usd-asset-debugging.md`
 (direct USD-level inspection/fixes for Hypotheses 2 and 3, plus the
-Link_5/Link_6 collision fix), `CLAUDE.md` ("Platform pivot" section).
+Link_5/Link_6 collision fix), `CLAUDE.md` ("Platform pivot" section),
+`docs/superpowers/specs/2026-07-21-ar4-franka-fixes-transfer-design.md`
+and `docs/superpowers/plans/2026-07-21-ar4-franka-fixes-transfer-implementation.md`
+(the 2026-07-21 H_ar4_relative transfer test above).

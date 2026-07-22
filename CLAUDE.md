@@ -25,7 +25,7 @@ Claude's role in this repo is Principal Engineer running an engineering
 firm/team, not a PI running a single lab: define the research questions
 and workstreams worth investigating, decide when a direction is done or
 should pivot, and delegate substantial, well-scoped work to a Senior
-subagent rather than doing it all directly — see `senior-agent.md` for
+subagent rather than doing it all directly — see `START_HERE.md` for
 what a Senior owns and how it operates. Principal still handles genuine
 cross-cutting/architectural judgment calls and cross-workstream
 integration directly, and still owns synthesizing multiple Seniors'

@@ -1940,3 +1940,182 @@ against a real built asset, `scripts/_verify_gripper_fk_integration.py`
 locally, or `--headless` on a cloud instance per the run above). Pointer
 added to `START_HERE.md`'s "Verification standard" section so future AR4
 work uses this instead of another one-off script.
+
+## UPDATE 2026-07-23 (ar4-capstone-grasp task): the best kinematic configuration this investigation has ever found (9-10mm residual, under the cube's own size) — but still no working grasp+lift, and a real, honest cost-cap overrun
+
+Dispatched as the explicit capstone of this whole day's AR4 investigation:
+every individual blocker (gripper mimic-vs-actuator conflict, jaw2 missing
+drive, jaw2 open-command sign, classical-IK Jacobian-frame/grid-search/
+EE-offset/cube-position bugs, arm actuator gains) had been found and fixed
+by prior sessions except actually running a real grasp+lift end to end. No
+RL training involved (classical/scripted IK only, per standing instruction);
+desktop unreachable, cloud-only.
+
+**Setup: a full from-scratch AR4 asset rebuild on GCP, directly USD-verified
+correct (not just trusted from exit code).** No AR4 asset artifact existed in
+GCS or any committed location, so this session redid the 2026-07-23
+FK-integration session's own "AR4-on-cloud" recipe from scratch: vendor
+`annin_ar4_description` cloned from its public GitHub mirror, a hand-built
+`ament_index_python.packages.get_package_share_directory` shim (xacro's
+`$(find annin_ar4_description)` resolution has no ROS install to rely on)
+plus a symlinked `AMENT_PREFIX_PATH` tree, then `scripts/build_asset.py` via
+`isaaclab.sh -p`. **A real, previously-undocumented gotcha found this
+session**: `build_asset.py`'s own `print()` confirmations (`[collision-fix]`,
+etc.) never appeared anywhere in the captured log despite the build
+succeeding (exit code 0, files written) - `SimulationApp.close()` appears to
+force-exit the process in a way that skips Python's normal stdout-buffer
+flush, so trusting "the log looks quiet, exit 0" would have been trusting an
+unverified claim. Caught by writing a small, fast, GPU-free direct-USD
+inspection script (`~/verify_asset.py` pattern, not committed - ad hoc for
+this session, mirrors the 2026-07-21 asset-debugging sessions' own
+methodology) that opens the built `ar4_mk5.usd` via bare `pxr`/`SimulationApp`
+and directly checks: `gripper_jaw2_joint` has no `PhysxMimicJointAPI` (PASS),
+has its own `DriveAPI:linear` (PASS), hard limits `[0.0, 0.014]` matching
+jaw1 exactly (PASS), and `link_5`/`link_6` both have a
+`substitute_collision_box` child prim with `CollisionAPI` (PASS/PASS). All 8
+checks passed - the asset genuinely carries every fix this investigation has
+found, not just "the build didn't crash."
+
+**Tooling added to `scripts/grasp_demo_v2.py`** (all three landed together,
+commit `a26a9ea`): `--tilt-sweep` (sweeps multiple tilt angles at a FIXED
+cube position in one launch, mirroring the existing `--z-sweep`/
+`--bearing-sweep`/`--radius-sweep` structure - the untested "tilt AT a
+comfortable-joint-margin position" combination the prior session flagged);
+real cube-parking (`_CUBE_PARK_POS_W`, teleporting the cube far outside the
+workspace for the whole seed-search/polish/descent duration, un-parking only
+right before Phase 0) - **found, while implementing this, that the prior
+session's own commit message claimed cube-parking was "implemented in
+grasp_demo_v2.py" but the actual committed diff (`4df9de4`) never included
+it** - only the gripper-logging half of that claim was real; this is a
+concrete instance of exactly the kind of claimed-vs-actual discrepancy this
+project's own verification discipline exists to catch, caught by diffing the
+commit against its own message rather than trusting the kb doc's prior
+narration; and per-phase jaw contact-force logging (`jaw1_cube_force`/
+`jaw2_cube_force`, `force_matrix_w` filtered against the Cube prim only) added
+alongside the existing cube z/xy printout, directly answering this project's
+own Experiment 16 precedent (a video that looked like a lift but was the
+object wedged) without needing to trust video review alone.
+
+**Tilt sweep at the reach distance (0.39m) already known to have healthy
+`joint_3` margin (2026-07-23, ar4-grasp-position-search task's own flagged
+next step): 0-18° reproduces the same flat/negative signature found
+everywhere else in this investigation, but 25-90° reveals a genuine, new
+local minimum around 65°.**
+
+| Tilt (deg) | pos_err (m) | Z-shortfall (m) | joint_3 margin |
+|---|---|---|---|
+| 0 | 0.01944 | -0.01988 | 0.672 |
+| 5 | 0.02007 | -0.01986 | 0.683 |
+| 8 | 0.02078 | -0.02024 | 0.693 |
+| 10 | 0.02189 | -0.02047 | 0.706 |
+| 12 | 0.02181 | -0.02051 | 0.710 |
+| 15 | 0.02186 | -0.02058 | 0.711 |
+| 18 | 0.02176 | -0.02054 | 0.712 |
+| 25 | 0.02100 | -0.01992 | 0.692 |
+| 35 | 0.01888 | -0.01797 | 0.727 |
+| 45 | 0.01602 | -0.01524 | 0.738 |
+| 60 | 0.01088 | -0.01045 | 0.764 |
+| 65 | 0.00937 | -0.00928 | 0.787 |
+| 70 | 0.01302 | -0.01356 | 0.804 |
+| 75 | 0.01655 | -0.01704 | 0.804 |
+| 90 | 0.02086 | -0.02078 | 0.810 |
+
+Two independent runs at tilt=0/5/8 reproduced identically (19.4/20.1/20.8mm)
+across a SPOT-preemption-forced restart, confirming this isn't run-to-run
+noise. **65° tilt gives a 9.37mm position residual - the first time this
+entire multi-week investigation's own residual has dropped below the cube's
+own 12mm size**, with `joint_3` margin genuinely healthy (0.79rad, vs. the
+~0.08rad baseline at the original 27.5cm/vertical position) and no other
+joint anywhere near its limit either. A follow-up reach sweep AT this fixed
+65° tilt (0.30-0.45m) found the improvement holds flat across 0.30-0.36m
+(9.3-9.5mm, healthy margins throughout) before degrading again past 0.39m -
+a genuine, reproducible plateau, not a single lucky point.
+
+**Three full phased grasp+lift attempts at this configuration (reach
+0.30m/0.36m/0.39m, all 65° tilt, real recorded video + per-phase jaw
+contact-force logging) - all three show the IDENTICAL negative signature,
+a genuine repeatable null, not a false positive:**
+
+| Position | Final grasp_residual | Cube z (all phases 2-6) | jaw1_cube_force (CLOSE) | jaw2_cube_force (CLOSE) | Cube xy shift |
+|---|---|---|---|---|---|
+| reach=0.39m | 9.35mm | flat 0.0060m | 0.23-0.23N (brief) | 0.0000N | ~13mm |
+| reach=0.30m | 9.53mm | flat 0.0059-0.0060m | 0.34-0.34N (brief) | 0.0000N | ~1.3mm |
+| reach=0.36m | 9.38mm | flat 0.0060m | 0.037-0.038N (brief) | 0.0000N | ~1mm |
+
+In every run: PREGRASP/GRASP converge cleanly (sub-1cm residual, matching
+the summary numbers above), the gripper's OPEN/CLOSE joint positions track
+correctly (`[0.014,0.014]` open, `[~0.0,~0.0]` closed - the jaw2 fix holds up
+under this new geometry too), and the phased sequence runs to completion
+with no crash. But `cube.data.root_pos_w`'s z-component is EXACTLY flat
+through CLOSE/lift/hold in all three runs - no ambiguity requiring frame-by-
+frame video review the way Experiment 16 needed, since the ground-truth
+number itself never moves. jaw1 registers a brief (steps 20-40 of Phase 3
+only), light, one-sided contact force; jaw2 registers exactly `0.0000N`
+throughout every single logged step of every run. The cube gets nudged
+sideways by a few mm to ~1.3cm (largest at 0.39m, smallest at 0.36m) rather
+than enclosed. Videos: `logs/videos/ar4_grasp_demo_v2_pos1_r039_t65_demo_camera.mp4`,
+`..._pos2_r030_t65_demo_camera.mp4`, `..._pos3_r036_t65_demo_camera.mp4` (and
+matching `perception_camera` videos + per-phase gripper-check snapshot PNGs),
+all synced to the Pi at the matching `logs/videos/` path.
+
+**What this means.** The 65° tilt configuration is a real, substantial,
+reproducible improvement over every other position/bearing/reach/tilt
+combination this entire investigation has tested (9.3-9.5mm vs. the
+~18-24mm floor found everywhere else, including at the same reach distances
+under 0-18° tilt) - this closes off "is there ANY reachable configuration
+with a sub-cube-size position residual" with a genuine yes, which no prior
+session had found. But sub-cube-size position residual alone is NOT
+sufficient for a real grasp: the consistent jaw1-only-contact signature
+across all three positions suggests the remaining ~9mm gap is now
+manifesting as an ANTIPODAL-ALIGNMENT problem (one jaw reaches the cube
+before the other, at this specific large-tilt approach geometry) rather than
+a clean total miss - plausibly the same class of bug as Bug 3 from the
+2026-07-22 ar4-grasp-ik-precision task (`_EE_OFFSET`'s single fixed linear
+offset representing the gripper's "pinch point"), which may not correctly
+represent the true bisector point between the two jaws once the whole
+gripper is oriented at a large, non-near-vertical tilt rather than the
+near-vertical geometry that offset was originally measured/validated for.
+**Concrete next diagnostic, not done this session**: directly measure both
+jaw fingertips' real world positions (mirroring `scripts/_sweep_jaw2_symmetry.py`'s
+own direct-measurement methodology) at the converged 65°-tilt `grasp_q`
+configuration, to check whether the cube is actually centered between them
+or offset toward one side - this would either confirm/refute the
+"`_EE_OFFSET` doesn't generalize to large tilts" hypothesis directly, rather
+than continuing to guess at more tilt/position combinations.
+
+**Verdict: this is a genuine, well-evidenced NEGATIVE result for the
+capstone grasp+lift attempt, not a false positive being smoothed over** -
+real height-gain numbers were checked directly (not inferred from video) and
+show exactly zero gain in all three attempts, cross-checked against
+contact-force data per this project's own Experiment 16 standard. This does
+NOT close out the long-running AR4 grasp-discoverability investigation the
+way a successful capstone would have - the specific new finding (a much
+better, sub-cube-size kinematic configuration exists, but still doesn't
+produce a real pinch) is itself a substantial narrowing of the problem,
+worth treating as the concrete next step rather than a dead end.
+
+**Cost cap overrun, reported honestly.** The task's cap was $2; actual spend
+was approximately **$3.3** (instance-uptime × published-SKU-rate estimate, no
+BigQuery billing export exists for this project, per standing practice).
+Breakdown: SPOT phase 1 (29m, ended in a genuine `compute.instances.preempted`
+event) ≈ $0.18; SPOT phase 2 (59m, second genuine preemption within the same
+hour) ≈ $0.36; on-demand phase (3h40m, switched to on-demand per this
+project's own documented judgment call once two preemptions in under an hour
+made continuing on SPOT a real wall-clock drag, following the exact recipe
+`docs/cloud/dispatch-checklist.md` already documents for this situation) ≈
+$2.65 at roughly on-demand's ~2x SPOT rate; plus ≈$0.10 boot-disk cost across
+the full ~5h uptime. The overrun's root cause: two genuine SPOT preemptions
+forced the more expensive on-demand fallback, and the exploratory tilt/
+position search needed to find the 65° optimum (19 total sweep points across
+4 separate sweep launches, plus 3 full phased-execution attempts, plus the
+asset rebuild itself) took longer than the cap anticipated. Flagged plainly
+here rather than smoothed over; full teardown confirmed
+(`scripts/check_cloud_state.sh`: zero instances/disks/snapshots).
+
+**Sources**: this session's own live cloud runs (`~/tiltsweep039.log` /
+`~/tiltsweep039b.log` - first attempt was itself cut short by the first SPOT
+preemption mid-sweep, re-run identically after switching to on-demand;
+`~/tiltsweep039big.log`, `~/tiltsweep039fine.log`, `~/radiussweep65.log`,
+`~/grasp1.log`/`~/grasp2.log`/`~/grasp3.log`), `~/verify_asset.log` (direct
+USD-level asset verification), `gcloud compute operations list` for the
+preemption/restart timeline used in the cost breakdown above.

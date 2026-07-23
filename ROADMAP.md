@@ -251,48 +251,70 @@ Roughly in the order they'd likely be picked up:
    `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s 2026-07-23
    UPDATE.
 
-   **Reach-distance sweep + a major NEW gripper-jaw bug found, done 2026-07-23
-   (later, ar4-grasp-position-search task): repositioning ruled out as a fix
-   for the Z-shortfall, AND the gripper's "OPEN" command was found to
-   collapse both jaws onto the IDENTICAL point instead of separating them —
-   confirmed but NOT YET FIXED. Capstone grasp+lift validation still
-   outstanding.** A new `--radius-sweep` swept reach distance 0.30-0.42m at
-   bearing=0: `joint_3`'s own margin becomes genuinely healthy at farther
-   reach (0.28-0.88rad, vs. ~0.08rad at the 27.5cm default), but **the
-   ~18mm Z-shortfall does not shrink at all across this whole range** —
-   at some radii a different joint (`joint_4`) becomes newly pinned
-   instead, and at others (0.30m, 0.39-0.42m) NO joint is near its limit
-   yet the shortfall persists unchanged, confirming this is a genuine
-   multi-joint reachability-envelope property of a fully-vertical grasp at
-   this height, not fixable by repositioning within the ~0.30-0.42m/±60°
-   region tested so far (bearing-independence already established the
-   prior session). Separately, direct empirical measurement
-   (`scripts/_sweep_jaw2_symmetry.py` — hold jaw1 open, sweep jaw2's
-   commanded value, read back both jaws' REAL world positions) found the
-   gripper's current "OPEN" command (`gripper_jaw2_joint` commanded to
-   `-GRIPPER_OPEN_POS`, mirroring jaw1's `+GRIPPER_OPEN_POS` under the
-   2026-07-21 `gearing=-1` convention) makes jaw2 land at the EXACT SAME
-   world point as jaw1 (measured separation `0.00001m`) instead of
-   spreading apart — the true mirror position is actually
-   `+GRIPPER_OPEN_POS` (the SAME signed value as jaw1), confirmed by a
-   clean, monotonic 9-point sweep. **This means the gripper has likely
-   never actually opened into a pincer shape in any AR4 script/task using
-   the shared `tasks/ar4/robot_cfg.py` constants** — a probable
-   same-day, independent, additive contributor to every grasp failure
-   today, on top of the Z-height reach limit. The fix itself (correcting
-   `GRIPPER_OPEN_COMMAND_EXPR` and `gripper_jaw2_joint`'s USD hard limits)
-   was root-caused and empirically confirmed but **NOT YET IMPLEMENTED** —
-   session stopped here at user request before any fix, and before any
-   phased grasp+lift attempt was run at all. Cube-parking (avoids
-   interpenetration during seed-search) and gripper joint-position logging
-   were added to `scripts/grasp_demo_v2.py` per two live user observations
-   but are also unexercised. **Next steps, in order: (1) fix the jaw2
-   open-command bug and re-verify via the same sweep script; (2) test a
-   moderate tilt at one of the newly-found comfortable-`joint_3`-margin
-   positions (0.39-0.42m), untested combination; (3) only then attempt the
-   real phased grasp+lift validation.** Full detail:
-   `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s 2026-07-23
-   (later, ar4-grasp-position-search task) UPDATE.
+   **Jaw2 open-command sign bug FIXED and video-confirmed (2026-07-23,
+   record-jaw-bug-video task) — real 28mm/0mm pincer open/close now
+   working.** `tasks/ar4/robot_cfg.py`'s `GRIPPER_OPEN_COMMAND_EXPR`
+   now commands `gripper_jaw2_joint` to the SAME signed value as jaw1
+   (was negated); `scripts/build_asset.py` rebuilt with matching
+   corrected hard limits. Live-recorded OPEN→CLOSE→OPEN cycle:
+   0.028m/0.000m/0.028m separation, exactly the intended aperture.
+   `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s
+   2026-07-23 (record-jaw-bug-video task) UPDATE. A standing FK
+   verification framework (`tasks/ar4/fk_verification.py`,
+   `tests/test_ar4_fk_verification.py`) was also built the same day to
+   catch this whole bug class automatically going forward.
+
+   **Capstone classical-IK grasp+lift attempt (2026-07-23, this task):
+   found the best kinematic configuration this entire investigation has
+   ever measured (Z-shortfall 9-10mm, under the cube's own 12mm size,
+   for the first time), but STILL NO WORKING GRASP+LIFT — a genuine,
+   repeatable negative result, cloud cost cap overrun to ~$3.3 against a
+   $2 cap.** Cloud-only (desktop unreachable), full from-scratch AR4
+   asset rebuild on GCP (jaw2 fix + jaw2 drive + link_5/6 collision
+   fixes all directly USD-verified present, not just trusted from exit
+   code — build's own print-based confirmations are lost to stdout
+   buffering when `SimulationApp.close()` force-exits). Two genuine SPOT
+   preemptions in ~90 minutes forced a switch to on-demand pricing
+   (documented judgment call, this project's own precedent) to stop
+   losing wall-clock to restart/rerun cycles — this, combined with the
+   exploratory search needed, is why the cost cap was exceeded; flagged
+   here plainly rather than smoothed over. Added `--tilt-sweep` to
+   `scripts/grasp_demo_v2.py` (mirrors the existing sweep flags) and
+   swept tilt 0-90° at the reach distance (0.39m) already known to have
+   healthy `joint_3` margin: **0-18° reproduces the same flat/negative
+   ~20mm shortfall found on 2026-07-22 (no improvement, confirms this
+   isn't specific to the old tight-margin position) — but 25-90°
+   reveals a genuine, real local minimum at ~65° tilt (Z-shortfall
+   drops smoothly from ~20mm at 25° to 9.3mm at 65°, then rises again
+   toward 90°)**, the first time this whole investigation's residual has
+   ever dropped below the cube's own size. A follow-up reach sweep AT
+   this 65° tilt found the improvement holds across 0.30-0.36m reach
+   (~9.3-9.5mm, healthy joint margins throughout) before degrading past
+   0.39m. **Three full phased grasp+lift attempts at this configuration
+   (reach 0.30/0.36/0.39m, all 65° tilt, real video + per-phase jaw
+   contact-force logging), all show the identical negative signature:
+   cube z stays EXACTLY at its 0.0060m resting height through every
+   phase (no ambiguity requiring video review - the ground-truth number
+   itself is flat), jaw1 registers a brief light one-sided contact force
+   (0.03-0.34N) while jaw2 registers exactly 0.0000N throughout, and the
+   cube gets nudged a few mm sideways rather than enclosed.** Videos
+   synced to the Pi (`logs/videos/ar4_grasp_demo_v2_pos{1,2,3}_r0*_t65*.mp4`).
+   Cube-parking and gripper joint-position logging (claimed committed on
+   2026-07-23 but the diff never actually included cube-parking - a
+   real doc/code discrepancy found and fixed this session) are now both
+   genuinely implemented and exercised live for the first time.
+   **Next concrete diagnostic** (not done this session, flagged for
+   whoever resumes): the consistent jaw1-only-contact signature at the
+   65° optimum suggests the remaining ~9mm gap manifests as one jaw
+   reaching the cube before the other at this specific tilt geometry
+   (plausibly the same insufficient-approach-depth problem as before,
+   now showing up as asymmetric jaw height rather than a clean miss) -
+   worth checking whether `_EE_OFFSET`'s single fixed offset still
+   correctly represents the true bisector point between the two jaws at
+   a 65°-tilted (not near-vertical) approach, the same class of bug
+   Bug 3 (2026-07-22) found for the untitled/near-vertical case. Full
+   detail: `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s
+   2026-07-23 (ar4-capstone-grasp task) UPDATE.
 
 See `BACKLOG.md` for further-out candidates not yet on this list.
 

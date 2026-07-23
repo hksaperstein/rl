@@ -185,6 +185,25 @@ parser.add_argument(
     "--bearing-sweep-radius", type=float, default=0.275,
     help="Reach radius (meters, world-frame distance from the cube to the robot base) used by --bearing-sweep. Defaults to 0.275, the scene's own default cube distance (matches the (0.0, 0.275) default cube position at bearing=0), a distance already confirmed reachable at the default bearing.",
 )
+# 2026-07-23 (ar4-grasp-position-search task): the prior session's bearing
+# sweep held reach radius FIXED at 0.275m and swept angle only, finding a
+# bearing-independent ~19mm Z-shortfall. That same session's earlier
+# (separate, one-shot, non-sweep) 3-point reach-distance test found the
+# shortfall SHRINKS as reach grows (20cm: 4.6cm worse: 27.5cm: 2.8cm;
+# 32cm: 2.0cm, no single joint pinned) but never tested past 32cm or
+# cross-referenced joint_3's own live margin (only the z-sweep/bearing-sweep
+# machinery logs that) at any reach beyond the scene default. This sweep
+# closes that gap directly: fixed bearing (straight-ahead, world +Y, matching
+# the scene's own default direction), varying reach radius, at the TRUE
+# --grasp-height (0.009 default) - looking for where joint_3's margin
+# becomes clearly healthy (well above the ~0.08-0.13rad range already seen
+# at 20-32cm), not just numerically less bad. Mirrors --bearing-sweep's own
+# structure/logging exactly (same per-point seed-search + PREGRASP polish +
+# incremental descent), just varying radius instead of angle.
+parser.add_argument(
+    "--radius-sweep", type=float, nargs="+", default=None,
+    help="Sweep multiple cube REACH RADII (meters, world-frame distance from the cube to the robot base) at a FIXED bearing (0 degrees = straight-ahead, world +Y - the scene's own default approach direction), at --grasp-height (default 0.009, the true grasp point). For each radius, teleports the cube to (0, radius) and runs the full seed-search + PREGRASP polish + incremental descent, logging the same residual/per-axis/joint-margin data as --z-sweep/--bearing-sweep. Added after the z-envelope/bearing-sweep investigation only tested reach distances up to 32cm (already shown to have a smaller shortfall than the 27.5cm default) - this sweeps a wider range to find where joint_3's own margin becomes clearly healthy at the true grasp height, not just less-bad. Overrides/ignores --cube-xy when set. Exits after the sweep.",
+)
 # 2026-07-22/23 (ar4-grasp-deployability-check task, coordinator-directed):
 # `_find_best_seed` teleports the robot (via write_joint_position_to_sim)
 # through several candidate configs and picks the best-scoring one BEFORE
@@ -262,7 +281,7 @@ from isaaclab.utils.math import (  # noqa: E402
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # noqa: E402
 
 from tasks.ar4.grasp_verify_env_cfg import Ar4GraspVerifyEnvCfg  # noqa: E402
-from tasks.ar4.robot_cfg import ARM_JOINT_NAMES  # noqa: E402
+from tasks.ar4.robot_cfg import ARM_JOINT_NAMES, GRIPPER_JOINT_NAMES  # noqa: E402
 
 LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs")
 _video_suffix = f"_{args_cli.video_suffix}" if args_cli.video_suffix else ""
@@ -1009,6 +1028,27 @@ def main() -> None:
     ik_jacobi_idx = robot_entity_cfg.body_ids[0] - 1 if robot.is_fixed_base else robot_entity_cfg.body_ids[0]
     num_arm_joints = len(ARM_JOINT_NAMES)
 
+    # 2026-07-23 (coordinator-directed, mid-task correction): the prior
+    # session's "gripper confirmed OPEN throughout" claim was a SOURCE-CODE
+    # check of the COMMANDED action tensor (GRIPPER_OPEN=1.0 fed into
+    # BinaryJointPositionAction) - not a live read of the gripper's ACTUAL
+    # physical joint position. Given this whole investigation's repeated
+    # history of commanded-vs-actual divergence bugs for this exact gripper
+    # (missing jaw2 physics drive, an inverted mimic sign, jaw-mimic-limit
+    # conflicts - all found and fixed earlier in this same investigation),
+    # a direct visual observation of a live run (gripper appeared CLOSED
+    # throughout, not open during descent as commanded) means this needs its
+    # own independent, physical-joint-position confirmation, not another
+    # commanded-action-tensor argument. Resolved via robot.find_joints, the
+    # same mechanism BinaryJointPositionAction itself uses internally, so
+    # this reads the identical joints the action term drives.
+    gripper_joint_ids, gripper_joint_names_found = robot.find_joints(GRIPPER_JOINT_NAMES)
+    print(f"[INFO] Gripper joint ids resolved: {gripper_joint_names_found} -> {gripper_joint_ids}")
+
+    def _print_gripper_state(label: str) -> None:
+        live_gripper_q = robot.data.joint_pos[0, gripper_joint_ids].tolist()
+        print(f"  [GRIPPER-CHECK] {label}: actual joint_pos {gripper_joint_names_found}={['%.5f' % v for v in live_gripper_q]}")
+
     joint_pos_limits = robot.data.joint_pos_limits[:, robot_entity_cfg.joint_ids]
     print(f"[INFO] Arm joint pos limits (lo,hi per joint): {joint_pos_limits[0].tolist()}")
 
@@ -1084,6 +1124,79 @@ def main() -> None:
         # KNOWN_GOOD_PREGRASP_Q as an extra seed candidate.
         KNOWN_GOOD_GRASP_Q = [-0.014429761096835136, 1.240863561630249, 0.3401874601840973, -0.08906537294387817, 1.1987247467041016, 0.0052983760833740234]
         KNOWN_GOOD_PREGRASP_Q = [0.00014747596287634224, 0.9648232460021973, 0.9025915265083313, -0.0006890640361234546, -0.6352600455284119, 0.008003178983926773]
+
+        # 2026-07-23 (ar4-grasp-position-search task): --radius-sweep, same
+        # supersede-the-normal-pipeline pattern as --bearing-sweep below (own
+        # per-point cube teleport + seed-search + PREGRASP polish + descent),
+        # checked first since it's cheap to check and mutually exclusive with
+        # --bearing-sweep in practice (both exit before reaching the rest of
+        # main()).
+        if args_cli.radius_sweep is not None:
+            grasp_h = GRASP_AT_HEIGHT
+            print(
+                f"\n[RADIUS-SWEEP] bearing=0deg (straight-ahead) grasp_height={grasp_h}m "
+                f"radii(m)={args_cli.radius_sweep}"
+            )
+            for radius in args_cli.radius_sweep:
+                bx, by = 0.0, radius
+                override_z = cube.data.root_pos_w[0, 2].item()
+                override_pos = torch.tensor([[bx, by, override_z]], device=env.device)
+                override_quat = cube.data.root_quat_w[0:1].clone()
+                cube.write_root_pose_to_sim(
+                    torch.cat([override_pos, override_quat], dim=-1), env_ids=torch.tensor([0], device=env.device)
+                )
+                cube.write_root_velocity_to_sim(torch.zeros((1, 6), device=env.device), env_ids=torch.tensor([0], device=env.device))
+
+                cube_pos_w_i = cube.data.root_pos_w[0:1].clone()
+                cube_pos_b_i, _ = subtract_frame_transforms(root_pos_w, root_quat_w, cube_pos_w_i)
+                bearing_i = math.atan2(cube_pos_b_i[0, 1].item(), cube_pos_b_i[0, 0].item())
+                seed_j1_i = -(bearing_i - CALIBRATION_C)
+
+                pregrasp_pos_b_i = cube_pos_b_i.clone()
+                pregrasp_pos_b_i[:, 2] = grasp_h + PREGRASP_HOVER
+                grasp_pos_b_i = cube_pos_b_i.clone()
+                grasp_pos_b_i[:, 2] = grasp_h
+
+                seed_q_i, _ = _find_best_seed(
+                    env, robot, robot_entity_cfg, num_arm_joints, pregrasp_pos_b_i, target_quat_b, seed_j1_i,
+                    extra_full_seeds=[KNOWN_GOOD_PREGRASP_Q],
+                )
+                pregrasp_q_i, _, _ = polish_from_seed(
+                    env, ik_controller, robot_entity_cfg, ik_jacobi_idx, pregrasp_pos_b_i, target_quat_b, seed_q_i,
+                    num_arm_joints, joint_pos_limits,
+                )
+
+                _settle_at(env, robot, robot_entity_cfg, num_arm_joints, pregrasp_q_i, SEED_SETTLE_STEPS)
+                cur_q_i = pregrasp_q_i
+                z_start_i = grasp_h + PREGRASP_HOVER
+                last_target_i = None
+                pos_res_i = rot_res_i = None
+                for sub_idx in range(1, args_cli.num_descent_steps + 1):
+                    sub_z = z_start_i + (grasp_h - z_start_i) * sub_idx / args_cli.num_descent_steps
+                    sub_target_i = grasp_pos_b_i.clone()
+                    sub_target_i[:, 2] = sub_z
+                    last_target_i = sub_target_i
+                    cur_q_i, pos_res_i, rot_res_i = polish_from_seed(
+                        env, ik_controller, robot_entity_cfg, ik_jacobi_idx, sub_target_i, target_quat_b, cur_q_i,
+                        num_arm_joints, joint_pos_limits,
+                        max_steps=DESCENT_SUBSTEP_MAX_STEPS, stagnation_break_steps=DESCENT_SUBSTEP_STAGNATION_STEPS,
+                    )
+                residual_vec_i = _measure_dist_vec(robot, robot_entity_cfg, last_target_i)
+                live_q_i = robot.data.joint_pos[0, robot_entity_cfg.joint_ids].tolist()
+                lo_i = joint_pos_limits[0, :, 0].tolist()
+                hi_i = joint_pos_limits[0, :, 1].tolist()
+                margins_i = [min(q - l, h - q) for q, l, h in zip(live_q_i, lo_i, hi_i)]
+                print(
+                    f"[RADIUS-SWEEP] radius={radius:.4f} cube_xy_w=({bx:.4f},{by:.4f}) "
+                    f"pos_err={pos_res_i:.5f}m rot_err={rot_res_i:.4f}rad "
+                    f"xyz_residual={['%.5f' % v for v in residual_vec_i]} "
+                    f"q={['%.4f' % v for v in live_q_i]} margins={['%.4f' % v for v in margins_i]}"
+                )
+            print("[RADIUS-SWEEP] done - exiting before one-shot GRASP solve / phased execution.")
+            video_writer.close()
+            demo_video_writer.close()
+            env.close()
+            return
 
         # 2026-07-22 (ar4-grasp-z-envelope task): --bearing-sweep supersedes
         # the normal single-position pipeline entirely (it does its own
@@ -1442,6 +1555,16 @@ def main() -> None:
             (150, HOME_Q, GRIPPER_OPEN),
         ]
 
+        # 2026-07-23 (coordinator-directed, mid-task correction): explicit
+        # per-phase snapshot directory - a cropped, zoomed still frame of the
+        # ACTUAL demo_camera view saved at each phase's midpoint, so the
+        # gripper's real visual state can be directly cross-checked against
+        # the numeric _print_gripper_state readout at the SAME instant,
+        # instead of guessing which frame index of the full video corresponds
+        # to which phase after the fact.
+        snapshot_dir = os.path.join(LOG_DIR, "videos", f"ar4_grasp_gripper_check{_video_suffix}")
+        os.makedirs(snapshot_dir, exist_ok=True)
+
         print("\n[INFO] Starting phased execution...\n")
         for phase_idx, (duration, target_q, gripper_cmd) in enumerate(PHASES):
             # Command the phase's target directly (not a ramped interpolation)
@@ -1457,6 +1580,7 @@ def main() -> None:
             # better than a continuously-moving one.
             start_q = robot.data.joint_pos[0, robot_entity_cfg.joint_ids].tolist()
             print(f"[PHASE {phase_idx}] duration={duration} gripper={'OPEN' if gripper_cmd > 0 else 'CLOSE'} start_q={['%.4f' % x for x in start_q]}")
+            _print_gripper_state(f"PHASE {phase_idx} START (commanded={'OPEN' if gripper_cmd > 0 else 'CLOSE'})")
             for i in range(duration):
                 action = torch.zeros(env.num_envs, num_arm_joints + 1, device=env.device)
                 for j in range(num_arm_joints):
@@ -1469,6 +1593,18 @@ def main() -> None:
                 demo_rgb = demo_camera.data.output["rgb"][0].cpu().numpy()
                 demo_video_writer.append_data(demo_rgb[:, :, :3].astype("uint8"))
 
+                if i == duration // 2:
+                    # Numeric readout AND a saved still frame at the exact
+                    # same physics step, so the two can be directly
+                    # cross-checked against each other (coordinator-directed).
+                    _print_gripper_state(f"PHASE {phase_idx} MIDPOINT (step {i})")
+                    imageio.imwrite(
+                        os.path.join(snapshot_dir, f"phase{phase_idx}_mid_demo.png"), demo_rgb[:, :, :3].astype("uint8")
+                    )
+                    imageio.imwrite(
+                        os.path.join(snapshot_dir, f"phase{phase_idx}_mid_perception.png"), rgb[:, :, :3].astype("uint8")
+                    )
+
                 if phase_idx in (3, 4, 5) and i % 20 == 0:
                     cube_z = env.scene["cube"].data.root_pos_w[0, 2].item()
                     cube_xy = env.scene["cube"].data.root_pos_w[0, :2].tolist()
@@ -1477,6 +1613,7 @@ def main() -> None:
             achieved_q = robot.data.joint_pos[0, robot_entity_cfg.joint_ids].tolist()
             max_err = max(abs(a - t) for a, t in zip(achieved_q, target_q))
             print(f"  [PHASE {phase_idx} END] max joint error: {max_err:.5f} rad")
+            _print_gripper_state(f"PHASE {phase_idx} END (commanded={'OPEN' if gripper_cmd > 0 else 'CLOSE'})")
 
         env.reset()
 
@@ -1485,6 +1622,7 @@ def main() -> None:
     env.close()
     print(f"\nVideo recorded to: {VIDEO_PATH}")
     print(f"Demo-camera video recorded to: {demo_video_path}")
+    print(f"Gripper-check snapshots recorded to: {snapshot_dir}")
 
 
 if __name__ == "__main__":

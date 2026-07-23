@@ -251,6 +251,49 @@ Roughly in the order they'd likely be picked up:
    `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s 2026-07-23
    UPDATE.
 
+   **Reach-distance sweep + a major NEW gripper-jaw bug found, done 2026-07-23
+   (later, ar4-grasp-position-search task): repositioning ruled out as a fix
+   for the Z-shortfall, AND the gripper's "OPEN" command was found to
+   collapse both jaws onto the IDENTICAL point instead of separating them —
+   confirmed but NOT YET FIXED. Capstone grasp+lift validation still
+   outstanding.** A new `--radius-sweep` swept reach distance 0.30-0.42m at
+   bearing=0: `joint_3`'s own margin becomes genuinely healthy at farther
+   reach (0.28-0.88rad, vs. ~0.08rad at the 27.5cm default), but **the
+   ~18mm Z-shortfall does not shrink at all across this whole range** —
+   at some radii a different joint (`joint_4`) becomes newly pinned
+   instead, and at others (0.30m, 0.39-0.42m) NO joint is near its limit
+   yet the shortfall persists unchanged, confirming this is a genuine
+   multi-joint reachability-envelope property of a fully-vertical grasp at
+   this height, not fixable by repositioning within the ~0.30-0.42m/±60°
+   region tested so far (bearing-independence already established the
+   prior session). Separately, direct empirical measurement
+   (`scripts/_sweep_jaw2_symmetry.py` — hold jaw1 open, sweep jaw2's
+   commanded value, read back both jaws' REAL world positions) found the
+   gripper's current "OPEN" command (`gripper_jaw2_joint` commanded to
+   `-GRIPPER_OPEN_POS`, mirroring jaw1's `+GRIPPER_OPEN_POS` under the
+   2026-07-21 `gearing=-1` convention) makes jaw2 land at the EXACT SAME
+   world point as jaw1 (measured separation `0.00001m`) instead of
+   spreading apart — the true mirror position is actually
+   `+GRIPPER_OPEN_POS` (the SAME signed value as jaw1), confirmed by a
+   clean, monotonic 9-point sweep. **This means the gripper has likely
+   never actually opened into a pincer shape in any AR4 script/task using
+   the shared `tasks/ar4/robot_cfg.py` constants** — a probable
+   same-day, independent, additive contributor to every grasp failure
+   today, on top of the Z-height reach limit. The fix itself (correcting
+   `GRIPPER_OPEN_COMMAND_EXPR` and `gripper_jaw2_joint`'s USD hard limits)
+   was root-caused and empirically confirmed but **NOT YET IMPLEMENTED** —
+   session stopped here at user request before any fix, and before any
+   phased grasp+lift attempt was run at all. Cube-parking (avoids
+   interpenetration during seed-search) and gripper joint-position logging
+   were added to `scripts/grasp_demo_v2.py` per two live user observations
+   but are also unexercised. **Next steps, in order: (1) fix the jaw2
+   open-command bug and re-verify via the same sweep script; (2) test a
+   moderate tilt at one of the newly-found comfortable-`joint_3`-margin
+   positions (0.39-0.42m), untested combination; (3) only then attempt the
+   real phased grasp+lift validation.** Full detail:
+   `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s 2026-07-23
+   (later, ar4-grasp-position-search task) UPDATE.
+
 See `BACKLOG.md` for further-out candidates not yet on this list.
 
 ## Recently landed

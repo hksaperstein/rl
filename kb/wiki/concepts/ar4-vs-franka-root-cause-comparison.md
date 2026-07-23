@@ -939,6 +939,196 @@ this pass's own budget.
   diagnosis). Several more throwaway intermediate iteration scripts from
   this session were deleted rather than kept, to avoid clutter.
 
+
+## UPDATE 2026-07-22 (later, ar4-grasp-orientation-fix task): pose-IK orientation control confirmed working correctly, but a genuine AR4 joint_3 (elbow) kinematic limit blocks a full-depth vertical grasp of this specific cube - not yet a working lift
+
+Tasked with fixing the diagnosed orientation gap from the session above (a
+position-only IK gives the solver zero incentive to pick a sensible pinch
+orientation, and the basin it fell into was an ~18-degree tilt that
+undershot full pinch depth) and getting a real, verified, repeatable
+grasp+lift. Real progress was made on the orientation mechanism itself, but
+a new, deeper kinematic constraint was found and confirmed instead of a
+working lift.
+
+**The fix: `scripts/grasp_demo_v2.py` switched `DifferentialIKControllerCfg`
+from `command_type="position"` to `command_type="pose"` (relative mode),
+mirroring `scripts/demo_franka_ik_dice_line.py`'s own established
+`canonical_down_quat_w` precedent** - an explicit, deliberately-chosen
+target orientation instead of leaving it to the arm's redundant null space.
+AR4's own canonical target was built from explicit WORLD-frame basis
+vectors (`_CANONICAL_{X,Y,Z}_AXIS_W`, `_build_canonical_target_quat_w()`),
+not copied from Franka's own hand-frame quaternion constant (no reason to
+transfer to a structurally different arm/gripper), then converted to ROOT
+frame via `subtract_frame_transforms` - the same world-to-root conversion
+already used for position targets, which correctly and automatically
+accounts for AR4's 180-degree base yaw (a 180-degree yaw about Z leaves
+world -Z indistinguishable in root frame but flips X/Y - confirmed by
+direct calculation matching the printed root-frame quaternion). The
+`polish_from_seed` DLS loop now drives a full 6D pose error
+(`compute_pose_error`, position + axis-angle rotation) through a combined
+6-row Jacobian (the existing offset-corrected position rows, plus link_6's
+own unmodified angular rows - the pinch point shares link_6's rotation
+exactly, only its *position* needs the rigid-offset correction).
+
+**Verified live, independently of the scalar residual (not just trusting
+the math): when NOT joint-limited, the solver genuinely converges the
+gripper's approach axis to vertical.** At a 32cm-reach test position, GRASP
+converged to `rot_err=0.0037rad` (~0.2 degrees) with the live axis readout
+confirming it directly: local +Z (the approach/`_EE_OFFSET` axis) measured
+`[0.000, 0.005, -1.000]` in root frame - essentially exactly world -Z. This
+is a real, working fix to the originally-diagnosed problem (an
+uncontrolled, arbitrary null-space orientation) - the mechanism itself is
+correct.
+
+**Two real bugs found and fixed getting there, both through live evidence,
+not by inspection:**
+
+1. **Jaw-slide-axis heading choice deadlocked joint_6 at its own hard
+   limit.** The jaw-slide axis (local +X) has no principled "correct"
+   horizontal heading for a symmetric cube grasp, so it was initially set
+   to world +X arbitrarily - but a live run converged GRASP's polish to
+   `joint_6 = 3.14159` (exactly pi to float precision), pinned at that
+   joint's hard limit (`[-pi, pi]`), and the polish then deadlocked
+   (identical residual for 80 straight rounds - a joint-limit wall, not a
+   converging solve). PREGRASP's own converged `joint_6` at the same
+   heading choice landed at `3.1334`, just under the same wall, confirming
+   this was a real, reproducible boundary effect of the *heading choice*,
+   not the target itself. Fixed by rotating the heading 90 degrees (world
+   +Y instead of +X) - not a claim that +Y is universally correct, just
+   that this heading is a genuinely free parameter worth choosing
+   deliberately to avoid a known limit rather than leaving to accident.
+2. **GRASP's own seed search picked an orientation-incompatible seed because
+   it scored candidates on position alone.** The old position-only-tuned
+   `KNOWN_GOOD_GRASP_Q` constant always won the (position-only) seed search
+   for GRASP - but its orientation turned out to be ~163 degrees (2.85rad)
+   from canonical, and the subsequent polish got permanently stuck at that
+   same ~163-degree error (identical residual for 80 rounds). Critically,
+   PREGRASP's own seed ALSO started from an almost-identical ~171-degree
+   (2.98rad) initial rotation error and successfully corrected it (2.98rad
+   -> 0.0059rad in 20 rounds) - ruling out "bad seed orientation" as a
+   general problem and showing the DLS mechanism itself works fine when not
+   joint-limited. Fixed two ways: (a) `_find_best_seed` now scores
+   candidates on a combined position+orientation score
+   (`ORIENTATION_SCORE_WEIGHT`, a documented judgment-call constant), not
+   position alone; (b) GRASP is now solved AFTER PREGRASP and seeded from
+   PREGRASP's own converged (already-canonical) config, since it's only 5cm
+   away and matches how the phased execution actually moves the arm anyway
+   (pregrasp_q -> grasp_q as consecutive nearby waypoints, not independent
+   teleports).
+
+**The real remaining blocker: AR4's own joint_3 (elbow) hard limit
+(`[-1.5533, +0.9076]` rad, i.e. roughly -89 to +52 degrees - read directly
+from `robot.data.joint_pos_limits`, `soft_joint_pos_limit_factor=1.0` so
+this is the actual hard limit, not a narrowed soft one) prevents the arm
+from simultaneously reaching the cube's true low grasp height (9mm) AND
+holding a fully vertical wrist orientation - confirmed as a genuine,
+repeatable kinematic property of this arm, not a single-position
+coincidence, by testing 3 different reach distances along the same
+bearing (via a new `--cube-xy` CLI override, teleporting the cube live
+before reading its pose as ground truth):**
+
+| Reach (cube distance from base) | GRASP result | joint_3 pinned at limit? |
+|---|---|---|
+| 20cm (closer than default) | 4.6cm residual (worse) | Yes - `joint_3=0.90756` vs limit `0.90757` |
+| 27.5cm (task's own scene default) | 2.8cm residual | Yes - `joint_3=0.892`, ~0.9 degrees from limit |
+| 32cm (farther) | 2.0cm residual | No single joint pinned, but still short - a softer, multi-joint reachability-envelope boundary |
+
+Counter-intuitively, moving the cube CLOSER made the conflict WORSE, not
+better (a real, reproducible finding, not noise) - consistent with the
+physical picture that reaching a low, close-in point with a vertical wrist
+requires MORE elbow flexion (deeper into joint_3's limited positive-travel
+direction), not less, much like a human arm needs more elbow bend to reach
+straight down close to its own base than at a longer, more extended reach.
+At every reach distance, the residual is dominated by a Z-height
+shortfall: the achieved pinch point lands well ABOVE the intended grasp
+height (e.g. at 27.5cm: target 9mm, achieved ~39mm - a 3cm shortfall,
+larger than the cube itself). **"Aim the target lower to compensate" was
+retested (via a new `--grasp-height` override) at the 32cm, non-joint-
+limited position specifically (to rule out this being just a repeat of the
+already-known joint-limited-basin finding from the prior session) and
+again made the residual WORSE (2.0cm -> 3.8cm), not better** - the same
+qualitative finding as the earlier position-only investigation, now shown
+to hold even in a basin where no single joint is pinned at its exact
+boundary, meaning this is a genuine multi-joint reachability-envelope
+property of AR4's kinematics for a vertical approach, not an artifact
+of one specific joint-limit wall.
+
+**One further mitigation attempted and NOT yet working: a deliberate,
+controlled tilt (30 degrees from vertical, via a new `--tilt-deg` CLI
+option built from a proper rotation-about-the-jaw-axis construction) at
+the task's default cube position, as a middle ground between "fully
+vertical" (kinematically capped well above the cube) and "uncontrolled
+null-space result" (the original problem).** This did NOT resolve the
+conflict - instead, the polish became numerically unstable, with rotation
+error monotonically INCREASING round over round (0.0995rad at round 0 up
+to 1.054rad by round 30, then plateauing there) rather than converging,
+ending up worse than the seed's own starting orientation. This is a real,
+observed instability in the bounded-step DLS polish when targeting a
+non-zero, non-canonical tilt from this particular seed/basin, not
+investigated further this session (flagged as a follow-up, not a dead
+end) - it's possible a different seed, smaller tilt angle, or smaller
+per-round rotation step bound would behave better, but this needs its own
+dedicated debugging pass rather than continuing to guess tilt angles.
+
+**No real cube contact, displacement, or lift was achieved in any run this
+session** - `cube.data.root_pos_w`'s z-component stayed flat at its resting
+~0.006m throughout every clean run's CLOSE/lift/hold phases (11 full runs
+total, one Isaac Sim non-deterministic startup hang recovered from mid-session
+via `kill -9` + relaunch, matching this project's own documented "known
+gap" startup flakiness - confirmed via `ps`/`nvidia-smi` showing genuine
+CPU/GPU activity with zero log progress for 22+ minutes before the kill,
+not a false read). This is a genuine negative result for THIS specific
+cube position/height combination under a canonical-or-near-canonical
+vertical approach, not a partial success being overstated.
+
+**What this means.** The orientation-selection MECHANISM this task set out
+to fix is now demonstrably correct (verified via independent axis readout,
+not just a scalar residual, at multiple positions) - this closes the
+originally-diagnosed "uncontrolled null-space orientation" problem cleanly.
+But it surfaces a deeper, previously-unconfirmed kinematic property: **AR4's
+own joint_3 range does not comfortably support a fully-vertical top-down
+grasp low enough to contact a 12mm cube resting on the table, at any of the
+3 reach distances tested along this bearing.** This is now a better-
+characterized, narrower problem than either the original "position-only
+DLS picks an arbitrary orientation" framing or the "single basin capped by
+a joint limit" framing from the prior session - it's a property of the
+*orientation itself* (vertical) interacting with this *specific arm's*
+elbow range, present across multiple positions and seeds, not a single
+unlucky configuration. Candidate next steps (not completed here, flagged
+for a future pass): (a) debug why non-zero tilt destabilizes the DLS
+polish rather than just converging to a worse-but-stable orientation, (b)
+try smaller tilt angles (10-15 degrees) with a smaller per-round rotation
+step bound, (c) test whether a DIFFERENT bearing (not just reach distance)
+relieves the joint_3 conflict, (d) accept a smaller-than-canonical tilt as
+this arm's own genuine "canonical" approach angle if a stable, sufficiently
+deep option is found. This does NOT reopen Hypothesis 1 (the classical-IK
+positioning miss, closed by the prior session) - positioning precision
+itself remains excellent (sub-cm to sub-mm when not orientation- or
+joint-limit-capped); the open question is now specifically about
+orientation-vs-reachability tradeoff, a narrower and better-diagnosed
+question than anything this investigation has previously isolated.
+
+**Script changes** (`scripts/grasp_demo_v2.py`): `command_type` switched to
+`"pose"`; new `_build_canonical_target_quat_w`/`_build_canonical_target_quat_b`
+(with optional `tilt_deg`); `polish_from_seed` now tracks/reports combined
+position+rotation residual and per-axis position residual
+(`_measure_rot_err`, `_measure_dist_vec`, new); `_find_best_seed` now scores
+on combined position+orientation error; PREGRASP solved before GRASP,
+seeding GRASP from PREGRASP's converged config; new CLI overrides
+`--cube-xy`, `--grasp-height`, `--tilt-deg`, `--video-suffix` for testing
+different reach distances/heights/tilts without editing the file between
+runs; new `[INFO] Arm joint pos limits` printout for direct joint-limit
+diagnosis going forward.
+
+**Sources for this update**: entirely this session's own live runs
+(11 full launches of `scripts/grasp_demo_v2.py` against the real Isaac Sim
+scene, `logs/videos/ar4_grasp_demo_v2*.mp4`), `robot.data.joint_pos_limits`
+read directly at runtime, and Isaac Lab's own `DifferentialIKController`/
+`compute_pose_error`/`axis_angle_from_quat` source
+(`source/isaaclab/isaaclab/controllers/differential_ik.py`,
+`source/isaaclab/isaaclab/utils/math.py`) for the pose-command-mode API
+this fix relies on.
+
 ## Sources
 
 `docs/superpowers/specs/research/2026-07-20-ar4-vs-franka-root-cause-comparison.md`

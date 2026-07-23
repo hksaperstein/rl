@@ -14,6 +14,35 @@ script applies that same method to both the pregrasp and grasp waypoints
 and runs the actual phased pick/lift/hold/release sequence to test
 whether that precision is enough for a genuine grasp.
 
+UPDATE 2026-07-22 (ar4-grasp-orientation-fix task): switched the IK
+controller from ``command_type="position"`` to ``command_type="pose"``
+(relative mode), giving the DLS solve an explicit target ORIENTATION
+instead of leaving it to fall out of the arm's redundant null space. The
+prior session (see UPDATE below and
+kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md's matching entry)
+diagnosed the remaining grasp-quality gap as exactly this: a position-only
+solve found a genuine local optimum only ~10.5mm from the true pinch
+target, but the orientation that fell out of it was an ~18-degree tilt
+from vertical (a side-approach geometry) that undershot full pinch depth,
+and re-aiming the *position* target lower made it WORSE, not better - a
+symptom of an orientation problem, not a position problem. Fix mirrors
+``scripts/demo_franka_ik_dice_line.py``'s own established
+``canonical_down_quat_w`` precedent (a single, fixed, explicitly-chosen
+straight-down target orientation, reused for every waypoint) - see
+``_CANONICAL_*_AXIS_W`` and ``_build_canonical_target_quat_b()`` below for
+how that target is constructed for AR4's own end-effector frame convention
+(built from explicit world-frame basis vectors, not copied from Franka's
+own hand-frame quaternion constant, which has no reason to transfer to a
+structurally different arm/gripper) and how AR4's 180-degree base yaw is
+handled (via ``subtract_frame_transforms``, the same world-to-root
+conversion already used for position targets, rather than worked out by
+hand). ``polish_from_seed`` now runs a bounded per-round POSE error (6D:
+3 position + 3 axis-angle rotation, via ``compute_pose_error``), not a
+position-only 3D error, and drives the combined 6-row Jacobian (the
+existing offset-corrected position rows, plus link_6's own unmodified
+angular rows - the pinch point shares link_6's rotation exactly, only its
+*position* needs the rigid-offset correction).
+
 UPDATE 2026-07-22 (ar4-grasp-ik-precision task): TWO real, previously
 undiagnosed bugs were found and fixed this session, superseding the
 "~3.3cm, DLS solver stuck in a local minimum" characterization above:
@@ -98,6 +127,34 @@ import sys
 from isaaclab.app import AppLauncher
 
 parser = argparse.ArgumentParser(description="Classical pick-and-place demo v2 (grid-search + DLS polish).")
+# 2026-07-22 (orientation-fix task): override the cube's world (x,y) so the
+# same seed-search/pose-DLS/phased-execution pipeline can be tested at
+# DIFFERENT reach distances/bearings in one script, without editing the
+# file between runs - added after finding the default cube position
+# (0.0, 0.275, ...), ~27.5cm straight-ahead reach, hits a genuine joint_3
+# (elbow) hard-limit conflict between reaching that low a height and
+# maintaining the canonical straight-down orientation simultaneously (see
+# this module's own docstring/kb doc). Testing other positions is how this
+# task's own brief ("test across 3-4 different cube starting positions")
+# gets satisfied, and also directly answers whether the joint-limit
+# conflict is specific to this one position or a general property of the
+# whole reachable workspace.
+parser.add_argument(
+    "--cube-xy", type=float, nargs=2, default=None, metavar=("X", "Y"),
+    help="Override the cube's world-frame (x, y) position (z kept at the scene default) for testing reach.",
+)
+parser.add_argument(
+    "--video-suffix", type=str, default="",
+    help="Suffix appended to the output video filename, so different --cube-xy runs don't overwrite each other's video.",
+)
+parser.add_argument(
+    "--grasp-height", type=float, default=None,
+    help="Override GRASP_AT_HEIGHT (root-frame z target for the GRASP waypoint's pinch point), for testing whether the Z-shortfall residual is compensable at a given cube position (see GRASP_AT_HEIGHT's own docstring).",
+)
+parser.add_argument(
+    "--tilt-deg", type=float, default=0.0,
+    help="Deliberate forward/back tilt (degrees) of the canonical approach orientation away from pure-vertical - see _build_canonical_target_quat_w's own docstring for why this exists.",
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 args_cli.enable_cameras = True
@@ -113,7 +170,13 @@ import torch  # noqa: E402
 from isaaclab.controllers import DifferentialIKController, DifferentialIKControllerCfg  # noqa: E402
 from isaaclab.envs import ManagerBasedEnv  # noqa: E402
 from isaaclab.managers import SceneEntityCfg  # noqa: E402
-from isaaclab.utils.math import matrix_from_quat, quat_inv, subtract_frame_transforms  # noqa: E402
+from isaaclab.utils.math import (  # noqa: E402
+    compute_pose_error,
+    matrix_from_quat,
+    quat_from_matrix,
+    quat_inv,
+    subtract_frame_transforms,
+)
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # noqa: E402
 
@@ -121,7 +184,8 @@ from tasks.ar4.grasp_verify_env_cfg import Ar4GraspVerifyEnvCfg  # noqa: E402
 from tasks.ar4.robot_cfg import ARM_JOINT_NAMES  # noqa: E402
 
 LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs")
-VIDEO_PATH = os.path.join(LOG_DIR, "videos", "ar4_grasp_demo_v2.mp4")
+_video_suffix = f"_{args_cli.video_suffix}" if args_cli.video_suffix else ""
+VIDEO_PATH = os.path.join(LOG_DIR, "videos", f"ar4_grasp_demo_v2{_video_suffix}.mp4")
 
 # NOTE (2026-07-22, ar4-grasp-ik-precision task): this was previously
 # (0.20, 0.28, 0.009), copied from tasks/ar4/objects_cfg.py's raw CUBE_CFG
@@ -138,6 +202,13 @@ VIDEO_PATH = os.path.join(LOG_DIR, "videos", "ar4_grasp_demo_v2.mp4")
 # cube, regardless of how precise the IK solve was). Height kept at 3mm above
 # the cube's true resting z=0.006 (matching the pre-existing GRASP_AT_HEIGHT
 # convention, not touched here).
+#
+# NOTE (2026-07-22, orientation-fix task): no longer read directly by
+# main() - cube_pos_w is now always taken LIVE from env.scene["cube"] (see
+# main()'s own --cube-xy handling), so this constant is purely informational
+# documentation of the scene's own default spawn point now, kept because
+# its value still matches that default and its docstring above is useful
+# history.
 CUBE_POS_W = (0.0, 0.275, 0.009)
 PREGRASP_HOVER = 0.05
 # NOTE (2026-07-22): tried lowering this to -0.001 to compensate for the
@@ -151,7 +222,16 @@ PREGRASP_HOVER = 0.05
 # this investigation (multiple local optima found this session pin one or
 # more joints at/near their hard limits at this low approach height).
 # Reverted to 0.009, the empirically better value.
-GRASP_AT_HEIGHT = 0.009
+#
+# 2026-07-22 (orientation-fix task): overridable via --grasp-height for the
+# same reason --cube-xy is overridable - to test whether the residual's
+# Z-shortfall is a joint-limit wall (compensating won't help, per the note
+# above) or a genuine constant-ish offset in a joint-limit-FREE basin
+# (found live at the 32cm-reach cube position - no joint pinned at a limit
+# there, unlike the default 27.5cm/closer 20cm positions - where
+# compensating is worth an independent retry rather than assuming the
+# earlier position-only finding still applies).
+GRASP_AT_HEIGHT = args_cli.grasp_height if args_cli.grasp_height is not None else 0.009
 GRIPPER_OPEN = 1.0
 GRIPPER_CLOSE = -1.0
 HOME_Q = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
@@ -171,6 +251,86 @@ CALIBRATION_C = -1.5677  # empirically measured joint_1 -> EE-azimuth offset
 # cube never moved at all - video review showed the gripper visibly not
 # overlapping the cube in every frame.
 _EE_OFFSET = (0.0, 0.0, 0.036)
+
+# Canonical straight-down grasp orientation (2026-07-22, ar4-grasp-
+# orientation-fix task). Position-only IK left the wrist's final
+# orientation to whatever fell out of the arm's redundant null space - an
+# ~18-degree tilt from vertical, diagnosed (_diag_check_orientation.py,
+# see kb doc) as the cause of the remaining ~10mm pinch-depth shortfall.
+# Built directly from explicit WORLD-frame basis vectors, not copied from
+# demo_franka_ik_dice_line.py's own `canonical_down_quat_w` constant -
+# that quaternion is specific to panda_hand's own local-axis convention
+# and has no reason to transfer to AR4's differently-built link_6 frame.
+# local +Z is link_6's own approach axis (the same axis _EE_OFFSET is
+# measured along, confirmed via _diag_check_orientation.py) -> pointed
+# straight down (world -Z). local +X is the jaw-slide axis -> pointed
+# along a fixed horizontal heading - a symmetric cube grasp doesn't care
+# WHICH horizontal direction the jaws close along, only that it's
+# horizontal, but the SPECIFIC heading chosen is NOT free of side effects:
+# a live run with jaw-axis = world +X converged GRASP's polish to
+# joint_6 = 3.14159 (exactly pi to float precision) - pinned at what is
+# almost certainly that joint's hard upper limit (PREGRASP's own converged
+# joint_6, at a taller/easier approach height, landed at 3.1334, just
+# under the same wall) - and the polish then deadlocked (identical residual
+# for 80 straight rounds) unable to close the last ~2cm of position error
+# because that joint had nowhere left to move. Switched jaw-axis heading to
+# world +Y (a 90-degree rotation of the same otherwise-arbitrary choice) to
+# move joint_6's required value away from that specific boundary for THIS
+# cube position/approach geometry - not a claim that +Y is universally
+# correct, just that the heading is a free parameter worth choosing to
+# avoid a known joint limit rather than leaving to accident. local +Y
+# completes a right-handed orthonormal frame (= local_Z x local_X).
+_CANONICAL_Z_AXIS_W = (0.0, 0.0, -1.0)
+_CANONICAL_X_AXIS_W = (0.0, 1.0, 0.0)
+_CANONICAL_Y_AXIS_W = (1.0, 0.0, 0.0)  # = cross(Z, X), verified right-handed below
+
+
+def _build_canonical_target_quat_w(device: str, tilt_deg: float = 0.0) -> torch.Tensor:
+    """Builds the canonical target WORLD-frame quaternion from the explicit
+    basis vectors above, optionally tilted forward/back by tilt_deg (2026-07-22,
+    orientation-fix task addition) - a controlled, DELIBERATE deviation from
+    pure-vertical, not the uncontrolled ~18-72-degree tilt this whole task
+    started out fixing. Added after live evidence that pure-vertical
+    (tilt_deg=0) is capped well above the cube's own surface by AR4's own
+    kinematics at every reach distance tried (a joint_3 hard-limit wall at
+    closer reach, a softer-but-still-real multi-joint reachability boundary
+    at farther reach where "aim lower to compensate" reliably makes the
+    residual WORSE, not better - see this module's docstring). Rotates the
+    approach axis (local Z) about the JAW-SLIDE axis (local X, held fixed)
+    by tilt_deg, mixing the straight-down axis with a horizontal component
+    in the reach-direction plane - physically, tipping the wrist forward as
+    a real arm does when reaching down near the edge of its extension.
+    Sanity-checks orthonormality/right-handedness at call time (cheap, and
+    this is load-bearing for the whole grasp)."""
+    theta = math.radians(tilt_deg)
+    x_axis = torch.tensor(_CANONICAL_X_AXIS_W, device=device)
+    base_y_axis = torch.tensor(_CANONICAL_Y_AXIS_W, device=device)
+    base_z_axis = torch.tensor(_CANONICAL_Z_AXIS_W, device=device)
+    # Rotate (y,z) within the plane spanned by base_y_axis/base_z_axis by
+    # theta, keeping x_axis (the rotation axis) fixed - standard
+    # rotation-about-an-axis construction using the existing orthonormal
+    # frame as the 2D basis to rotate within.
+    z_axis = math.cos(theta) * base_z_axis + math.sin(theta) * base_y_axis
+    y_axis = torch.cross(z_axis, x_axis, dim=-1)
+    assert torch.allclose(torch.cross(z_axis, x_axis), y_axis, atol=1e-6), "basis is not right-handed"
+    assert abs(torch.dot(x_axis, y_axis).item()) < 1e-6
+    assert abs(torch.dot(y_axis, z_axis).item()) < 1e-6
+    rot_matrix = torch.stack([x_axis, y_axis, z_axis], dim=-1).unsqueeze(0)  # columns = local axes in world frame
+    return quat_from_matrix(rot_matrix)
+
+
+def _build_canonical_target_quat_b(root_pos_w: torch.Tensor, root_quat_w: torch.Tensor, tilt_deg: float = 0.0) -> torch.Tensor:
+    """Converts the canonical WORLD-frame target orientation into the
+    articulation's ROOT frame via subtract_frame_transforms - the same
+    world-to-root conversion already used for position targets elsewhere in
+    this script. This is what correctly accounts for AR4's 180-degree base
+    yaw (tasks/ar4/robot_cfg.py's init_state rot=(0,0,0,1)): a 180-degree
+    yaw about Z leaves world -Z indistinguishable in the root frame, but
+    flips the X/Y axes - handled here by the library call, not worked out
+    by hand."""
+    target_quat_w = _build_canonical_target_quat_w(str(root_pos_w.device), tilt_deg=tilt_deg)
+    _, target_quat_b = subtract_frame_transforms(root_pos_w, root_quat_w, root_pos_w, target_quat_w)
+    return target_quat_b
 
 # Diverse (j2, j3, j5) candidate seeds for _find_best_seed() (j1 comes from the
 # calibration formula, j4/j6 start at 0). The corrected DLS polish (see
@@ -197,10 +357,36 @@ CANDIDATE_SEEDS = [
 
 SEED_SETTLE_STEPS = 60
 POLISH_STEP_MAX = 0.03
-POLISH_ROUNDS = 60
+# 2026-07-22 (orientation-fix task): bumped 60 -> 100. The polish loop now
+# has to close a 6D pose error (position + orientation) instead of a 3D
+# position-only error, starting from seeds whose orientation was never
+# selected for (CANDIDATE_SEEDS only varies j2/j3/j5, matching a
+# position-only search) - budgeting more rounds for the extra orientation
+# degrees of freedom to converge alongside position.
+POLISH_ROUNDS = 100
 POLISH_SETTLE_STEPS = 30
 LAMBDA_VAL = 0.02
 CONVERGENCE_THRESHOLD = 0.003
+# 2026-07-22 (orientation-fix task): per-round bounded ROTATION step, the
+# orientation analogue of POLISH_STEP_MAX - mirrors
+# demo_franka_ik_dice_line.py's own _MAX_ROT_STEP (bounded per-step
+# rotation correction, not a single large jump, for the same stability
+# reason POLISH_STEP_MAX bounds position).
+POLISH_ROT_STEP_MAX = 0.15
+# Rotation convergence tolerance (radians, axis-angle norm) - the
+# orientation analogue of CONVERGENCE_THRESHOLD. ~0.05rad ~= 3 degrees,
+# tight enough for a genuine top-down pinch, loose enough to be reachable
+# given this arm's own joint-limit-constrained basins (see this module's
+# docstring on the ~18-degree tilt this fix is targeting).
+ROT_CONVERGENCE_THRESHOLD = 0.05
+# Weight converting a radian of orientation error into an equivalent
+# "meters" scale for the combined best-round score below - chosen as the
+# _EE_OFFSET length scale (0.036m/rad), i.e. roughly the linear pinch-point
+# displacement a small rotation error produces at the fingertip. A
+# deliberate, documented judgment call (not derived from a formal
+# optimality argument) so a single round's "best so far" bookkeeping can
+# compare position and rotation error on one scale.
+ORIENTATION_SCORE_WEIGHT = 0.036
 
 
 def _world_jacobian_to_root_frame(jacobian_w: torch.Tensor, root_quat_w: torch.Tensor) -> torch.Tensor:
@@ -280,56 +466,136 @@ def _measure_dist(robot, robot_entity_cfg, target_pos_b) -> float:
     return torch.norm(point_pos_b[0] - target_pos_b[0]).item()
 
 
-def _find_best_seed(env, robot, robot_entity_cfg, num_arm_joints, target_pos_b, seed_j1, extra_full_seeds=None):
+def _measure_dist_vec(robot, robot_entity_cfg, target_pos_b):
+    """Same as _measure_dist but returns the signed per-axis (root-frame
+    x,y,z) residual vector instead of just the scalar norm - added
+    (2026-07-22, orientation-fix task) to diagnose WHICH direction a
+    joint-limit-capped polish's residual is dominated by (e.g. a pure
+    Z-height shortfall vs an X/Y bearing miss), the same distinction the
+    earlier position-only investigation found load-bearing."""
+    ee_pose_w = robot.data.body_pose_w[:, robot_entity_cfg.body_ids[0]]
+    ee_pos_b, ee_quat_b = subtract_frame_transforms(
+        robot.data.root_pose_w[:, 0:3], robot.data.root_pose_w[:, 3:7], ee_pose_w[:, 0:3], ee_pose_w[:, 3:7]
+    )
+    offset_local = torch.tensor([_EE_OFFSET], device=ee_pos_b.device).expand(ee_pos_b.shape[0], 3)
+    rot = matrix_from_quat(ee_quat_b)
+    world_offset = torch.bmm(rot, offset_local.unsqueeze(-1)).squeeze(-1)
+    point_pos_b = ee_pos_b + world_offset
+    return (target_pos_b[0] - point_pos_b[0]).tolist()
+
+
+def _measure_rot_err(robot, robot_entity_cfg, target_quat_b) -> float:
+    """Axis-angle rotation error (radians) between link_6's CURRENT
+    orientation and target_quat_b - the orientation analogue of
+    _measure_dist. The pinch point shares link_6's orientation exactly (the
+    rigid offset only shifts position), so link_6's own quat is also the
+    pinch point's quat - no offset correction needed here, unlike position."""
+    ee_pose_w = robot.data.body_pose_w[:, robot_entity_cfg.body_ids[0]]
+    ee_pos_b, ee_quat_b = subtract_frame_transforms(
+        robot.data.root_pose_w[:, 0:3], robot.data.root_pose_w[:, 3:7], ee_pose_w[:, 0:3], ee_pose_w[:, 3:7]
+    )
+    _, axis_angle_error = compute_pose_error(
+        ee_pos_b, ee_quat_b, ee_pos_b, target_quat_b, rot_error_type="axis_angle"
+    )
+    return torch.norm(axis_angle_error[0]).item()
+
+
+def _find_best_seed(env, robot, robot_entity_cfg, num_arm_joints, target_pos_b, target_quat_b, seed_j1, extra_full_seeds=None):
     """Genuinely-settled multi-seed search (replaces the old 2D raster grid
     search over (j2, j3) alone, which had the transient-measurement bug
     documented in this module's own docstring above). Each candidate is
     settled from a clean teleport + zero-velocity hold (see _settle_at), so
     the reported distance is trustworthy, not a mid-swing artifact.
 
+    2026-07-22 (orientation-fix task): scoring switched from position-only
+    to the SAME combined position+orientation score polish_from_seed uses
+    (see ORIENTATION_SCORE_WEIGHT). Found necessary live: with position-only
+    scoring, the GRASP waypoint's seed search always picked
+    `extra_full_seeds`'s old position-only-tuned KNOWN_GOOD_GRASP_Q (best on
+    pure position, since that's literally what it was tuned for) - but that
+    config's orientation turned out to be ~163 degrees (2.85rad) from
+    canonical, and the subsequent polish got permanently stuck at that same
+    ~163-degree error (identical pos/rot residual for 80 straight rounds -
+    a joint-limit deadlock, not a converging solve) instead of correcting
+    it. The PREGRASP waypoint's own seed search happened to land on a
+    CANDIDATE_SEEDS-derived config with a far more compatible starting
+    orientation instead, and its polish converged cleanly (2.98rad ->
+    0.0059rad) - direct evidence the DLS mechanism itself works fine when
+    not started from an orientation-incompatible basin, and that the fix is
+    in seed SELECTION, not the polish loop itself.
+
     `extra_full_seeds`: optional list of full 6-joint configs (already known
-    to be good from a prior offline multi-seed search at this exact target)
-    to ALSO try directly, alongside the (seed_j1, j2, j3, 0, j5, 0) candidates
-    derived from CANDIDATE_SEEDS. Added after finding this run's own search
-    can land in a noticeably worse local basin than a previous, separately-
-    verified search at the identical target (the DLS polish's basin-of-
-    convergence is sensitive to exactly which candidate is evaluated in which
-    order and to minor physics-timing nondeterminism) - including the known-
-    good absolute configs directly guarantees this run does at least as well
-    as that prior verified result, without pretending the live search alone
-    is perfectly reproducible."""
+    to be good, position-wise, from a prior offline multi-seed search at
+    this exact target) to ALSO try directly, alongside the (seed_j1, j2,
+    j3, 0, j5, 0) candidates derived from CANDIDATE_SEEDS. Still included
+    for their position quality, but no longer trusted blindly - the
+    combined score means one of these can still be picked, but only if its
+    orientation is ALSO reasonably compatible, not solely because its
+    position is good."""
+    def _combined_score(pos_err: float, rot_err: float) -> float:
+        return pos_err + ORIENTATION_SCORE_WEIGHT * rot_err
+
+    best_score = float("inf")
     best_dist = float("inf")
     best_q = None
     for (j2, j3, j5) in CANDIDATE_SEEDS:
         q = [seed_j1, j2, j3, 0.0, j5, 0.0]
         _settle_at(env, robot, robot_entity_cfg, num_arm_joints, q, SEED_SETTLE_STEPS)
         dist = _measure_dist(robot, robot_entity_cfg, target_pos_b)
-        if dist < best_dist:
+        rot = _measure_rot_err(robot, robot_entity_cfg, target_quat_b)
+        score = _combined_score(dist, rot)
+        if score < best_score:
+            best_score = score
             best_dist = dist
             best_q = q
     for q in (extra_full_seeds or []):
         _settle_at(env, robot, robot_entity_cfg, num_arm_joints, q, SEED_SETTLE_STEPS)
         dist = _measure_dist(robot, robot_entity_cfg, target_pos_b)
-        if dist < best_dist:
+        rot = _measure_rot_err(robot, robot_entity_cfg, target_quat_b)
+        score = _combined_score(dist, rot)
+        if score < best_score:
+            best_score = score
             best_dist = dist
             best_q = q
-    print(f"  [SEED SEARCH] best settled seed dist: {best_dist:.5f}m, config: {best_q}")
+    print(f"  [SEED SEARCH] best settled seed dist: {best_dist:.5f}m (combined score {best_score:.5f}), config: {best_q}")
     return best_q, best_dist
 
 
-def polish_from_seed(env, ik_controller, robot_entity_cfg, ik_jacobi_idx, target_pos_b, seed_q, num_arm_joints, joint_pos_limits):
+def polish_from_seed(
+    env, ik_controller, robot_entity_cfg, ik_jacobi_idx, target_pos_b, target_quat_b, seed_q, num_arm_joints, joint_pos_limits
+):
     """Bounded-step DLS polish from an already-settled seed. Same overall
     structure as the previous grid_search_then_polish's polish phase (bounded
     per-round Cartesian step, "keep best across rounds" regression guard),
-    with two fixes applied: the world-to-root Jacobian rotation
-    (_world_jacobian_to_root_frame) and an explicit joint-limit clamp on the
-    DLS-desired target (prevents repeatedly re-triggering the same
-    limit-wall bounce a round after a limit is hit)."""
+    with the world-to-root Jacobian rotation (_world_jacobian_to_root_frame)
+    and an explicit joint-limit clamp on the DLS-desired target (prevents
+    repeatedly re-triggering the same limit-wall bounce a round after a
+    limit is hit).
+
+    2026-07-22 (orientation-fix task): now drives a full 6D POSE error
+    (position + axis-angle rotation, via compute_pose_error), not a 3D
+    position-only error - ik_controller is now configured
+    command_type="pose" (relative mode). The rotation part of the Jacobian
+    (jacobian_b[:, 3:6, :]) needs NO offset correction (the pinch point
+    shares link_6's own rotation exactly - only its POSITION differs from
+    link_6's origin), so the combined 6-row Jacobian is simply the existing
+    offset-corrected position rows stacked on link_6's own unmodified
+    angular rows. The "keep best across rounds" guard now tracks a combined
+    score (position error plus ORIENTATION_SCORE_WEIGHT-scaled rotation
+    error, see that constant's own docstring for the judgment call this
+    represents) instead of position alone, so it doesn't restore a round
+    that had great position but a bad orientation."""
     robot = env.scene["robot"]
 
-    best_polish_residual = _measure_dist(robot, robot_entity_cfg, target_pos_b)
+    def _combined_score(pos_err: float, rot_err: float) -> float:
+        return pos_err + ORIENTATION_SCORE_WEIGHT * rot_err
+
+    best_pos_residual = _measure_dist(robot, robot_entity_cfg, target_pos_b)
+    best_rot_residual = _measure_rot_err(robot, robot_entity_cfg, target_quat_b)
+    best_score = _combined_score(best_pos_residual, best_rot_residual)
     best_polish_q = list(seed_q)
-    final_residual = best_polish_residual
+    final_pos_residual = best_pos_residual
+    final_rot_residual = best_rot_residual
 
     for round_num in range(POLISH_ROUNDS):
         current_joint_pos = robot.data.joint_pos[:, robot_entity_cfg.joint_ids].clone()
@@ -342,15 +608,24 @@ def polish_from_seed(env, ik_controller, robot_entity_cfg, ik_jacobi_idx, target
         jacobian_b = _world_jacobian_to_root_frame(jacobian_w, robot.data.root_quat_w)
 
         # Drive the ACTUAL gripper jaw pinch point (link_6 + _EE_OFFSET), not
-        # link_6's own raw origin - see _EE_OFFSET's docstring above.
+        # link_6's own raw origin - see _EE_OFFSET's docstring above. Only
+        # the position rows need the rigid-offset correction; the pinch
+        # point's orientation IS link_6's orientation.
         point_pos_b, point_jac_pos = _ee_point_pos_and_jacobian(ee_pos_b, ee_quat_b, jacobian_b)
+        jac_ang = jacobian_b[:, 3:6, :]
+        full_jac = torch.cat([point_jac_pos, jac_ang], dim=1)
 
-        direction = target_pos_b - point_pos_b
-        dist = torch.norm(direction, dim=-1, keepdim=True)
-        step_target_b = point_pos_b + direction / (dist + 1e-8) * torch.clamp(dist, max=POLISH_STEP_MAX)
+        pos_error, rot_error = compute_pose_error(
+            point_pos_b, ee_quat_b, target_pos_b, target_quat_b, rot_error_type="axis_angle"
+        )
+        pos_norm = torch.norm(pos_error, dim=-1, keepdim=True)
+        pos_step = pos_error / (pos_norm + 1e-8) * torch.clamp(pos_norm, max=POLISH_STEP_MAX)
+        rot_norm = torch.norm(rot_error, dim=-1, keepdim=True)
+        rot_step = rot_error / (rot_norm + 1e-8) * torch.clamp(rot_norm, max=POLISH_ROT_STEP_MAX)
+        delta_command = torch.cat([pos_step, rot_step], dim=-1)
 
-        ik_controller.set_command(step_target_b, ee_pos=point_pos_b, ee_quat=ee_quat_b)
-        joint_pos_des = ik_controller.compute(point_pos_b, ee_quat_b, point_jac_pos, current_joint_pos)
+        ik_controller.set_command(delta_command, ee_pos=point_pos_b, ee_quat=ee_quat_b)
+        joint_pos_des = ik_controller.compute(point_pos_b, ee_quat_b, full_jac, current_joint_pos)
 
         lo = joint_pos_limits[:, :, 0]
         hi = joint_pos_limits[:, :, 1]
@@ -363,23 +638,37 @@ def polish_from_seed(env, ik_controller, robot_entity_cfg, ik_jacobi_idx, target
             action[:, num_arm_joints] = GRIPPER_OPEN
             env.step(action)
 
-        final_residual = _measure_dist(robot, robot_entity_cfg, target_pos_b)
-        if final_residual < best_polish_residual:
-            best_polish_residual = final_residual
+        final_pos_residual = _measure_dist(robot, robot_entity_cfg, target_pos_b)
+        final_rot_residual = _measure_rot_err(robot, robot_entity_cfg, target_quat_b)
+        final_score = _combined_score(final_pos_residual, final_rot_residual)
+        if round_num % 10 == 0 or round_num == POLISH_ROUNDS - 1:
+            print(
+                f"  [POLISH round {round_num:3d}] pos_err={final_pos_residual:.5f}m rot_err={final_rot_residual:.4f}rad"
+            )
+        if final_score < best_score:
+            best_score = final_score
+            best_pos_residual = final_pos_residual
+            best_rot_residual = final_rot_residual
             best_polish_q = robot.data.joint_pos[0, robot_entity_cfg.joint_ids].tolist()
-        if final_residual < CONVERGENCE_THRESHOLD:
+        if final_pos_residual < CONVERGENCE_THRESHOLD and final_rot_residual < ROT_CONVERGENCE_THRESHOLD:
             break
 
-    if best_polish_residual < final_residual:
+    if best_score < _combined_score(final_pos_residual, final_rot_residual):
         print(
-            f"  [POLISH] last round ({final_residual:.5f}m) was worse than the best round found "
-            f"({best_polish_residual:.5f}m) - restoring the best config instead of the last one"
+            f"  [POLISH] last round (pos={final_pos_residual:.5f}m rot={final_rot_residual:.4f}rad) was worse than "
+            f"the best round found (pos={best_pos_residual:.5f}m rot={best_rot_residual:.4f}rad) - restoring the "
+            "best config instead of the last one"
         )
         _settle_at(env, robot, robot_entity_cfg, num_arm_joints, best_polish_q, POLISH_SETTLE_STEPS * 2)
-        final_residual = best_polish_residual
+        final_pos_residual = best_pos_residual
+        final_rot_residual = best_rot_residual
 
-    print(f"  [POLISH] final residual: {final_residual:.5f}m")
-    return robot.data.joint_pos[0, robot_entity_cfg.joint_ids].tolist(), final_residual
+    residual_vec = _measure_dist_vec(robot, robot_entity_cfg, target_pos_b)
+    print(
+        f"  [POLISH] final residual: pos={final_pos_residual:.5f}m rot={final_rot_residual:.4f}rad "
+        f"(target-achieved per-axis xyz: {['%.5f' % v for v in residual_vec]})"
+    )
+    return robot.data.joint_pos[0, robot_entity_cfg.joint_ids].tolist(), final_pos_residual, final_rot_residual
 
 
 def main() -> None:
@@ -409,9 +698,16 @@ def main() -> None:
     num_arm_joints = len(ARM_JOINT_NAMES)
 
     joint_pos_limits = robot.data.joint_pos_limits[:, robot_entity_cfg.joint_ids]
+    print(f"[INFO] Arm joint pos limits (lo,hi per joint): {joint_pos_limits[0].tolist()}")
 
+    # 2026-07-22 (orientation-fix task): switched command_type "position" ->
+    # "pose" (relative mode, mirroring demo_franka_ik_dice_line.py's own
+    # proven bounded-relative-step pattern) so the solve targets BOTH
+    # position and a canonical straight-down orientation, instead of
+    # leaving orientation to fall out of the arm's redundant null space.
+    # See this module's docstring and _build_canonical_target_quat_b for why.
     ik_cfg = DifferentialIKControllerCfg(
-        command_type="position", use_relative_mode=False, ik_method="dls", ik_params={"lambda_val": LAMBDA_VAL}
+        command_type="pose", use_relative_mode=True, ik_method="dls", ik_params={"lambda_val": LAMBDA_VAL}
     )
     ik_controller = DifferentialIKController(ik_cfg, num_envs=env.num_envs, device=env.device)
 
@@ -424,11 +720,36 @@ def main() -> None:
 
         root_pos_w = robot.data.root_pos_w.clone()
         root_quat_w = robot.data.root_quat_w.clone()
-        cube_pos_w = torch.tensor([CUBE_POS_W], device=env.device)
+
+        # 2026-07-22 (orientation-fix task): if --cube-xy was passed, teleport
+        # the cube there (z kept at scene default) BEFORE reading its pose as
+        # ground truth for the grasp targets - lets this same pipeline be
+        # tested at different reach distances/bearings without touching the
+        # scene cfg's own randomization-free spawn. cube_pos_w is now always
+        # read LIVE from the scene (source of truth), not from the CUBE_POS_W
+        # constant directly - CUBE_POS_W remains the default/no-override case.
+        cube = env.scene["cube"]
+        if args_cli.cube_xy is not None:
+            override_z = cube.data.root_pos_w[0, 2].item()
+            override_pos = torch.tensor([[args_cli.cube_xy[0], args_cli.cube_xy[1], override_z]], device=env.device)
+            override_quat = cube.data.root_quat_w[0:1].clone()
+            cube.write_root_pose_to_sim(torch.cat([override_pos, override_quat], dim=-1), env_ids=torch.tensor([0], device=env.device))
+            cube.write_root_velocity_to_sim(torch.zeros((1, 6), device=env.device), env_ids=torch.tensor([0], device=env.device))
+            print(f"[INFO] --cube-xy override applied: cube teleported to world {override_pos[0].tolist()}")
+
+        cube_pos_w = cube.data.root_pos_w[0:1].clone()
         cube_pos_b, _ = subtract_frame_transforms(root_pos_w, root_quat_w, cube_pos_w)
         target_bearing = math.atan2(cube_pos_b[0, 1].item(), cube_pos_b[0, 0].item())
         seed_j1 = -(target_bearing - CALIBRATION_C)
         print(f"[INFO] Cube (robot frame): {cube_pos_b[0].tolist()}, calibrated joint_1: {seed_j1:.4f}")
+
+        # Single canonical straight-down target orientation, reused for both
+        # PREGRASP and GRASP waypoints (mirrors demo_franka_ik_dice_line.py's
+        # own canonical_down_quat_w convention - one fixed approach
+        # orientation for the whole descend/close/lift sequence, not
+        # per-waypoint). See _build_canonical_target_quat_b's own docstring.
+        target_quat_b = _build_canonical_target_quat_b(root_pos_w, root_quat_w, tilt_deg=args_cli.tilt_deg)
+        print(f"[INFO] Canonical target orientation (root frame, w,x,y,z): {target_quat_b[0].tolist()}")
 
         # Capture the cube's TRUE pose right after reset, before any
         # seed-search/polish runs. The multi-seed search below teleports the
@@ -444,8 +765,8 @@ def main() -> None:
         # drifted ~20cm in X from its expected spawn point by the time the
         # phased execution started. Restoring this captured pose right
         # before Phase 0 (below) is a direct, cheap guard against exactly
-        # that displacement.
-        cube = env.scene["cube"]
+        # that displacement. (`cube` itself was already resolved above, when
+        # the --cube-xy override - if any - was applied.)
         cube_init_pos = cube.data.root_pos_w[0].clone()
         cube_init_quat = cube.data.root_quat_w[0].clone()
         print(f"[INFO] Cube initial pose (world): pos={cube_init_pos.tolist()}")
@@ -463,23 +784,93 @@ def main() -> None:
         KNOWN_GOOD_GRASP_Q = [-0.014429761096835136, 1.240863561630249, 0.3401874601840973, -0.08906537294387817, 1.1987247467041016, 0.0052983760833740234]
         KNOWN_GOOD_PREGRASP_Q = [0.00014747596287634224, 0.9648232460021973, 0.9025915265083313, -0.0006890640361234546, -0.6352600455284119, 0.008003178983926773]
 
-        print("\n[INFO] Finding best seed for GRASP waypoint (multi-seed, genuinely settled)...")
-        seed_q, _ = _find_best_seed(env, robot, robot_entity_cfg, num_arm_joints, grasp_pos_b, seed_j1, extra_full_seeds=[KNOWN_GOOD_GRASP_Q])
-        print("[INFO] Polishing GRASP waypoint (fixed-Jacobian DLS)...")
-        grasp_q, grasp_residual = polish_from_seed(
-            env, ik_controller, robot_entity_cfg, ik_jacobi_idx, grasp_pos_b, seed_q, num_arm_joints, joint_pos_limits
-        )
-
+        # 2026-07-22 (orientation-fix task, live-run finding): solve PREGRASP
+        # FIRST, then seed GRASP's polish from PREGRASP's own CONVERGED
+        # config, instead of solving both waypoints independently from
+        # scratch. Found necessary live: a first attempt gave GRASP its own
+        # independent combined-score seed search (same mechanism as
+        # PREGRASP's) and it STILL landed on the old position-only
+        # KNOWN_GOOD_GRASP_Q seed (every CANDIDATE_SEEDS entry scored worse
+        # on combined position+orientation terms) - and that seed's polish
+        # got permanently deadlocked at ~163 degrees (2.845rad) of rotation
+        # error for 80 straight rounds (identical residual every round - a
+        # joint-limit wall, not a converging solve), DESPITE starting from
+        # almost the identical ~171-degree (2.98rad) initial rotation error
+        # PREGRASP's own seed also started from and successfully corrected
+        # (2.98rad -> 0.0059rad in 20 rounds). That rules out "bad seed
+        # orientation" as the actual cause - the real difference is GRASP's
+        # much lower approach height (GRASP_AT_HEIGHT=0.009, right at the
+        # cube's surface) creating a joint-limit conflict between position
+        # and canonical orientation that none of the existing seeds happen
+        # to avoid, consistent with this same basin's earlier-diagnosed
+        # (position-only investigation) joint-limit-capped descent. Since
+        # PREGRASP_Q is only 5cm away (PREGRASP_HOVER) and already
+        # genuinely canonical (rot_err 0.0059rad), it's a far more physically
+        # sensible starting point for GRASP's polish than an independently
+        # re-solved basin - and matches how the phased execution actually
+        # moves the arm anyway (pregrasp_q -> grasp_q as consecutive,
+        # nearby waypoints, not independent teleports).
         print("\n[INFO] Finding best seed for PREGRASP waypoint (multi-seed, genuinely settled)...")
-        seed_q, _ = _find_best_seed(env, robot, robot_entity_cfg, num_arm_joints, pregrasp_pos_b, seed_j1, extra_full_seeds=[KNOWN_GOOD_PREGRASP_Q])
-        print("[INFO] Polishing PREGRASP waypoint (fixed-Jacobian DLS)...")
-        pregrasp_q, pregrasp_residual = polish_from_seed(
-            env, ik_controller, robot_entity_cfg, ik_jacobi_idx, pregrasp_pos_b, seed_q, num_arm_joints, joint_pos_limits
+        seed_q, _ = _find_best_seed(env, robot, robot_entity_cfg, num_arm_joints, pregrasp_pos_b, target_quat_b, seed_j1, extra_full_seeds=[KNOWN_GOOD_PREGRASP_Q])
+        print("[INFO] Polishing PREGRASP waypoint (fixed-Jacobian, pose-DLS)...")
+        pregrasp_q, pregrasp_residual, pregrasp_rot_residual = polish_from_seed(
+            env, ik_controller, robot_entity_cfg, ik_jacobi_idx, pregrasp_pos_b, target_quat_b, seed_q, num_arm_joints, joint_pos_limits
         )
 
-        print(f"\n[SUMMARY] grasp_residual={grasp_residual:.5f}m pregrasp_residual={pregrasp_residual:.5f}m")
+        print("\n[INFO] Finding best seed for GRASP waypoint (multi-seed, genuinely settled, includes converged PREGRASP_Q)...")
+        seed_q, _ = _find_best_seed(
+            env, robot, robot_entity_cfg, num_arm_joints, grasp_pos_b, target_quat_b, seed_j1,
+            extra_full_seeds=[KNOWN_GOOD_GRASP_Q, pregrasp_q],
+        )
+        print("[INFO] Polishing GRASP waypoint (fixed-Jacobian, pose-DLS)...")
+        grasp_q, grasp_residual, grasp_rot_residual = polish_from_seed(
+            env, ik_controller, robot_entity_cfg, ik_jacobi_idx, grasp_pos_b, target_quat_b, seed_q, num_arm_joints, joint_pos_limits
+        )
+
+        print(
+            f"\n[SUMMARY] grasp_residual={grasp_residual:.5f}m/{grasp_rot_residual:.4f}rad "
+            f"pregrasp_residual={pregrasp_residual:.5f}m/{pregrasp_rot_residual:.4f}rad"
+        )
         print(f"[SUMMARY] grasp_q={grasp_q}")
         print(f"[SUMMARY] pregrasp_q={pregrasp_q}")
+
+        # Live orientation sanity check (mirrors _diag_check_orientation.py):
+        # explicitly teleport+settle to EACH found waypoint and print link_6's
+        # actual local-axis directions in root frame, so the printed log
+        # itself shows whether the approach axis (local +Z) is genuinely
+        # vertical at THAT waypoint - not just that the scalar rot_residual
+        # returned by polish_from_seed is small (a small residual is a claim
+        # about compute_pose_error's own math; this is an independent,
+        # directly-readable check of the same thing). Does its own explicit
+        # teleport rather than trusting whatever state happens to be live
+        # (an earlier version of this check read the CURRENT robot state
+        # without re-teleporting, right after the PREGRASP polish had
+        # already moved the arm away from grasp_q - it was silently
+        # reporting PREGRASP's orientation while labeled "GRASP_Q").
+        def _check_orientation_at(q_list, label):
+            q = torch.tensor([q_list], device=env.device)
+            robot.write_joint_position_to_sim(q, joint_ids=robot_entity_cfg.joint_ids, env_ids=torch.tensor([0], device=env.device))
+            robot.write_joint_velocity_to_sim(
+                torch.zeros((1, num_arm_joints), device=env.device), joint_ids=robot_entity_cfg.joint_ids, env_ids=torch.tensor([0], device=env.device)
+            )
+            for _ in range(30):
+                action = torch.zeros(env.num_envs, num_arm_joints + 1, device=env.device)
+                action[:, :num_arm_joints] = q
+                action[:, num_arm_joints] = GRIPPER_OPEN
+                env.step(action)
+            ee_pose_w_check = robot.data.body_pose_w[:, robot_entity_cfg.body_ids[0]]
+            _, ee_quat_b_check = subtract_frame_transforms(
+                robot.data.root_pose_w[:, 0:3], robot.data.root_pose_w[:, 3:7], ee_pose_w_check[:, 0:3], ee_pose_w_check[:, 3:7]
+            )
+            rot_check = matrix_from_quat(ee_quat_b_check)[0]
+            print(
+                f"[CHECK] {label} local +Z (approach axis) in root frame: {['%.3f' % v for v in rot_check[:, 2].tolist()]} "
+                "(target: world -Z, i.e. root-frame [0,0,-1] since AR4's 180-deg base yaw leaves Z unaffected)"
+            )
+            print(f"[CHECK] {label} local +X (jaw-slide axis) in root frame: {['%.3f' % v for v in rot_check[:, 0].tolist()]}")
+
+        _check_orientation_at(grasp_q, "GRASP_Q")
+        _check_orientation_at(pregrasp_q, "PREGRASP_Q")
 
         # Restore the cube to its captured initial pose (see note above)
         # before starting the actual phased grasp attempt, undoing any

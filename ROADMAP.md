@@ -97,13 +97,48 @@ Roughly in the order they'd likely be picked up:
    not a positioning-precision gap — a genuinely different, narrower,
    better-characterized problem than the original Hypothesis 1 framing.
 
+   **`command_type="pose"` orientation-aware IK redesign, done 2026-07-22
+   (same day, later, ar4-grasp-orientation-fix task): the orientation
+   mechanism itself is now confirmed FIXED, but this surfaced a deeper,
+   genuine AR4 kinematic limit (joint_3/elbow) that still blocks a full
+   lift — not yet a working grasp.** `scripts/grasp_demo_v2.py` switched
+   to full pose (position+orientation) DLS with an explicit canonical
+   straight-down target (mirroring `demo_franka_ik_dice_line.py`'s own
+   `canonical_down_quat_w` precedent, built from AR4's own world-frame
+   basis vectors). Verified live via independent axis readout (not just
+   the scalar residual) that the solver genuinely reaches vertical when
+   not joint-limited (0.2-degree error at a 32cm-reach test position).
+   Two real bugs found/fixed en route: an arbitrary jaw-heading choice
+   was deadlocking `joint_6` at its own hard limit (fixed by rotating the
+   heading 90 degrees), and GRASP's own seed search was picking an
+   orientation-incompatible seed because it scored on position alone
+   (fixed: combined position+orientation seed scoring, and seeding GRASP
+   from PREGRASP's own converged config instead of an independent search).
+   **But: AR4's `joint_3` hard limit (`[-1.55, +0.91]` rad) genuinely
+   prevents reaching the cube's actual 9mm grasp height while holding a
+   vertical wrist, confirmed across 3 different reach distances (20/27.5/
+   32cm) via a new `--cube-xy` test override — moving the cube CLOSER
+   made it WORSE, not better, and "aim lower to compensate" was retested
+   in a non-joint-limited basin and again made it worse, ruling out both
+   "just a seed problem" and "just this one basin's limit" as the
+   explanation.** A deliberate 30-degree tilt (new `--tilt-deg` option, a
+   middle ground between fully-vertical and the original uncontrolled
+   result) was tried once and instead hit solver instability (rotation
+   error diverged round over round) rather than resolving the conflict —
+   flagged as an open follow-up, not debugged further this pass. No real
+   cube contact/lift achieved in 11 full runs this session; cube height
+   stayed flat at its resting ~6mm in every clean run.
+
    Full detail: `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s
-   2026-07-22 (later) UPDATE. Follow-ups logged to `BACKLOG.md`: applying
-   the same 4 fixes to `grasp_demo.py`/`oracle_rollout.py` (confirmed to
-   share Bugs 1 and/or 4; `interactive_joint_demo.py` uses a closed-form
-   3-DOF IK, unaffected), and a `command_type="pose"` orientation-aware IK
-   redesign to close the diagnosed remaining gap. Arm-actuator-gain
-   follow-up (unchanged from before) also still on `BACKLOG.md`.
+   2026-07-22 (later, ar4-grasp-orientation-fix task) UPDATE. Follow-ups
+   logged to `BACKLOG.md`: applying the same 4 position-fix bugs to
+   `grasp_demo.py`/`oracle_rollout.py` (confirmed to share Bugs 1 and/or
+   4; `interactive_joint_demo.py` uses a closed-form 3-DOF IK, unaffected);
+   debugging the tilt-induced DLS instability and trying smaller tilt
+   angles / a smaller per-round rotation step bound; testing whether a
+   different BEARING (not just reach distance) relieves the joint_3
+   conflict. Arm-actuator-gain follow-up (unchanged from before) also
+   still on `BACKLOG.md`.
 
 See `BACKLOG.md` for further-out candidates not yet on this list.
 

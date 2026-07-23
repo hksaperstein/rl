@@ -95,7 +95,28 @@ cd "$HOME/rl"
 # ar4-capstone-grasp task's own cloud build, silently hanging the session
 # on stdin until manually answered - no committed suppression flag is
 # known for this second prompt.
+# `yes`'s own SIGPIPE (exit 141) the instant build_asset.py stops reading
+# stdin is EXPECTED and harmless (it only exists to answer a possible
+# interactive EULA prompt, in case one fires) - but with `set -e -o
+# pipefail` (top of this script), bash's pipefail reports THAT as the
+# pipeline's own exit status whenever no other stage in the pipe is
+# nonzero, which trips `set -e` and silently aborts the rest of this
+# script (steps 5/6 below) even though the actual build succeeded. Found
+# live (2026-07-23) - the first cloud run of this script built the asset
+# correctly (confirmed via the raw remote log) but exited 141 right after,
+# never reaching the verify/diagnostic steps. Fix: disable pipefail only
+# for this one pipeline, read build_asset.py's OWN real exit code via
+# PIPESTATUS (index 1: yes | <build_asset.py> | tee), and fail explicitly
+# only on THAT.
+set +o pipefail
 yes | PYTHONUNBUFFERED=1 "$HOME/IsaacLab/isaaclab.sh" -p scripts/build_asset.py 2>&1 | tee "$HOME/build_asset.log"
+BUILD_ASSET_EXIT="${PIPESTATUS[1]}"
+set -o pipefail
+if [ "$BUILD_ASSET_EXIT" -ne 0 ]; then
+  echo "FATAL: build_asset.py itself exited ${BUILD_ASSET_EXIT} (not the harmless 'yes' SIGPIPE - see comment above)"
+  exit 1
+fi
+echo "build_asset.py exited 0 - proceeding to verify."
 
 echo "=== [5/6] verify the built asset actually carries every known fix ==="
 "$HOME/IsaacLab/isaaclab.sh" -p scripts/_verify_asset_jaw_fixes.py 2>&1 | tee "$HOME/verify_asset.log"

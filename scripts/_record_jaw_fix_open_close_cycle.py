@@ -69,7 +69,7 @@ from tasks.ar4.robot_cfg import (  # noqa: E402
 )
 
 LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs")
-VIDEO_PATH = os.path.join(LOG_DIR, "videos", "ar4_gripper_jaw_open_close_cycle_fixed.mp4")
+VIDEO_PATH = os.path.join(LOG_DIR, "videos", "ar4_gripper_jaw_open_close_cycle_fixed_zoomedout.mp4")
 
 # Close-up camera target/eye anchored on the gripper's own resting world
 # position at the default reset pose, (~0.014, 0.364, 0.470) - measured
@@ -86,11 +86,21 @@ VIDEO_PATH = os.path.join(LOG_DIR, "videos", "ar4_gripper_jaw_open_close_cycle_f
 # this instead rendered solid black/near-black frames end to end (almost
 # certainly the eye landing inside/behind solid gripper geometry at that
 # closer, level position - not investigated further given limited
-# remaining desktop time). Reverted back to these known-good values,
-# which DO render correctly (confirmed via extracted, non-black video
-# frames) even though the jaw fingertips are smaller/more foreshortened
-# in frame than that failed attempt was aiming for.
-_EYE = (0.0, 0.15, 0.52)
+# remaining desktop time). Reverted back to the known-good values below
+# (confirmed via extracted, non-black video frames), even though the jaw
+# fingertips were smaller/more foreshortened in frame than that failed
+# attempt was aiming for.
+#
+# ZOOMED-OUT REVISION (same day, follow-up task): the known-good close-up
+# above was delivered to the user but judged "too close/zoomed-in,
+# weird-looking." This revision starts from that SAME known-good eye/
+# target line-of-sight (not the reverted, black-frame-producing leveled
+# attempt above) and pulls the eye back along that same line (larger Y/Z
+# offset from target, preserving the elevated down/back look angle that
+# avoided the black-frame failure) while also widening the FOV
+# (focal_length 50 -> 30), so the full gripper plus some surrounding
+# wrist/arm context is visible with margin, not cropped.
+_EYE = (0.0, 0.05, 0.55)
 _TARGET = (0.0, 0.364, 0.47)
 
 
@@ -109,7 +119,7 @@ def main() -> None:
     # Repurpose the existing demo_camera as a tight close-up on the gripper
     # jaws (reposition/re-zoom only - same CameraCfg class/mechanism
     # grasp_demo_v2.py already uses for its own demo_camera recording).
-    env_cfg.scene.demo_camera.spawn.focal_length = 50.0
+    env_cfg.scene.demo_camera.spawn.focal_length = 30.0
     env_cfg.scene.demo_camera.spawn.clipping_range = (0.05, 2.0)
     env_cfg.scene.demo_camera.offset = CameraCfg.OffsetCfg(
         pos=_EYE, rot=_lookat_quat_opengl(_EYE, _TARGET), convention="opengl"

@@ -714,6 +714,16 @@ def main() -> None:
     os.makedirs(os.path.dirname(VIDEO_PATH), exist_ok=True)
     video_writer = imageio.get_writer(VIDEO_PATH, fps=int(1.0 / env.step_dt), codec="libx264")
     camera = env.scene["perception_camera"]
+    # 2026-07-22 (orientation-fix task): perception_camera is a tight
+    # close-up framing tuned for object detection (per its own docstring in
+    # tasks/ar4/grasp_verify_env_cfg.py), not for a human watching arm
+    # motion - a review of ar4_grasp_demo_v2.mp4 found it nearly impossible
+    # to tell what's happening from that camera alone. demo_camera (a wide
+    # 3/4 view, same module) is recorded to a second file for actual visual
+    # verification purposes, alongside the existing perception_camera video.
+    demo_video_path = VIDEO_PATH.replace(".mp4", "_demo_camera.mp4")
+    demo_video_writer = imageio.get_writer(demo_video_path, fps=int(1.0 / env.step_dt), codec="libx264")
+    demo_camera = env.scene["demo_camera"]
 
     with torch.inference_mode():
         env.reset()
@@ -917,6 +927,8 @@ def main() -> None:
 
                 rgb = camera.data.output["rgb"][0].cpu().numpy()
                 video_writer.append_data(rgb[:, :, :3].astype("uint8"))
+                demo_rgb = demo_camera.data.output["rgb"][0].cpu().numpy()
+                demo_video_writer.append_data(demo_rgb[:, :, :3].astype("uint8"))
 
                 if phase_idx in (3, 4, 5) and i % 20 == 0:
                     cube_z = env.scene["cube"].data.root_pos_w[0, 2].item()
@@ -930,8 +942,10 @@ def main() -> None:
         env.reset()
 
     video_writer.close()
+    demo_video_writer.close()
     env.close()
     print(f"\nVideo recorded to: {VIDEO_PATH}")
+    print(f"Demo-camera video recorded to: {demo_video_path}")
 
 
 if __name__ == "__main__":

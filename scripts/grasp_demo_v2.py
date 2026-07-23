@@ -1069,6 +1069,76 @@ def main() -> None:
         live_gripper_q = robot.data.joint_pos[0, gripper_joint_ids].tolist()
         print(f"  [GRIPPER-CHECK] {label}: actual joint_pos {gripper_joint_names_found}={['%.5f' % v for v in live_gripper_q]}")
 
+    # 2026-07-23 (ar4-jaw-bisector-hypothesis task): direct LIVE measurement
+    # of both gripper jaw fingertips' real world body positions -
+    # robot.data.body_pos_w, NOT the arm's own single _EE_OFFSET-derived
+    # target point - to test whether _EE_OFFSET (a fixed constant, measured
+    # near-vertical per pickplace_env_cfg.py's own docstring) still
+    # represents the TRUE bisector point between the two jaw fingertips once
+    # the whole gripper is oriented at a large, non-near-vertical tilt (the
+    # 2026-07-23 ar4-capstone-grasp task's own flagged next diagnostic - see
+    # kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md's matching
+    # UPDATE). This is independent of (and a live-asset cross-check against)
+    # a pure-FK-model calculation done offline against tasks/ar4/
+    # fk_verification.py's vendor-URDF joint table, which found the
+    # local-frame offset between link_6 and the true jaw bisector is a
+    # CONSTANT ~0.0001mm regardless of arm joint values (confirmed
+    # numerically across several very different joint configs) - a rigid,
+    # fixed-body-frame quantity by construction, since the whole gripper
+    # subtree hangs off link_6 through fixed joints plus the jaws' own
+    # prismatic joints only, none of which depend on the arm's own joint_1-6
+    # values. That FK-model result predicts this hypothesis should be
+    # FALSIFIED on the real built asset too, unless the built USD itself
+    # carries an import-time defect the idealized vendor-URDF model
+    # wouldn't predict (this project's own history has real precedent for
+    # exactly that class of surprise - see fk_verification.py's own
+    # docstring on its first-draft calibration being wrong until a live
+    # integration run caught it) - hence checking directly on the live
+    # asset here rather than trusting the offline calculation alone.
+    gripper_jaw_body_ids, gripper_jaw_body_names_found = robot.find_bodies(["gripper_jaw1_link", "gripper_jaw2_link"])
+    print(f"[INFO] Gripper jaw body ids resolved: {gripper_jaw_body_names_found} -> {gripper_jaw_body_ids}")
+
+    def _measure_jaw_bisector_vs_ee_offset(label: str, cube_pos_w=None):
+        """Live-measure both jaw fingertips' world positions, the true
+        bisector between them, and the arm's own _EE_OFFSET-derived assumed
+        pinch point - all from robot.data.body_pos_w/body_pose_w directly
+        (not this script's own root-frame IK-target bookkeeping). Prints the
+        discrepancy between the true bisector and the assumed point, and (if
+        cube_pos_w is given) each jaw's own distance to the cube - the
+        latter directly tests whether a nonzero position residual has an
+        ASYMMETRIC effect (one jaw meaningfully closer to the cube than the
+        other), the mechanism this task's step 4 flags as the next most
+        likely explanation for jaw1-only contact if the bisector/offset
+        discrepancy itself turns out to be negligible."""
+        jaw_pos_w = robot.data.body_pos_w[0, gripper_jaw_body_ids].clone()
+        jaw1_pos_w, jaw2_pos_w = jaw_pos_w[0], jaw_pos_w[1]
+        true_bisector_w = (jaw1_pos_w + jaw2_pos_w) / 2.0
+        jaw_sep_mm = torch.norm(jaw1_pos_w - jaw2_pos_w).item() * 1000.0
+
+        ee_pose_w = robot.data.body_pose_w[0, robot_entity_cfg.body_ids[0]]
+        ee_pos_w, ee_quat_w = ee_pose_w[0:3], ee_pose_w[3:7]
+        rot = matrix_from_quat(ee_quat_w.unsqueeze(0))[0]
+        offset_local = torch.tensor(_EE_OFFSET, device=ee_pos_w.device)
+        assumed_pinch_w = ee_pos_w + rot @ offset_local
+
+        disc_mm = torch.norm(true_bisector_w - assumed_pinch_w).item() * 1000.0
+        print(f"[BISECTOR-CHECK] {label}: jaw1_w={jaw1_pos_w.tolist()} jaw2_w={jaw2_pos_w.tolist()} sep={jaw_sep_mm:.4f}mm")
+        print(f"[BISECTOR-CHECK] {label}: true_bisector_w={true_bisector_w.tolist()} assumed_pinch_w(_EE_OFFSET)={assumed_pinch_w.tolist()}")
+        print(f"[BISECTOR-CHECK] {label}: DISCREPANCY (true bisector vs _EE_OFFSET assumed point) = {disc_mm:.4f}mm")
+        if cube_pos_w is not None:
+            bisector_vs_cube_mm = torch.norm(true_bisector_w - cube_pos_w).item() * 1000.0
+            assumed_vs_cube_mm = torch.norm(assumed_pinch_w - cube_pos_w).item() * 1000.0
+            jaw1_to_cube_mm = torch.norm(jaw1_pos_w - cube_pos_w).item() * 1000.0
+            jaw2_to_cube_mm = torch.norm(jaw2_pos_w - cube_pos_w).item() * 1000.0
+            print(f"[BISECTOR-CHECK] {label}: true_bisector vs cube = {bisector_vs_cube_mm:.4f}mm; assumed_pinch vs cube = {assumed_vs_cube_mm:.4f}mm")
+            print(
+                f"[BISECTOR-CHECK] {label}: jaw1-to-cube={jaw1_to_cube_mm:.4f}mm  jaw2-to-cube={jaw2_to_cube_mm:.4f}mm  "
+                f"(asymmetry={abs(jaw1_to_cube_mm - jaw2_to_cube_mm):.4f}mm - a large asymmetry here, with a small "
+                "bisector/offset discrepancy above, would point at the pre-existing position residual's own DIRECTION "
+                "as the explanation for one-sided contact, not an _EE_OFFSET calibration bug)"
+            )
+        return true_bisector_w, assumed_pinch_w, disc_mm
+
     joint_pos_limits = robot.data.joint_pos_limits[:, robot_entity_cfg.joint_ids]
     print(f"[INFO] Arm joint pos limits (lo,hi per joint): {joint_pos_limits[0].tolist()}")
 
@@ -1099,6 +1169,16 @@ def main() -> None:
 
     with torch.inference_mode():
         env.reset()
+
+        # Baseline bisector-vs-offset check at HOME_Q (near-zero joint
+        # values, the arm's default reset pose) - per the offline FK-model
+        # calculation (see _measure_jaw_bisector_vs_ee_offset's own
+        # docstring), this discrepancy should be joint-config-independent
+        # (a rigid local-frame quantity), so this baseline reading should
+        # already match whatever is found later at the tilted grasp_q - a
+        # live cross-check of that prediction on the REAL built asset,
+        # not just the idealized vendor-URDF model.
+        _measure_jaw_bisector_vs_ee_offset("HOME_Q baseline (post-reset)")
 
         root_pos_w = robot.data.root_pos_w.clone()
         root_quat_w = robot.data.root_quat_w.clone()
@@ -1630,6 +1710,15 @@ def main() -> None:
             print(f"[CHECK] {label} local +X (jaw-slide axis) in root frame: {['%.3f' % v for v in rot_check[:, 0].tolist()]}")
 
         _check_orientation_at(grasp_q, "GRASP_Q")
+        # 2026-07-23 (ar4-jaw-bisector-hypothesis task): the robot is now
+        # genuinely settled AT grasp_q (gripper OPEN, per _check_orientation_at's
+        # own settle loop) - the exact configuration one of the capstone
+        # session's 3 failed grasp+lift attempts used. Measure the real jaw
+        # fingertip bisector here, against both the arm's own _EE_OFFSET
+        # assumption and the cube's TRUE captured position (cube_init_pos,
+        # captured before parking, above) - this is the core test this task
+        # was dispatched to run.
+        _measure_jaw_bisector_vs_ee_offset("GRASP_Q (converged, this run's actual grasp target)", cube_pos_w=cube_init_pos)
         _check_orientation_at(pregrasp_q, "PREGRASP_Q")
 
         # Un-park the cube: move it from _CUBE_PARK_POS_W back to its

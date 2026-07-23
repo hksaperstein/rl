@@ -178,6 +178,44 @@ Roughly in the order they'd likely be picked up:
    `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s 2026-07-22
    (later still, ar4-tilt-fix task) UPDATE.
 
+   **Incremental PREGRASP->GRASP height descent, done 2026-07-22 (same day,
+   later still, ar4-grasp-descent-continuity task): CONFIRMS the
+   disconnected-basin/rotation-deadlock hypothesis, but surfaces a
+   separate, deeper Z-height reachability floor as the real remaining
+   blocker — still no lift.** Instead of solving GRASP as an independent
+   one-shot target (which reliably deadlocked at ~1.1-1.4rad rotation
+   error, above), interpolated the target height from PREGRASP's converged
+   height down to GRASP_AT_HEIGHT in N small steps, re-solving
+   `polish_from_seed` at each sub-height without teleporting between steps
+   (new `--num-descent-steps` CLI arg, default 30). **Confirmed across 4
+   independent configurations (30-step/0° tilt, 60-step/0° tilt, 40-step/
+   15° tilt, 30-step at a farther 32cm reach) that the catastrophic
+   rotation deadlock is completely avoided** — final rotation error landed
+   in the 0.004-0.21rad (0.25-12°) range in every run, nowhere near the
+   1.1-1.4rad basin the one-shot method hit. But **all 4 runs instead
+   converge to a consistent 17-24mm position residual, and in every case
+   the per-axis breakdown shows this is almost entirely a Z-HEIGHT
+   shortfall** (X/Y residual near-zero, e.g. run 1's
+   `['-0.00028', '-0.00486', '-0.01707']` xyz-axis residual) — reproducing,
+   under a materially different continuous-descent methodology, the exact
+   Z-shortfall signature the earlier position-only investigation found.
+   No cube contact/displacement/lift in any of the 4 runs (`cube.z` flat at
+   its ~6mm resting height throughout every CLOSE/lift/hold phase in every
+   log; video-confirmed for run 1 — the gripper is visibly not near the
+   cube in any CLOSE/lift/hold frame). **Verdict: this task's specific
+   hypothesis (small-step continuous descent avoids the one-shot basin
+   jump) is CONFIRMED — that problem is now closed with a validated fix —
+   but it reveals a second, independent, tilt/reach/step-count-independent
+   Z-height reachability limit as the real remaining blocker for an actual
+   grasp+lift.** Next diagnostic (not yet run, flagged for a future pass):
+   directly sweep the reachable Z-height envelope at this XY position
+   (via `--grasp-height`, in fine increments through the descent method
+   itself) to map exactly how low this basin can genuinely descend and
+   which joint's margin is the actual binding constraint, rather than
+   continuing to test only the one target height. Full detail:
+   `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s 2026-07-22
+   (later still, ar4-grasp-descent-continuity task) UPDATE.
+
 See `BACKLOG.md` for further-out candidates not yet on this list.
 
 ## Recently landed

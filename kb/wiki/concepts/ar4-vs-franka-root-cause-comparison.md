@@ -1324,3 +1324,148 @@ dozen full `grasp_demo_v2.py` launches varying `--tilt-deg`
 `_MAX_ROT_STEP` for the proven-stable reference pattern Part B's fix
 mirrors; `robot.data.joint_pos_limits`/live joint-margin printouts for
 the basin-conflict diagnosis.
+
+## UPDATE 2026-07-22 (later still, ar4-grasp-descent-continuity task): incremental PREGRASP->GRASP height descent CONFIRMS the rotation-deadlock hypothesis, but surfaces a separate, deeper Z-height reachability floor - still no lift
+
+Tasked with testing a specific hypothesis for the prior session's own
+open finding: GRASP solved as an independent one-shot target (multi-seed
+search + DLS polish) deadlocks at a stable ~1.1-1.4rad rotation error,
+tilt/damping/seed-independent, with no single joint pinned at a hard
+limit - "a big jump from PREGRASP's config can't reach GRASP's basin
+directly," a disconnected-basin property. The hypothesis: walk the arm
+down from PREGRASP's already-converged config to GRASP height in many
+small continuous steps, re-solving IK every step, mirroring the pattern
+that worked every other time this investigation found something
+reliable (Experiment 11's RL-driven incremental IK, `demo_franka_ik_dice_line.py`'s
+continuous per-step resolve, this same session's own PREGRASP-tilt fix
+above).
+
+**Implementation** (`scripts/grasp_demo_v2.py`): a key property of the
+existing `polish_from_seed` (confirmed by reading it, not assumed) makes
+this cheap to implement correctly - it NEVER teleports the robot to its
+own `seed_q` argument, it always continues the DLS loop from the robot's
+actual LIVE physical state. This means calling it repeatedly back-to-back
+with no `_settle_at`/teleport in between already behaves as a genuine
+continuous resolve from one call's converged end-state to the next call's
+starting state - exactly the mechanism the hypothesis needs. New
+`--num-descent-steps` CLI arg (default 30): interpolates ONLY the target
+height from PREGRASP's converged height down to `GRASP_AT_HEIGHT` in that
+many increments (x/y and orientation are already shared between PREGRASP
+and GRASP, so only height needs interpolating), each sub-step solved via a
+smaller per-substep step/stagnation budget (`DESCENT_SUBSTEP_MAX_STEPS=400`/
+`DESCENT_SUBSTEP_STAGNATION_STEPS=150`) than the old one-shot budget.
+`--num-descent-steps 1` reproduces the old one-shot independent-target
+behavior for direct comparison.
+
+**Result: the disconnected-basin/rotation-deadlock hypothesis is
+CONFIRMED across 4 independent live configurations - the catastrophic
+1.1-1.4rad deadlock never recurs under descent, in any of them:**
+
+| Run | Config | Final GRASP pos residual | Final GRASP rot residual | Per-axis xyz residual (root frame) |
+|---|---|---|---|---|
+| 1 | 30 steps, 0° tilt, default 27.5cm reach | 17.7mm | 0.2135rad (12.2°) | `[-0.0003, -0.0049, -0.0171]` |
+| 2 | 60 steps, 0° tilt, default reach | 24.2mm | 0.0044rad (0.25°) | `[-0.0000, -0.0155, -0.0192]` |
+| 3 | 40 steps, 15° tilt, `--lambda-val 0.3` | 20.5mm | 0.0168rad (1.0°) | `[-0.0011, 0.0003, -0.0205]` |
+| 4 | 30 steps, 0° tilt, farther 32cm reach | 19.0mm | 0.0169rad (1.0°) | `[0.0000, -0.0003, -0.0190]` |
+
+Every run's own full per-substep printout (not just the final number) was
+inspected: the descent's rotation error rises and falls SMOOTHLY across
+sub-steps (e.g. run 1: `0.0427rad` at sub-step 1, dips to a genuine
+minimum `~0.0041rad` around sub-step 15, then climbs gradually back up to
+`0.2135rad` by sub-step 30) - a bounded, continuous degradation, never the
+sudden multi-hundred-percent jump-and-plateau signature that
+characterized the one-shot deadlock. `limit_margin` printouts confirm no
+joint is pinned exactly at its hard limit in the final converged states
+(closest observed: joint_3 margin narrowing to ~0.12-0.19rad, i.e.
+7-11 degrees of remaining travel, not zero) - consistent with a
+near-limit, not at-limit, regime.
+
+**But: all 4 runs instead converge to a consistent 17-24mm position
+residual, and the per-axis breakdown shows this is almost entirely a
+Z-HEIGHT shortfall, not an X/Y bearing miss** - X residual is at most
+1.1mm and Y at most 15.5mm across all 4 runs, while Z residual is
+17-21mm in every single run (see table above). This is the SAME
+Z-shortfall signature the earlier position-only investigation found
+(the "ar4-grasp-ik-precision task" UPDATE above, before the orientation
+fix even existed: "the achieved pinch point lands well ABOVE the
+intended grasp height... the dominant component of the residual is a
+Z-height shortfall, not an X/Y bearing error") - now independently
+reproduced under a materially different solving methodology (continuous
+incremental descent instead of one-shot multi-seed search), across 4
+different tilt/reach/step-count combinations. **This is strong evidence
+the Z-height shortfall is a genuine, method-independent kinematic
+reachability limit of this arm at this cube height** (not an artifact of
+either the original one-shot solving method or of this session's own
+descent method), separate from and deeper than the rotation-deadlock
+problem this task specifically targeted.
+
+**No cube contact, displacement, or lift in any of the 4 runs** -
+`cube.data.root_pos_w`'s z-component stayed flat at its resting `~0.006m`
+throughout every CLOSE/lift/hold phase in all 4 logs. Video-confirmed for
+run 1 (not just printed metrics): frames pulled from the demo-camera
+video at the CLOSE (step 300), lift (step 400), and hold (step 500)
+phases all show the gripper clearly not overlapping the cube (visible as
+a small red dot on the ground plane, well clear of the gripper's
+fingertip in every frame) - consistent with the printed 17.7mm residual
+being larger than the cube's own 12mm size.
+
+**What this means.** This task's own specific hypothesis - that a big
+single-jump solve to GRASP (as opposed to PREGRASP, which is only 5cm
+away and always converged cleanly) was the cause of the 1.1-1.4rad
+deadlock because the solver couldn't cross a disconnected region of
+configuration space in one step - is CONFIRMED and now closed with a
+validated, reproducible fix: incremental height descent, using the
+already-fixed continuous-resolve/damping machinery, avoids that deadlock
+in every one of 4 tested configurations. This is a genuine, positive,
+validated result for the specific question this task was asked to
+answer. However, it does NOT produce a working grasp, because it
+surfaces a SEPARATE problem: a ~17-24mm Z-height reachability floor at
+the true ~9mm grasp height, robust to tilt angle, descent step count, and
+reach distance, that was previously undetected only because the
+rotation deadlock was masking it (a one-shot solve stuck at 1.1-1.4rad
+rotation error never got far enough into the correct basin to reveal
+what its OWN position floor would have been). The joint-limit-margin
+data (no joint pinned exactly at zero margin, but joint_3 consistently
+narrowing to ~0.12-0.19rad, the smallest margin of any joint in every
+run) is consistent with, but does not conclusively prove, this being the
+same joint_3-vs-vertical-orientation conflict documented in the prior
+UPDATE's reach-distance table - a soft multi-joint reachability-envelope
+boundary rather than a hard single-joint wall.
+
+**Next diagnostic, not run this session, flagged for a future pass (per
+this task's own instruction to use judgment once the assigned hypothesis
+was answered one way or the other): directly sweep the reachable Z-height
+envelope at this XY position** - e.g. via `--grasp-height` in fine
+increments (rather than jumping straight to the true 9mm target), through
+the SAME descent method, to map exactly how low this basin can genuinely
+descend before the position residual starts growing, and cross-reference
+against each joint's own live margin at that specific height to identify
+the actual binding constraint (or confirm it's a genuinely multi-joint,
+no-single-culprit envelope boundary, as the reach-distance table in the
+prior UPDATE found at the 32cm/farther position). A second candidate,
+also not run: since Y-axis residual (not just Z) was non-negligible in
+run 2 specifically (15.5mm), it may be worth checking whether
+`ORIENTATION_SCORE_WEIGHT`'s combined-score tradeoff is itself
+contributing to which failure mode (rotation-dominant vs
+position-dominant) a given run lands in, rather than treating tilt/step-
+count as the only relevant variables.
+
+**Script changes** (`scripts/grasp_demo_v2.py`): new `--num-descent-steps`
+CLI arg (default 30); `polish_from_seed` gained optional `max_steps`/
+`stagnation_break_steps` parameters (defaulting to the existing
+`POLISH_MAX_STEPS`/`STAGNATION_BREAK_STEPS` module constants) so a
+descent sub-step can use a smaller budget than a one-shot solve; new
+`DESCENT_SUBSTEP_MAX_STEPS`/`DESCENT_SUBSTEP_STAGNATION_STEPS` constants;
+`main()`'s GRASP-solving section now branches on
+`args_cli.num_descent_steps <= 1` (old one-shot path, preserved for
+comparison) vs. the new incremental-descent loop.
+
+**Sources**: entirely this session's own live runs against the real
+Isaac Sim scene on the desktop (non-headless, `DISPLAY=:1`, dispatched via
+`scripts/run_on_desktop_gpu.sh` under the `/tmp/rl_isaac_sim.lock` flock) -
+4 full `grasp_demo_v2.py` launches (`--video-suffix descent_v1`/
+`descent_v2`/`descent_tilt15`/`descent_32cm`), their full logs, the two
+recorded videos per run (`perception_camera`+`demo_camera`), and 3
+extracted/cropped video frames from run 1's demo-camera video
+(`ffmpeg` frame selection + crop, viewed directly) for the video-based
+grasp-contact confirmation.

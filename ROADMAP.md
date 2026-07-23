@@ -140,6 +140,44 @@ Roughly in the order they'd likely be picked up:
    conflict. Arm-actuator-gain follow-up (unchanged from before) also
    still on `BACKLOG.md`.
 
+   **`joint_3` limit verified against real hardware (Part A) + DLS-tilt
+   instability bug fixed (Part B), done 2026-07-22 (same day, later still,
+   ar4-tilt-fix task) — but GRASP itself hits a NEW, deeper, tilt-
+   independent basin conflict; still no lift.** Part A: the `[-1.553,
+   +0.908]` rad `joint_3` limit was checked directly against the vendor's
+   own `annin_ar4_description` URDF/YAML source (not secondhand claims) —
+   `config/mk5.yaml`'s `j3_limit_min/max: -89/52 degrees` converts to
+   `-1.5533/0.9076 rad`, matching the built USD asset to 4 decimal places,
+   and all 5 shipped model variants (mk1-mk5) carry the identical limit.
+   **Confirmed real hardware, not an import bug — no fix applicable.**
+   Part B found and fixed a genuine mechanism bug behind the prior
+   UPDATE's "`--tilt-deg 30` diverges" finding: `polish_from_seed` solved
+   the DLS Jacobian once per "round" then held that target open-loop for
+   30 physics steps before re-checking, unlike
+   `demo_franka_ik_dice_line.py`'s own proven every-physics-step re-solve
+   pattern; fixed by switching to continuous per-step re-solve, matching
+   Franka's own `_MAX_ROT_STEP` bound (0.15rad→0.03rad, a 5x reduction),
+   and — the change that actually mattered live — raising DLS damping
+   (`lambda_val` 0.02→0.3, new `--lambda-val` CLI override). Validated:
+   PREGRASP now converges cleanly and reproducibly to `4.6mm`/`0.4°` at
+   multiple tilt angles (15°, 25°) and reach distances. **But GRASP
+   itself (the true ~9mm-height waypoint) hits the SAME stable basin
+   deadlock (~1.1-1.4rad final rotation error) regardless of tilt angle
+   (10/15/25°), reach distance (27.5cm/32cm), damping (0.02/0.1/0.3), or
+   seed diversity (6 new wrist-perturbed seed variants tried)** — ruling
+   out numerical instability as GRASP's own blocker (already fixed) and
+   pointing instead at a genuine, tilt-independent, redundant-wrist
+   basin-connectivity property specific to the low grasp height. No
+   grasp+lift validated this session at any tested configuration; the
+   one phased-execution run that reached that stage showed `cube.z` flat
+   at its resting height throughout, consistent with the ~2.6cm final
+   residual exceeding the cube's own size. Full detail (including the
+   specific failure signature and candidate next steps — per-waypoint
+   orientation instead of one shared canonical target, a proper
+   null-space secondary objective, or a different bearing):
+   `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s 2026-07-22
+   (later still, ar4-tilt-fix task) UPDATE.
+
 See `BACKLOG.md` for further-out candidates not yet on this list.
 
 ## Recently landed

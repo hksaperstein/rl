@@ -1147,3 +1147,180 @@ diagnostics (`scripts/_diag_ik_grasp_convergence.py`,
 `scripts/tutorials/05_controllers/run_diff_ik.py`) and this repo's own
 `tasks/ar4/pickplace_env_cfg.py`/`pickplace_mirror_env_cfg.py`/
 `objects_cfg.py` for Bugs 3/4's ground truth.
+
+## UPDATE 2026-07-22 (later still, ar4-tilt-fix task): Part A confirms joint_3 limit is real hardware (not an import bug); Part B fixes a genuine DLS-divergence bug and gets PREGRASP to sub-5mm at a real tilt, but GRASP itself (the true 9mm-height waypoint) hits a NEW, deeper, tilt-independent basin conflict - still no lift
+
+Tasked with two things: (A) verify the `joint_3` `[-1.553, +0.908]` rad
+limit against the real AR4 hardware's own vendor spec (this investigation's
+own pattern has repeatedly found "hardware limits" that were actually
+asset-import defects), and (B) fix the `--tilt-deg 30` DLS-instability
+found in the prior UPDATE and get an actual validated grasp+lift.
+
+**Part A verdict: the limit is REAL hardware, not a bug - confirmed
+directly from the vendor's own URDF/config source, not secondhand
+claims.** `AR4_DESCRIPTION_PATH`'s own `urdf/ar_macro.xacro` defines
+`joint_3`'s limit via `robot_parameters['j3_limit_min'/'j3_limit_max']`,
+loaded from `config/mk5.yaml` (the exact model `scripts/build_asset.py`
+builds, confirmed via its own `ar_model:=mk5` xacro invocation):
+`j3_limit_min: !degrees -89`, `j3_limit_max: !degrees 52`. Converting:
+`-89*pi/180 = -1.55334 rad`, `52*pi/180 = 0.90757 rad` - matching the
+built USD asset's `[-1.5533, +0.9076]` limit to 4 decimal places. Checked
+all 5 shipped model variants (mk1-mk5) - identical `-89/52` limit in
+every one, so this isn't even a per-model quirk. No fix applied; this is
+confirmed to be the real AR4 elbow's own designed range of motion, and
+the earlier sessions' framing of it as a genuine kinematic constraint
+(not an asset defect) stands.
+
+**Part B, mechanism bug found and FIXED: the polish loop's own
+"solve-once-then-hold-blindly" architecture, combined with an oversized
+per-round rotation step and an under-damped DLS lambda, was a real,
+independently-reproducible cause of divergence at a deliberate tilt -
+distinct from (and in addition to) the deeper basin-conflict finding
+below.** `scripts/grasp_demo_v2.py`'s `polish_from_seed` previously solved
+the DLS Jacobian ONCE per "round" then held that single computed
+`joint_pos_des` open-loop for `POLISH_SETTLE_STEPS=30` physics steps
+before ever re-measuring - unlike the proven-stable
+`demo_franka_ik_dice_line.py`'s `_step_toward`, which re-solves the
+Jacobian and takes one small bounded step EVERY physics step
+(closed-loop). Three concrete, live-validated fixes:
+
+1. **Continuous per-step re-solve** (was: one solve, 30-step blind hold).
+   `polish_from_seed` now re-measures and re-solves every physics step,
+   matching Franka's own proven pattern exactly - any overshoot is caught
+   and corrected on the very next step instead of compounding for 29 more
+   steps first.
+2. **`POLISH_ROT_STEP_MAX`: `0.15rad -> 0.03rad`**, matching
+   `demo_franka_ik_dice_line.py`'s own `_MAX_ROT_STEP` EXACTLY - the old
+   value was 5x Franka's proven-stable bound with no stated
+   justification.
+3. **`LAMBDA_VAL` (DLS damping): default kept at `0.02`, but a
+   `--lambda-val` CLI override added, and `0.3` found live to be the
+   value that actually matters.** Live evidence: at `--tilt-deg 15
+   --cube-xy 0.0 0.32` (a farther, less joint-constrained reach than the
+   task's own 27.5cm default), `lambda_val=0.02` still produced the exact
+   same divergence signature reported in the prior UPDATE (rotation error
+   jumping from ~0.05rad to >1.3rad within ~100 physics steps, then
+   plateauing - a stable-but-wrong deadlock, not a runaway blowup, once
+   the continuous-resolve fix was already in place). Raising
+   `lambda_val` to `0.3` (10x higher) completely eliminated this for
+   PREGRASP: genuine, monotonic, textbook DLS convergence from a
+   `1.56rad` initial rotation error down to a stable **`4.6mm` position /
+   `0.0066rad` (`0.4-degree`) rotation residual** - re-confirmed at both
+   15-degree and 25-degree tilt, same reach. This is a real, validated
+   fix for a real numerical-instability bug: the near-singular-Jacobian
+   region this redundant, non-spherical-wristed arm passes through while
+   descending from `PREGRASP_HOVER` needs meaningfully more damping than
+   Franka's own spherical-wristed kinematics ever required at the same
+   nominal `lambda_val`.
+4. **`STAGNATION_BREAK_STEPS=500`** added (break out of the polish loop
+   early once the combined score hasn't improved for 500 consecutive
+   steps) - a pure efficiency/hygiene fix, not a correctness one: without
+   it, a genuinely-deadlocked run burns the full `POLISH_MAX_STEPS=3000`
+   budget for zero benefit. The existing "restore best round" guard
+   already made this safe (a stagnated run was never being reported as
+   its own worst state, just wastefully continuing to confirm it).
+
+**Part B, deeper finding NOT fixed: GRASP itself (the low, ~9mm-height
+waypoint) hits a qualitatively different, tilt-independent basin
+conflict that persists across every mitigation tried - this is now the
+real remaining blocker, not the divergence bug above.** Once the
+divergence bug (items 1-3 above) was fixed, PREGRASP (the higher,
+`+5cm` hover waypoint) converges cleanly and reliably at every tilt/reach
+combination tried. GRASP does not, and the SAME failure signature
+recurred regardless of:
+- **Tilt angle**: 10, 15, and 25 degrees all show it (30 was the
+  original prior-UPDATE finding).
+- **Reach distance**: both the task's own 27.5cm default and the
+  farther, less elbow-constrained 32cm position (already known from the
+  position-only investigation to be a "softer" reachability boundary)
+  show it.
+- **DLS damping**: `lambda_val=0.02` (default), `0.1`, and `0.3` (the
+  value that fixed PREGRASP's instability) all show it - ruling out
+  "just needs more damping" as the fix for GRASP specifically, even
+  though damping WAS the right fix for PREGRASP.
+- **Seed diversity**: extending the multi-seed search with 6 additional
+  wrist-perturbed variants of PREGRASP's own converged config (nudging
+  `joint_4`/`joint_6`, the two DOF `CANDIDATE_SEEDS` never varies) did
+  not find a better basin - the unperturbed `pregrasp_q` seed still won
+  the combined-score comparison every time.
+
+The failure signature itself is consistent and specific: GRASP's polish
+starts from a seed with a genuinely good combined score (position
+`~4cm`, rotation `~3-5 degrees` - itself already too imprecise for a
+clean pinch, but not divergent), then within roughly 100-200 physics
+steps the rotation error jumps to `~1.1-1.4rad` (`63-80 degrees`) and
+PLATEAUS there exactly (residual identical to 4 decimal places for
+hundreds of consecutive steps) - a genuine, stable local optimum, not
+ongoing numerical divergence. `limit_margin` diagnostics (added this
+session, printed every 100 steps) confirm no single joint is pinned
+exactly at its hard limit when this happens (margins mostly `>0.25rad`
+from the nearest wall) - ruling out the simple "hard joint-limit wall"
+framing from earlier sessions as the specific mechanism here, even
+though it's clearly a *related* reachability-envelope phenomenon.
+**Mechanistically, this looks like a genuine disconnected-basin property
+of this arm's redundant, non-spherical wrist at the true low grasp
+height: closing the last few cm of POSITION error at this height forces
+a large joint reconfiguration (a `~1rad` swing was observed in a single
+joint between prints) that a position+orientation-weighted DLS descent
+cannot avoid without destroying the orientation it had already achieved
+at the seed - not a numerical bug, a structural property of the solution
+space at this specific height.**
+
+**Net result: no grasp+lift validated this session, at any tilt/reach
+combination tried, and no clean 3-4 position sweep was run (correctly,
+per the task's own conditioning - the sweep was to happen "once a tilted
+approach converges reliably," which never occurred for GRASP itself).**
+Phased-execution video/`cube.data.root_pos_w` checks were still performed
+for the one run that reached that stage (15-degree tilt, default
+lambda) - `cube.z` stayed flat at its resting `~0.006m` throughout
+CLOSE/lift/hold, consistent with the `~2.6cm` final residual being
+larger than the cube itself. This is a genuine negative result, not an
+overstated partial success.
+
+**What this means.** Two genuinely separate problems got conflated in
+the prior UPDATE's single "DLS instability at tilt" framing, and this
+session split them apart: (1) a real, now-fixed numerical-robustness bug
+in the polish loop's architecture and damping, validated by PREGRASP's
+clean convergence at multiple tilts/reaches; and (2) a deeper,
+NOT-yet-solved kinematic/basin-connectivity property specific to the low
+GRASP waypoint, present across every tilt angle and reach distance
+tested, that (1)'s fix does not touch. This narrows the open question
+usefully: it is no longer "does the solver diverge at a tilt" (answered:
+only did because of bug (1), now fixed) but specifically "why can this
+arm's redundant wrist not reach a jointly position-AND-orientation-
+compatible configuration at the true ~9mm grasp height, at ANY of the
+tilt angles 0/10/15/25/30 degrees tried across two sessions" - a
+question this session's evidence base narrows but does not close.
+Candidate next steps, not attempted this session given its own time
+budget: (a) let GRASP's target orientation be genuinely different from
+PREGRASP's (per-waypoint orientation, not one shared canonical target) -
+i.e., search for whatever orientation IS jointly reachable at 9mm height
+first, rather than imposing PREGRASP's own converged orientation as a
+starting bias; (b) a proper redundancy-resolution/null-space secondary
+objective (explicitly steering the redundant DOF away from this specific
+bad branch during the descent, rather than a single bounded-step DLS
+correction); (c) accept that a genuinely different BEARING (not just
+reach distance, already tested) might avoid this specific conflict,
+per the still-untested candidate from the prior UPDATE.
+
+**Script changes** (`scripts/grasp_demo_v2.py`): `polish_from_seed`
+restructured from round-based-with-blind-hold to continuous
+per-physics-step re-solve; `POLISH_ROT_STEP_MAX` 0.15->0.03;
+`POLISH_MAX_STEPS=3000` (physics-step budget, replaces the old
+`POLISH_ROUNDS`); `STAGNATION_BREAK_STEPS=500` early-exit; new
+`--lambda-val` CLI override; periodic per-step diagnostic print now
+includes live joint config + per-joint limit margins; GRASP's seed
+search extended with 6 wrist-perturbed (`joint_4`/`joint_6`) variants of
+`pregrasp_q`.
+
+**Sources**: entirely this session's own live runs against the real
+Isaac Sim scene (non-headless, `DISPLAY=:1`, desktop GPU) - roughly a
+dozen full `grasp_demo_v2.py` launches varying `--tilt-deg`
+(10/15/25), `--cube-xy` (default 27.5cm reach vs 32cm), and
+`--lambda-val` (0.02/0.1/0.3); the vendor's own
+`annin_ar4_description` URDF/YAML source
+(`urdf/ar_macro.xacro`, `config/mk1-5.yaml`) for Part A;
+`demo_franka_ik_dice_line.py`'s own `_step_toward`/`_MAX_POS_STEP`/
+`_MAX_ROT_STEP` for the proven-stable reference pattern Part B's fix
+mirrors; `robot.data.joint_pos_limits`/live joint-margin printouts for
+the basin-conflict diagnosis.

@@ -155,6 +155,10 @@ parser.add_argument(
     "--tilt-deg", type=float, default=0.0,
     help="Deliberate forward/back tilt (degrees) of the canonical approach orientation away from pure-vertical - see _build_canonical_target_quat_w's own docstring for why this exists.",
 )
+parser.add_argument(
+    "--lambda-val", type=float, default=None,
+    help="Override LAMBDA_VAL (DLS damping factor) - added (2026-07-22, ar4-tilt-fix task) to test whether more damping avoids the near-singular-Jacobian instability found at a tilted GRASP target (a huge single-step joint_4 swing, ~1.1rad, coinciding with the polish falling into a bad, stuck basin) without editing the file between runs.",
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 args_cli.enable_cameras = True
@@ -357,22 +361,75 @@ CANDIDATE_SEEDS = [
 
 SEED_SETTLE_STEPS = 60
 POLISH_STEP_MAX = 0.03
-# 2026-07-22 (orientation-fix task): bumped 60 -> 100. The polish loop now
-# has to close a 6D pose error (position + orientation) instead of a 3D
-# position-only error, starting from seeds whose orientation was never
-# selected for (CANDIDATE_SEEDS only varies j2/j3/j5, matching a
-# position-only search) - budgeting more rounds for the extra orientation
-# degrees of freedom to converge alongside position.
-POLISH_ROUNDS = 100
+# POLISH_SETTLE_STEPS: still used by _settle_at() (multi-seed search
+# settling, and the final "restore best config" step at the end of
+# polish_from_seed) - NOT by polish_from_seed's own per-step loop anymore,
+# see POLISH_MAX_STEPS below and polish_from_seed's own docstring for why
+# that changed (2026-07-22, ar4-tilt-fix task).
 POLISH_SETTLE_STEPS = 30
-LAMBDA_VAL = 0.02
+# 2026-07-22 (ar4-tilt-fix task): replaces the old POLISH_ROUNDS (100,
+# briefly bumped to 200) x POLISH_SETTLE_STEPS(30)-physics-steps-per-round
+# open-loop design. polish_from_seed now re-solves the DLS Jacobian and
+# takes one bounded step EVERY physics step (see that function's own
+# docstring for why the old "solve once, hold blindly for 30 steps" design
+# was the actual cause of a --tilt-deg 15/30 divergence that persisting
+# reducing POLISH_ROT_STEP_MAX alone did not fix) - so this is now a
+# PHYSICS STEP budget, not a "round" budget. Sized generously (old design's
+# worst-case physics-step budget was 200*30=6000) since the continuous
+# re-solve converges much faster per physics-step than the old design did
+# per round (confirmed live: PREGRASP's old design took ~50-60 rounds x 30
+# steps/round = 1500-1800 physics steps to converge from a ~1.5rad seed
+# error; the continuous version needs far fewer steps for the same
+# correction since it isn't wasting 29 of every 30 steps holding a stale
+# target).
+POLISH_MAX_STEPS = 3000
+# 2026-07-22 (ar4-tilt-fix task): break out of polish_from_seed's loop early
+# once the combined score hasn't improved for this many consecutive physics
+# steps - added after live evidence (--tilt-deg 10/15 at the default 27.5cm
+# reach) that GRASP's polish can reach a genuine STATIONARY point (residual
+# frozen to 4+ decimal places for 300+ steps straight) with no chance of
+# further improvement, well before POLISH_MAX_STEPS - running the full
+# budget in that state only burns GPU time for zero benefit. Generous
+# relative to how quickly the continuous per-step solve now converges
+# genuinely-improving cases (PREGRASP converges from a ~1.5rad seed error in
+# ~150 steps) so this won't cut off a still-improving run early.
+STAGNATION_BREAK_STEPS = 500
+LAMBDA_VAL = args_cli.lambda_val if args_cli.lambda_val is not None else 0.02
 CONVERGENCE_THRESHOLD = 0.003
 # 2026-07-22 (orientation-fix task): per-round bounded ROTATION step, the
 # orientation analogue of POLISH_STEP_MAX - mirrors
 # demo_franka_ik_dice_line.py's own _MAX_ROT_STEP (bounded per-step
 # rotation correction, not a single large jump, for the same stability
 # reason POLISH_STEP_MAX bounds position).
-POLISH_ROT_STEP_MAX = 0.15
+#
+# 2026-07-22 (ar4-tilt-fix task): 0.15 -> 0.03, matching
+# demo_franka_ik_dice_line.py's own _MAX_ROT_STEP EXACTLY (a proven-stable
+# reference value, not a guess) - found to be the most likely cause of the
+# --tilt-deg 30 divergence diagnosed in this module's own docstring/kb doc
+# ("rotation error monotonically INCREASING round over round instead of
+# converging"). The two scripts' polish/step loops are structurally
+# different (Franka's `_step_toward` re-solves the DLS Jacobian EVERY
+# physics step and takes one small bounded step per step, closed-loop;
+# this script's `polish_from_seed` solves ONCE per "round" then holds that
+# single joint_pos_des target open-loop for POLISH_SETTLE_STEPS=30 physics
+# steps before re-measuring) - but the per-round/per-step BOUND on how far
+# a single DLS linearization is trusted to extrapolate is the same kind of
+# safety margin in both, and this script's value (0.15rad, ~8.6 degrees)
+# was 5x Franka's own (0.03rad, ~1.7 degrees) with no stated justification
+# for the larger figure. At a genuine non-zero tilt target, AR4's basin is
+# already close to a joint-limit-constrained boundary (see this module's
+# docstring) - a single round's Jacobian-linearized correction is only a
+# valid local approximation over a small neighborhood, and demanding up to
+# 8.6 degrees of rotational correction in one open-loop round (then holding
+# that target for 30 full settle steps, giving the arm's actual nonlinear
+# dynamics plenty of time to overshoot past where the linear model predicted)
+# is a straightforward mechanism for the observed instability: each round's
+# real endpoint lands further from the linearization point than the next
+# round's Jacobian can correctly account for, so error compounds rather than
+# shrinks. Matching Franka's proven bound directly, rather than re-deriving
+# a new one from scratch, since this exact bound has already been validated
+# stable (10 dice x 2 passes) in that script.
+POLISH_ROT_STEP_MAX = 0.03
 # Rotation convergence tolerance (radians, axis-angle norm) - the
 # orientation analogue of CONVERGENCE_THRESHOLD. ~0.05rad ~= 3 degrees,
 # tight enough for a genuine top-down pinch, loose enough to be reachable
@@ -584,7 +641,37 @@ def polish_from_seed(
     score (position error plus ORIENTATION_SCORE_WEIGHT-scaled rotation
     error, see that constant's own docstring for the judgment call this
     represents) instead of position alone, so it doesn't restore a round
-    that had great position but a bad orientation."""
+    that had great position but a bad orientation.
+
+    2026-07-22 (ar4-tilt-fix task): switched from ONE Jacobian solve per
+    "round" held open-loop for POLISH_SETTLE_STEPS=30 physics steps, to a
+    CONTINUOUS per-physics-step re-solve - one full re-measure + re-solve +
+    bounded-step + env.step() per iteration, no blind hold in between.
+    Mirrors demo_franka_ik_dice_line.py's own `_step_toward` exactly (that
+    function also re-reads the Jacobian/error and takes one bounded step
+    EVERY physics step, proven stable over 10 full pick-and-place cycles).
+    Found necessary live: reducing POLISH_ROT_STEP_MAX alone (0.15->0.03,
+    matching Franka's own bound) was NOT sufficient - a --tilt-deg 15 run
+    with the smaller step bound still diverged (rot_err 0.019rad -> 1.32rad
+    within 10 rounds, then plateaued/deadlocked there), and the JUMP size
+    (>1rad of measured orientation change) was far larger than 10 rounds'
+    worth of a 0.03rad-capped COMMANDED step could produce even in the
+    worst case (max 0.3rad cumulative) - meaning the actual achieved motion
+    diverged from what the single-shot linearization at the round's start
+    predicted, not just "step too big". The old design solves the DLS
+    Jacobian ONCE per round from the PRE-round state, then blindly holds
+    that single computed target for 30 physics steps before ever
+    re-checking - if that configuration turns out to require passing near a
+    Jacobian near-singularity (AR4 has a non-spherical wrist, unlike
+    Franka's, so wrist-singularity-adjacent configs are a real risk for a
+    tilted, non-canonical orientation target) or a joint-limit boundary
+    along the way, the actual 30-step trajectory can overshoot far past
+    where the linearization predicted before anything corrects it - and the
+    NEXT round's solve then starts from that already-bad state, compounding
+    rather than correcting. Re-solving every single physics step (this fix)
+    means any such overshoot is caught and corrected on the very next
+    physics step, exactly like Franka's proven closed-loop tracking, instead
+    of being locked in for 30 steps first."""
     robot = env.scene["robot"]
 
     def _combined_score(pos_err: float, rot_err: float) -> float:
@@ -596,8 +683,11 @@ def polish_from_seed(
     best_polish_q = list(seed_q)
     final_pos_residual = best_pos_residual
     final_rot_residual = best_rot_residual
+    # 2026-07-22 (ar4-tilt-fix task): stagnation counter for
+    # STAGNATION_BREAK_STEPS (see that constant's own docstring).
+    steps_since_improvement = 0
 
-    for round_num in range(POLISH_ROUNDS):
+    for step_num in range(POLISH_MAX_STEPS):
         current_joint_pos = robot.data.joint_pos[:, robot_entity_cfg.joint_ids].clone()
         ee_pose_w = robot.data.body_pose_w[:, robot_entity_cfg.body_ids[0]]
         ee_pos_b, ee_quat_b = subtract_frame_transforms(
@@ -631,26 +721,42 @@ def polish_from_seed(
         hi = joint_pos_limits[:, :, 1]
         joint_pos_des = torch.clamp(joint_pos_des, min=lo, max=hi)
 
-        for _ in range(POLISH_SETTLE_STEPS):
-            action = torch.zeros(env.num_envs, num_arm_joints + 1, device=env.device)
-            for j in range(num_arm_joints):
-                action[:, j] = joint_pos_des[:, j]
-            action[:, num_arm_joints] = GRIPPER_OPEN
-            env.step(action)
+        action = torch.zeros(env.num_envs, num_arm_joints + 1, device=env.device)
+        action[:, :num_arm_joints] = joint_pos_des
+        action[:, num_arm_joints] = GRIPPER_OPEN
+        env.step(action)
 
         final_pos_residual = _measure_dist(robot, robot_entity_cfg, target_pos_b)
         final_rot_residual = _measure_rot_err(robot, robot_entity_cfg, target_quat_b)
         final_score = _combined_score(final_pos_residual, final_rot_residual)
-        if round_num % 10 == 0 or round_num == POLISH_ROUNDS - 1:
+        if step_num % 100 == 0 or step_num == POLISH_MAX_STEPS - 1:
+            # 2026-07-22 (ar4-tilt-fix task): also print the live joint config
+            # against joint_pos_limits, so a plateaued/deadlocked residual can
+            # be immediately attributed to a specific joint sitting at (or
+            # very near) its hard limit, without a separate diagnostic pass.
+            live_q = robot.data.joint_pos[0, robot_entity_cfg.joint_ids].tolist()
+            lo_list = joint_pos_limits[0, :, 0].tolist()
+            hi_list = joint_pos_limits[0, :, 1].tolist()
+            margins = [min(q - l, h - q) for q, l, h in zip(live_q, lo_list, hi_list)]
             print(
-                f"  [POLISH round {round_num:3d}] pos_err={final_pos_residual:.5f}m rot_err={final_rot_residual:.4f}rad"
+                f"  [POLISH step {step_num:4d}] pos_err={final_pos_residual:.5f}m rot_err={final_rot_residual:.4f}rad "
+                f"q={['%.4f' % v for v in live_q]} limit_margin={['%.4f' % v for v in margins]}"
             )
         if final_score < best_score:
             best_score = final_score
             best_pos_residual = final_pos_residual
             best_rot_residual = final_rot_residual
             best_polish_q = robot.data.joint_pos[0, robot_entity_cfg.joint_ids].tolist()
+            steps_since_improvement = 0
+        else:
+            steps_since_improvement += 1
         if final_pos_residual < CONVERGENCE_THRESHOLD and final_rot_residual < ROT_CONVERGENCE_THRESHOLD:
+            break
+        if steps_since_improvement >= STAGNATION_BREAK_STEPS:
+            print(
+                f"  [POLISH] no improvement for {STAGNATION_BREAK_STEPS} consecutive steps - stopping early "
+                f"at step {step_num} instead of running the full {POLISH_MAX_STEPS}-step budget"
+            )
             break
 
     if best_score < _combined_score(final_pos_residual, final_rot_residual):
@@ -827,10 +933,42 @@ def main() -> None:
             env, ik_controller, robot_entity_cfg, ik_jacobi_idx, pregrasp_pos_b, target_quat_b, seed_q, num_arm_joints, joint_pos_limits
         )
 
-        print("\n[INFO] Finding best seed for GRASP waypoint (multi-seed, genuinely settled, includes converged PREGRASP_Q)...")
+        # 2026-07-22 (ar4-tilt-fix task): also try several WRIST-PERTURBED
+        # variants of pregrasp_q (small offsets to j4/j6, the two joints
+        # CANDIDATE_SEEDS never varies - it always leaves them at 0.0,
+        # matching the original position-only search this pool was designed
+        # for), alongside the existing single pregrasp_q/KNOWN_GOOD_GRASP_Q
+        # seeds. Added after live evidence that pregrasp_q's own basin is a
+        # genuine LOCAL OPTIMUM for GRASP at a tilted target - the "keep best
+        # across rounds" guard correctly avoids reporting a worse result, but
+        # every polish attempt from this exact seed hits the same ~2.6-4.7cm
+        # ceiling (never improves past the seed's own quality) before falling
+        # into an orientation-breaking branch, at 10deg, 15deg, lambda=0.02,
+        # AND lambda=0.1 - consistent with this being a real feature of THIS
+        # basin, not a solver tuning issue. A small nudge in the two
+        # never-explored wrist DOFs gives the multi-seed search a chance to
+        # land in a DIFFERENT basin whose local polish might not hit the same
+        # wall - still evaluated via the same genuine settle + combined-score
+        # comparison as every other candidate, not assumed better a priori.
+        def _perturb(q, j4_delta=0.0, j6_delta=0.0):
+            q2 = list(q)
+            q2[3] += j4_delta
+            q2[5] += j6_delta
+            return q2
+
+        wrist_perturbed_seeds = [
+            _perturb(pregrasp_q, j4_delta=0.3),
+            _perturb(pregrasp_q, j4_delta=-0.3),
+            _perturb(pregrasp_q, j6_delta=0.3),
+            _perturb(pregrasp_q, j6_delta=-0.3),
+            _perturb(pregrasp_q, j4_delta=0.3, j6_delta=0.3),
+            _perturb(pregrasp_q, j4_delta=-0.3, j6_delta=-0.3),
+        ]
+
+        print("\n[INFO] Finding best seed for GRASP waypoint (multi-seed, genuinely settled, includes converged PREGRASP_Q + wrist-perturbed variants)...")
         seed_q, _ = _find_best_seed(
             env, robot, robot_entity_cfg, num_arm_joints, grasp_pos_b, target_quat_b, seed_j1,
-            extra_full_seeds=[KNOWN_GOOD_GRASP_Q, pregrasp_q],
+            extra_full_seeds=[KNOWN_GOOD_GRASP_Q, pregrasp_q] + wrist_perturbed_seeds,
         )
         print("[INFO] Polishing GRASP waypoint (fixed-Jacobian, pose-DLS)...")
         grasp_q, grasp_residual, grasp_rot_residual = polish_from_seed(

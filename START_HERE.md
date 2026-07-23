@@ -92,6 +92,28 @@ Senior/Principal research.
   `until grep -q "..." log; do sleep 15; done`), run it verbatim rather than
   polling manually in a loop of your own.
 
+## Blocking and background work
+
+**There is no monitor that wakes you up.** If you background a long-running
+command (`run_in_background: true`, a detached `nohup`, etc.) and then stop
+your own turn believing something will notify you when it finishes, you are
+simply wrong — nothing will. The automatic notification a controller
+receives when a dispatched subagent's own turn ends only applies one level:
+controller-to-subagent, not subagent-to-the-thing-it-backgrounded-itself.
+If you stop mid-task waiting on a background job, you are just stopped,
+full stop, until whoever dispatched you happens to notice and resumes you
+manually — which wastes real time and has recurred repeatedly in this
+project's own history (see `kb/wiki/concepts/` if a specific incident write-up
+exists) despite being flagged over and over.
+
+Isaac Sim installs/launches routinely take 5-8 minutes; training/cloud
+provisioning takes longer still. Block on these yourself: a single Bash call
+with `until <condition>; do sleep N; done` against a log file, completion
+marker, or process/`gcloud` status check — chain further blocking Bash calls
+if one call's own timeout is hit. If you're handed a literal blocking poll
+command, run it verbatim (already noted under Hard environment rules below)
+rather than polling manually in a loop of your own devising.
+
 ## Verification standard
 
 - Real evidence over proxies. Don't call something done off exit codes or a
@@ -104,6 +126,18 @@ Senior/Principal research.
   against the wrist — only caught by checking contact forces directly.
 - Report negative/null results with the same rigor as positive ones and
   cite the actual numbers observed, not just a verdict word.
+- For AR4 kinematic/asset-geometry claims specifically (a link/joint pose,
+  a gripper jaw separation, "does this commanded joint value produce the
+  intended real-world relationship"), use the standing FK verification
+  framework (`tasks/ar4/fk_verification.py`, tests in
+  `tests/test_ar4_fk_verification.py`) instead of a one-off diagnostic
+  script — built 2026-07-23 specifically because AR4's own history (a
+  missing gripper physics drive, 4 classical-IK positioning bugs, a wrist-
+  orientation bug, a gripper jaw-mirroring bug) was each found by ad hoc
+  scripts or the user eyeballing the sim. See
+  `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s 2026-07-23
+  "Standing FK verification framework" section for what it checks and what
+  it would have caught.
 
 ## Git
 

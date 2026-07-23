@@ -204,6 +204,26 @@ parser.add_argument(
     "--radius-sweep", type=float, nargs="+", default=None,
     help="Sweep multiple cube REACH RADII (meters, world-frame distance from the cube to the robot base) at a FIXED bearing (0 degrees = straight-ahead, world +Y - the scene's own default approach direction), at --grasp-height (default 0.009, the true grasp point). For each radius, teleports the cube to (0, radius) and runs the full seed-search + PREGRASP polish + incremental descent, logging the same residual/per-axis/joint-margin data as --z-sweep/--bearing-sweep. Added after the z-envelope/bearing-sweep investigation only tested reach distances up to 32cm (already shown to have a smaller shortfall than the 27.5cm default) - this sweeps a wider range to find where joint_3's own margin becomes clearly healthy at the true grasp height, not just less-bad. Overrides/ignores --cube-xy when set. Exits after the sweep.",
 )
+# 2026-07-23 (ar4-capstone-grasp task): the 2026-07-23 (later) radius-sweep
+# found TWO qualitatively different comfortable-joint_3-margin basins
+# (0.30m: joint_4 far from its own limit; 0.39-0.42m: joint_4 near-pi, also
+# far from ITS own limit) where the ~18mm Z-shortfall nonetheless persists
+# unchanged - but that same session never tried a deliberate, non-zero tilt
+# AT any of these newly-found comfortable positions (prior tilt tests were
+# only run at the joint_3-TIGHT-margin 27.5cm/32cm positions, where the
+# elbow had little room left to accommodate the extra reach a tilt demands).
+# This flag tests exactly that untested combination: multiple tilt angles,
+# all at the SAME fixed cube position (whatever --cube-xy/the scene default
+# resolves to), in a single Isaac Sim launch (mirrors --z-sweep/--bearing-
+# sweep/--radius-sweep's own single-launch-multi-point structure). Position
+# is held fixed (unlike --radius-sweep/--bearing-sweep) since tilt is the
+# only free variable this sweep is testing; run this AT one of the already-
+# confirmed comfortable-margin radii via --cube-xy 0 <radius> if that's the
+# combination being tested.
+parser.add_argument(
+    "--tilt-sweep", type=float, nargs="+", default=None,
+    help="Sweep multiple --tilt-deg values (degrees) at the CURRENT fixed cube position (--cube-xy override, or the scene default if not given), at --grasp-height (default 0.009). For each tilt angle, rebuilds the canonical target orientation with that tilt and runs the full seed-search + PREGRASP polish + incremental descent, logging the same residual/per-axis/joint-margin data as the other sweep flags. Added to test whether a moderate tilt resolves the Z-shortfall specifically AT one of the comfortable-joint-margin positions the radius-sweep found (untested combination as of 2026-07-23) - prior tilt tests were only run at joint-margin-TIGHT positions. Exits after the sweep.",
+)
 # 2026-07-22/23 (ar4-grasp-deployability-check task, coordinator-directed):
 # `_find_best_seed` teleports the robot (via write_joint_position_to_sim)
 # through several candidate configs and picks the best-scoring one BEFORE
@@ -1198,6 +1218,65 @@ def main() -> None:
             env.close()
             return
 
+        # 2026-07-23 (ar4-capstone-grasp task): --tilt-sweep - fixed cube
+        # position (whatever --cube-xy resolved to above, or the scene
+        # default), varying ONLY the canonical target's tilt_deg. See this
+        # flag's own docstring for why (untested tilt-at-comfortable-margin
+        # combination).
+        if args_cli.tilt_sweep is not None:
+            grasp_h = GRASP_AT_HEIGHT
+            print(
+                f"\n[TILT-SWEEP] cube_pos_b={cube_pos_b[0].tolist()} grasp_height={grasp_h}m "
+                f"tilts(deg)={args_cli.tilt_sweep}"
+            )
+            for tilt_deg_i in args_cli.tilt_sweep:
+                target_quat_b_i = _build_canonical_target_quat_b(root_pos_w, root_quat_w, tilt_deg=tilt_deg_i)
+
+                pregrasp_pos_b_i = cube_pos_b.clone()
+                pregrasp_pos_b_i[:, 2] = grasp_h + PREGRASP_HOVER
+                grasp_pos_b_i = cube_pos_b.clone()
+                grasp_pos_b_i[:, 2] = grasp_h
+
+                seed_q_i, _ = _find_best_seed(
+                    env, robot, robot_entity_cfg, num_arm_joints, pregrasp_pos_b_i, target_quat_b_i, seed_j1,
+                    extra_full_seeds=[KNOWN_GOOD_PREGRASP_Q],
+                )
+                pregrasp_q_i, _, _ = polish_from_seed(
+                    env, ik_controller, robot_entity_cfg, ik_jacobi_idx, pregrasp_pos_b_i, target_quat_b_i, seed_q_i,
+                    num_arm_joints, joint_pos_limits,
+                )
+
+                _settle_at(env, robot, robot_entity_cfg, num_arm_joints, pregrasp_q_i, SEED_SETTLE_STEPS)
+                cur_q_i = pregrasp_q_i
+                z_start_i = grasp_h + PREGRASP_HOVER
+                last_target_i = None
+                pos_res_i = rot_res_i = None
+                for sub_idx in range(1, args_cli.num_descent_steps + 1):
+                    sub_z = z_start_i + (grasp_h - z_start_i) * sub_idx / args_cli.num_descent_steps
+                    sub_target_i = grasp_pos_b_i.clone()
+                    sub_target_i[:, 2] = sub_z
+                    last_target_i = sub_target_i
+                    cur_q_i, pos_res_i, rot_res_i = polish_from_seed(
+                        env, ik_controller, robot_entity_cfg, ik_jacobi_idx, sub_target_i, target_quat_b_i, cur_q_i,
+                        num_arm_joints, joint_pos_limits,
+                        max_steps=DESCENT_SUBSTEP_MAX_STEPS, stagnation_break_steps=DESCENT_SUBSTEP_STAGNATION_STEPS,
+                    )
+                residual_vec_i = _measure_dist_vec(robot, robot_entity_cfg, last_target_i)
+                live_q_i = robot.data.joint_pos[0, robot_entity_cfg.joint_ids].tolist()
+                lo_i = joint_pos_limits[0, :, 0].tolist()
+                hi_i = joint_pos_limits[0, :, 1].tolist()
+                margins_i = [min(q - l, h - q) for q, l, h in zip(live_q_i, lo_i, hi_i)]
+                print(
+                    f"[TILT-SWEEP] tilt_deg={tilt_deg_i:.1f} pos_err={pos_res_i:.5f}m rot_err={rot_res_i:.4f}rad "
+                    f"xyz_residual={['%.5f' % v for v in residual_vec_i]} "
+                    f"q={['%.4f' % v for v in live_q_i]} margins={['%.4f' % v for v in margins_i]}"
+                )
+            print("[TILT-SWEEP] done - exiting before one-shot GRASP solve / phased execution.")
+            video_writer.close()
+            demo_video_writer.close()
+            env.close()
+            return
+
         # 2026-07-22 (ar4-grasp-z-envelope task): --bearing-sweep supersedes
         # the normal single-position pipeline entirely (it does its own
         # per-bearing cube teleport + seed-search + PREGRASP polish + descent,
@@ -1273,25 +1352,44 @@ def main() -> None:
             env.close()
             return
 
-        # Capture the cube's TRUE pose right after reset, before any
-        # seed-search/polish runs. The multi-seed search below teleports the
-        # arm through several very different configurations (some close to
-        # the cube's own resting spot, since they're candidates for reaching
-        # it) to evaluate them - if a teleported pose interpenetrates the
-        # cube, PhysX's own depenetration reaction can shove it out of place
-        # long before the actual phased grasp attempt begins. Confirmed
-        # happening this session: a first post-Jacobian-fix run achieved
-        # <=15mm link_6-to-target precision yet the cube never moved during
-        # CLOSE/lift/hold - video review showed the gripper visibly not
-        # overlapping the cube, and the cube's own logged position had
-        # drifted ~20cm in X from its expected spawn point by the time the
-        # phased execution started. Restoring this captured pose right
-        # before Phase 0 (below) is a direct, cheap guard against exactly
-        # that displacement. (`cube` itself was already resolved above, when
-        # the --cube-xy override - if any - was applied.)
+        # Capture the cube's TRUE pose right after reset (and after any
+        # --cube-xy override), before any seed-search/polish runs, THEN park
+        # it far outside the whole reachable workspace for the entire
+        # duration of that search - not just capture-then-restore.
+        #
+        # 2026-07-23 (ar4-grasp-position-search task, coordinator-directed):
+        # the multi-seed search/PREGRASP polish/incremental descent below
+        # teleports and PD-drives the arm through several very different
+        # configurations (some close to the cube's own resting spot, since
+        # they're candidates for reaching it) to evaluate them - if the arm
+        # interpenetrates the cube during this process, PhysX's own
+        # depenetration reaction can shove/impart velocity to it well before
+        # the actual phased grasp attempt begins. The original fix
+        # (capture-then-restore: read the true pose once, restore position
+        # AND zero velocity right before Phase 0) was ALREADY committed and
+        # is a real, adequate guard against this for the phased-execution's
+        # OWN starting state (confirmed: this reverts the cube to a
+        # deterministic pos+zero-vel state regardless of what happened
+        # during the search) - but it does not prevent interpenetration
+        # DURING the search itself, which is wasted physics/contact-solver
+        # work and (per the coordinator's own concern) could theoretically
+        # still leave a transient residual effect a pure position+velocity
+        # overwrite might not fully undo (e.g. if the search's own last step
+        # ends with the arm still overlapping the cube's real position at
+        # the instant of restore, see below). Parking is strictly better:
+        # no interpenetration can occur at all while the cube sits at
+        # _CUBE_PARK_POS_W, far outside the whole workspace. (`cube` itself
+        # was already resolved above, when the --cube-xy override - if any -
+        # was applied.)
         cube_init_pos = cube.data.root_pos_w[0].clone()
         cube_init_quat = cube.data.root_quat_w[0].clone()
         print(f"[INFO] Cube initial pose (world): pos={cube_init_pos.tolist()}")
+
+        _CUBE_PARK_POS_W = torch.tensor([5.0, 5.0, -5.0], device=env.device)
+        park_pose = torch.cat([_CUBE_PARK_POS_W, cube_init_quat]).unsqueeze(0)
+        cube.write_root_pose_to_sim(park_pose, env_ids=torch.tensor([0], device=env.device))
+        cube.write_root_velocity_to_sim(torch.zeros((1, 6), device=env.device), env_ids=torch.tensor([0], device=env.device))
+        print(f"[INFO] Cube parked at {_CUBE_PARK_POS_W.tolist()} for the duration of seed-search/polish/descent.")
 
         grasp_pos_b = cube_pos_b.clone()
         grasp_pos_b[:, 2] = GRASP_AT_HEIGHT
@@ -1534,11 +1632,13 @@ def main() -> None:
         _check_orientation_at(grasp_q, "GRASP_Q")
         _check_orientation_at(pregrasp_q, "PREGRASP_Q")
 
-        # Restore the cube to its captured initial pose (see note above)
-        # before starting the actual phased grasp attempt, undoing any
-        # accidental disturbance from the seed-search/polish process above.
+        # Un-park the cube: move it from _CUBE_PARK_POS_W back to its
+        # captured real initial pose, right before starting the actual
+        # phased grasp attempt (Phase 0 commands HOME_Q, moving the arm away
+        # from the cube before it ever approaches it again, so there is no
+        # instant-of-restore interpenetration risk here either).
         cube_pos_now = cube.data.root_pos_w[0].tolist()
-        print(f"[INFO] Cube pose before restore: pos={cube_pos_now}")
+        print(f"[INFO] Cube pose before un-park: pos={cube_pos_now}")
         restore_pose = torch.cat([cube_init_pos, cube_init_quat]).unsqueeze(0)
         cube.write_root_pose_to_sim(restore_pose, env_ids=torch.tensor([0], device=env.device))
         cube.write_root_velocity_to_sim(torch.zeros((1, 6), device=env.device), env_ids=torch.tensor([0], device=env.device))
@@ -1605,10 +1705,29 @@ def main() -> None:
                         os.path.join(snapshot_dir, f"phase{phase_idx}_mid_perception.png"), rgb[:, :, :3].astype("uint8")
                     )
 
-                if phase_idx in (3, 4, 5) and i % 20 == 0:
+                if phase_idx in (2, 3, 4, 5, 6) and i % 20 == 0:
                     cube_z = env.scene["cube"].data.root_pos_w[0, 2].item()
                     cube_xy = env.scene["cube"].data.root_pos_w[0, :2].tolist()
-                    print(f"  [PHASE {phase_idx} step {i:3d}] cube z={cube_z:.4f}m xy={['%.4f' % x for x in cube_xy]}")
+                    # 2026-07-23 (ar4-capstone-grasp task): jaw contact forces
+                    # alongside cube pose - this project's own Experiment 16
+                    # precedent (a video that LOOKED like a lift but was
+                    # actually the object wedged, not grasped) is exactly why
+                    # a real grasp+lift claim needs contact-force evidence,
+                    # not just cube-z-height video review. jaw1_contact/
+                    # jaw2_contact are filtered against the Cube prim only
+                    # (tasks/ar4/pickplace_mirror_env_cfg.py), so a nonzero
+                    # reading here is unambiguously cube contact, not e.g.
+                    # ground/table contact.
+                    jaw1_force = torch.linalg.vector_norm(
+                        env.scene["gripper_jaw1_contact"].data.force_matrix_w.view(1, 3)[0]
+                    ).item()
+                    jaw2_force = torch.linalg.vector_norm(
+                        env.scene["gripper_jaw2_contact"].data.force_matrix_w.view(1, 3)[0]
+                    ).item()
+                    print(
+                        f"  [PHASE {phase_idx} step {i:3d}] cube z={cube_z:.4f}m xy={['%.4f' % x for x in cube_xy]} "
+                        f"jaw1_cube_force={jaw1_force:.4f}N jaw2_cube_force={jaw2_force:.4f}N"
+                    )
 
             achieved_q = robot.data.joint_pos[0, robot_entity_cfg.joint_ids].tolist()
             max_err = max(abs(a - t) for a, t in zip(achieved_q, target_q))

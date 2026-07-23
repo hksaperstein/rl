@@ -1786,3 +1786,157 @@ a genuine ISO Media MP4 container, before being synced to the Pi);
 desktop confirmed fully torn down afterward (no stray Isaac Sim/kit
 processes, `nvidia-smi --query-compute-apps` empty, flock lock free, no
 tmux sessions).
+
+## Standing FK verification framework added (2026-07-23) — direct response to this whole file's own pattern of "found by an ad hoc script or by the user eyeballing the sim"
+
+Every defect this article documents (missing gripper physics drive, 4
+classical-IK positioning bugs, a wrist-orientation bug, the jaw-mirroring
+bug in the section directly above) was found by a one-off diagnostic
+script written fresh each time, or by the user directly watching the
+simulation and noticing something looked wrong. Tasked with building a
+standing, reusable, general-purpose verification framework using forward
+kinematics (FK) to catch this whole CLASS of bug automatically as real
+test scripts, not agent instructions or another one-off diagnostic.
+
+**Two layers, both implemented in `tasks/ar4/fk_verification.py` (pure
+numpy, no isaaclab/torch import — runs on plain `python3`, unlike most of
+this project's other torch-based reward-math tests):**
+
+- **Layer 1 (asset-geometry check)**: an independent FK chain
+  (`compute_link_pose_from_joint_values`, `assert_link_pose_matches_vendor_fk`)
+  built directly from the vendor's raw URDF/xacro source
+  (`urdf/ar_macro.xacro`, `urdf/ar_gripper_macro.xacro`, `config/mk5.yaml`
+  — read via `ssh desktop` on 2026-07-23, hardcoded with provenance
+  comments since that path isn't reachable from the Pi), independently
+  re-derived rather than reused from `scripts/build_asset.py`'s own
+  import pipeline — the whole point is to catch bugs baked into that
+  pipeline, not reproduce them. `pytorch_kinematics` was checked and
+  confirmed not installed anywhere in this project's environments; a
+  hand-rolled ~10-joint serial-chain FK was simple enough not to need it.
+- **Layer 2 (control-intent/task-invariant check)**: `assert_gripper_separation`
+  uses Layer 1's FK to check that a COMMANDED joint_values dict produces
+  the intended real-world jaw separation, not just "did each joint
+  individually reach its own target" — the exact class of check that
+  would have caught the jaw-mirroring bug directly above.
+
+**Concrete proof this framework catches the real bug class it was built
+for** (`tests/test_ar4_fk_verification.py::TestJawMirroringRegression`,
+9/9 tests passing, run both on the Pi's plain `python3 -m pytest` and via
+this project's standard desktop convention,
+`/home/saps/IsaacLab/_isaac_sim/python.sh -m pytest ... -p no:launch_testing`):
+the CURRENT, live-verified-correct SAME-sign convention
+(`gripper_jaw1_joint`/`gripper_jaw2_joint` both commanded to `+0.014`,
+`tasks/ar4/robot_cfg.py`'s post-2026-07-23 `GRIPPER_OPEN_COMMAND_EXPR`)
+predicts `28.000mm` and PASSES `assert_gripper_separation`'s `[20mm,
+36mm]` check — matching `tasks/ar4/objects_cfg.py`'s own documented
+"~28mm max aperture"; the now-superseded 2026-07-21 OPPOSITE-sign fix
+(jaw2 negated) predicts an exact `0.000mm` separation and FAILS. A third
+test class deliberately corrupts one arm joint's origin by 50mm in a copy
+of the joint table (`with_corrupted_origin`) and confirms Layer 1 catches
+that import-style asset-geometry defect too, independent of the
+gripper-specific question. Test-suite rigor was verified beyond "tests
+pass" twice: mutating the jaw2 axis sign was confirmed to flip exactly
+the 3 jaw-mirroring-dependent tests from PASS to FAIL both times (once
+during initial TDD, once again after the recalibration below), proving
+the tests actually discriminate rather than passing vacuously.
+
+**The framework's own first-draft calibration turned out to be wrong,
+and a live integration run is what caught it — arguably the single best
+demonstration this whole effort could have produced of why Layer 1
+(grounded in the raw vendor source) matters more than calibrating against
+"already-empirically-confirmed" institutional history.** A *literal*,
+by-the-book application of the raw URDF's own `<origin>`+`<axis>`
+semantics to `gripper_jaw2_joint` (rotate-then-translate, matching the raw
+URDF's own `<mimic multiplier="1"/>` tag) predicts SAME-sign commanding is
+correct. The framework's first draft did not trust that literal reading —
+it special-cased `gripper_jaw2_joint` to match this article's 2026-07-21
+finding (OPPOSITE-sign commanding, `928af41`), which was the
+best-available evidence at the time. A live integration run the same day
+(below) directly measured the CURRENT asset producing correct ~28mm
+separation from SAME-sign commanding, exactly matching the plain literal
+URDF reading and contradicting the framework's own first-draft
+calibration. Cross-checking `tasks/ar4/robot_cfg.py`'s own current source
+found why: the concurrent gripper-fix task had, that same day, *also*
+found the 2026-07-21 opposite-sign fix itself wrong (`scripts/_sweep_jaw2_symmetry.py`,
+commit `d59595a` — a direct sweep found jaw2's own local-to-world mapping
+already contains the sign flip the 2026-07-21 fix was redundantly
+re-applying, "double-negating" it back to a collapse) and reverted to
+same-sign, independently arriving at the same literal-URDF answer. The
+special-casing (`translate_axis_in_parent_frame`) was removed from
+`fk_verification.py` entirely once this was confirmed — the plain literal
+joint table, with no jaw2-specific correction, is what ships now.
+
+**Live integration check — cloud, not desktop (plan changed mid-task).**
+The original plan was a desktop `flock`-guarded run against the
+concurrently-active gripper-fix task's own already-built, already-fixed
+asset (read-only-copied from its worktree, `~/projects/rl-ar4-fixes-transfer`,
+into a temporary swap of the `~/projects/rl` checkout's own stale
+`assets/ar4_mk5/`, restored afterward — the checkout's own asset was
+confirmed stale first: its jaw2 hard limits were still the pre-fix
+`[-0.003, 0.017]` range, so Isaac Lab's own articulation validator
+rejected the scene before this framework's checks even ran). That attempt
+was abandoned mid-run on direct controller instruction once the user
+signaled the desktop would be shut down once its own concurrent job
+finished — moved to a fresh GCP cloud instance instead (`$1` cost cap for
+this lightweight check), per `docs/cloud/dispatch-checklist.md`. This
+required standing up a *new* AR4-on-cloud capability this project didn't
+previously have (only Franka had a proven cloud recipe): the vendor URDF
+package (`annin_ar4_description`) has a public GitHub mirror
+(`https://github.com/Annin-Robotics/ar4_ros_driver`, confirmed to contain
+byte-identical `urdf/ar_macro.xacro`/`urdf/ar_gripper_macro.xacro`/`config/mk5.yaml`
+content to the desktop's private-fork checkout via `git diff`), so no
+desktop-resident file needed shipping. Two real, previously-undocumented
+gaps were found and fixed in the same pass (per this repo's own
+bug-handling discipline): pip's `xacro==2.1.1` needs `ament_index_python`
+to resolve the URDF's `$(find annin_ar4_description)` substitution, and
+`ament-index-python` is not published to PyPI (ROS 2 packages generally
+aren't) — fixed with a small, from-scratch reimplementation of its single
+needed function (`get_package_share_directory`, a simple, well-documented
+resource-index-marker-file lookup) plus a hand-built minimal
+`AMENT_PREFIX_PATH` tree, avoiding a full ROS 2/colcon install. The build
+also hit `isaacsim.asset.importer.urdf`'s interactive EULA prompt a second
+time (separate from the one already accepted during the pip install
+step), silently hanging the tmux session on stdin until noticed and
+answered — flagged here since it's a real, likely-recurring gap in the
+"first AR4 cloud build" recipe, not yet automated away (`OMNI_KIT_ACCEPT_EULA=YES`
+apparently doesn't cover every EULA prompt Isaac Sim's own tools can
+raise). The instance also hit **two genuine SPOT preemptions** in quick
+succession (confirmed via `gcloud compute operations list`, both real
+`compute.instances.preempted` events, ~21-60min apart) — resolved per
+`docs/cloud/dispatch-checklist.md`'s own documented judgment call
+(switching to on-demand is reasonable when the remaining job count is
+small and cost allows) via `gcloud compute instances set-scheduling
+--no-preemptible --provisioning-model=STANDARD` on the stopped instance,
+which preserved the already-built asset/venv on the boot disk with no
+rework needed.
+
+**Real result, from a live `env.reset()` inside
+`Ar4PickPlaceGraspGoalEnvCfg` on this freshly cloud-built current asset**
+(`scripts/_verify_gripper_fk_integration.py`, headless per cloud
+convention): commanded/read-back joint state at "open" was
+`gripper_jaw1_joint=+0.013996`, `gripper_jaw2_joint=+0.014000` (SAME
+sign) with a REAL measured world-frame jaw separation of **27.996mm**.
+`fk_verification.py`'s Layer 1 check on `link_1`, `link_6`, and
+`gripper_jaw1_link` all PASSED to `0.000mm` discrepancy against this same
+live state; `gripper_jaw2_link` FAILED at `28.000mm` discrepancy under
+the framework's then-still-uncorrected first-draft calibration — the
+exact signal that prompted the recalibration described above. After
+removing the special-casing, the plain literal model predicts this same
+live jaw2 pose to `0.000mm` and Layer 2's `assert_gripper_separation`
+predicts `28.0mm`, matching the real `27.996mm` measurement to within
+0.004mm. Full cloud teardown confirmed immediately after
+(`scripts/check_cloud_state.sh` clean: zero instances/disks/snapshots).
+Approximate cost: ~$0.79 against the $1 cap (two SPOT preemptions each
+forced a restart, and the final on-demand segment ran at ~2x rate — no
+BigQuery billing export exists for this project, so this is a
+duration-times-published-SKU-rate estimate, per this project's standing
+practice).
+
+**Where to run it**: `tests/test_ar4_fk_verification.py` (pure numpy —
+runs on the Pi directly, no desktop/GPU dependency, unlike most of this
+project's other reward-math tests) and, for a live-sim integration check
+against a real built asset, `scripts/_verify_gripper_fk_integration.py`
+(Isaac-Sim-touching; run non-headless with the desktop `flock` pattern
+locally, or `--headless` on a cloud instance per the run above). Pointer
+added to `START_HERE.md`'s "Verification standard" section so future AR4
+work uses this instead of another one-off script.

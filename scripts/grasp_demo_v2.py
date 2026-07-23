@@ -159,6 +159,10 @@ parser.add_argument(
     "--lambda-val", type=float, default=None,
     help="Override LAMBDA_VAL (DLS damping factor) - added (2026-07-22, ar4-tilt-fix task) to test whether more damping avoids the near-singular-Jacobian instability found at a tilted GRASP target (a huge single-step joint_4 swing, ~1.1rad, coinciding with the polish falling into a bad, stuck basin) without editing the file between runs.",
 )
+parser.add_argument(
+    "--num-descent-steps", type=int, default=30,
+    help="Number of incremental sub-waypoints for the PREGRASP->GRASP height descent (2026-07-22, ar4-grasp-descent-continuity task). Instead of solving GRASP as an independent one-shot target from a multi-seed search (which the prior session found deadlocks at ~1.1-1.4rad rotation error, a stable tilt/damping/seed-independent local optimum), interpolate the target height from PREGRASP's own converged height down to GRASP_AT_HEIGHT in this many steps, re-solving polish_from_seed at each sub-height WITHOUT re-teleporting in between (chaining calls this way is what makes each sub-step start from the previous one's genuinely converged live state, mirroring Experiment 11's RL-driven incremental IK and demo_franka_ik_dice_line.py's own per-step continuous resolve). Set to 1 to reproduce the old one-shot independent-GRASP-target behavior for direct comparison.",
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 args_cli.enable_cameras = True
@@ -444,6 +448,19 @@ ROT_CONVERGENCE_THRESHOLD = 0.05
 # optimality argument) so a single round's "best so far" bookkeeping can
 # compare position and rotation error on one scale.
 ORIENTATION_SCORE_WEIGHT = 0.036
+# 2026-07-22 (ar4-grasp-descent-continuity task): per-sub-step budgets for
+# the incremental PREGRASP->GRASP height descent (see --num-descent-steps
+# and main()'s descent loop). Each sub-step only needs to correct a small
+# (~1-3mm, for the default 30-step/5cm-total descent) height change from an
+# already-converged neighboring state, unlike PREGRASP's/the old one-shot
+# GRASP's much larger corrections from a generic multi-seed-search start -
+# a much smaller step/stagnation budget than POLISH_MAX_STEPS/
+# STAGNATION_BREAK_STEPS is deliberately used so a genuinely-stuck sub-step
+# (the disconnected-basin hypothesis predicts this might still happen near
+# the bottom of the descent) fails fast rather than burning the full 3000-step
+# budget per sub-step across dozens of sub-steps.
+DESCENT_SUBSTEP_MAX_STEPS = 400
+DESCENT_SUBSTEP_STAGNATION_STEPS = 150
 
 
 def _world_jacobian_to_root_frame(jacobian_w: torch.Tensor, root_quat_w: torch.Tensor) -> torch.Tensor:
@@ -619,7 +636,8 @@ def _find_best_seed(env, robot, robot_entity_cfg, num_arm_joints, target_pos_b, 
 
 
 def polish_from_seed(
-    env, ik_controller, robot_entity_cfg, ik_jacobi_idx, target_pos_b, target_quat_b, seed_q, num_arm_joints, joint_pos_limits
+    env, ik_controller, robot_entity_cfg, ik_jacobi_idx, target_pos_b, target_quat_b, seed_q, num_arm_joints, joint_pos_limits,
+    max_steps=None, stagnation_break_steps=None,
 ):
     """Bounded-step DLS polish from an already-settled seed. Same overall
     structure as the previous grid_search_then_polish's polish phase (bounded
@@ -671,8 +689,26 @@ def polish_from_seed(
     rather than correcting. Re-solving every single physics step (this fix)
     means any such overshoot is caught and corrected on the very next
     physics step, exactly like Franka's proven closed-loop tracking, instead
-    of being locked in for 30 steps first."""
+    of being locked in for 30 steps first.
+
+    2026-07-22 (ar4-grasp-descent-continuity task): added optional
+    ``max_steps``/``stagnation_break_steps`` overrides (defaulting to the
+    module-level ``POLISH_MAX_STEPS``/``STAGNATION_BREAK_STEPS`` constants
+    when not given), so a caller doing an incremental multi-sub-waypoint
+    descent (see ``main()``'s ``--num-descent-steps`` handling) can give each
+    small sub-step a much smaller budget than a single big one-shot solve
+    needs, without touching the module constants used elsewhere. Also note
+    this function NEVER teleports the robot to ``seed_q`` itself - it always
+    starts its DLS loop from whatever the robot's actual LIVE state is at
+    call time (``seed_q`` is only used as the initial "best" bookkeeping
+    value for the keep-best-round guard). This is exactly what makes calling
+    this function repeatedly back-to-back, with no ``_settle_at``/teleport
+    in between, behave as a genuine continuous resolve from one call's
+    converged end-state to the next call's starting state - the mechanism
+    the incremental descent below relies on."""
     robot = env.scene["robot"]
+    max_steps = POLISH_MAX_STEPS if max_steps is None else max_steps
+    stagnation_break_steps = STAGNATION_BREAK_STEPS if stagnation_break_steps is None else stagnation_break_steps
 
     def _combined_score(pos_err: float, rot_err: float) -> float:
         return pos_err + ORIENTATION_SCORE_WEIGHT * rot_err
@@ -687,7 +723,7 @@ def polish_from_seed(
     # STAGNATION_BREAK_STEPS (see that constant's own docstring).
     steps_since_improvement = 0
 
-    for step_num in range(POLISH_MAX_STEPS):
+    for step_num in range(max_steps):
         current_joint_pos = robot.data.joint_pos[:, robot_entity_cfg.joint_ids].clone()
         ee_pose_w = robot.data.body_pose_w[:, robot_entity_cfg.body_ids[0]]
         ee_pos_b, ee_quat_b = subtract_frame_transforms(
@@ -729,7 +765,7 @@ def polish_from_seed(
         final_pos_residual = _measure_dist(robot, robot_entity_cfg, target_pos_b)
         final_rot_residual = _measure_rot_err(robot, robot_entity_cfg, target_quat_b)
         final_score = _combined_score(final_pos_residual, final_rot_residual)
-        if step_num % 100 == 0 or step_num == POLISH_MAX_STEPS - 1:
+        if step_num % 100 == 0 or step_num == max_steps - 1:
             # 2026-07-22 (ar4-tilt-fix task): also print the live joint config
             # against joint_pos_limits, so a plateaued/deadlocked residual can
             # be immediately attributed to a specific joint sitting at (or
@@ -752,10 +788,10 @@ def polish_from_seed(
             steps_since_improvement += 1
         if final_pos_residual < CONVERGENCE_THRESHOLD and final_rot_residual < ROT_CONVERGENCE_THRESHOLD:
             break
-        if steps_since_improvement >= STAGNATION_BREAK_STEPS:
+        if steps_since_improvement >= stagnation_break_steps:
             print(
-                f"  [POLISH] no improvement for {STAGNATION_BREAK_STEPS} consecutive steps - stopping early "
-                f"at step {step_num} instead of running the full {POLISH_MAX_STEPS}-step budget"
+                f"  [POLISH] no improvement for {stagnation_break_steps} consecutive steps - stopping early "
+                f"at step {step_num} instead of running the full {max_steps}-step budget"
             )
             break
 
@@ -965,15 +1001,64 @@ def main() -> None:
             _perturb(pregrasp_q, j4_delta=-0.3, j6_delta=-0.3),
         ]
 
-        print("\n[INFO] Finding best seed for GRASP waypoint (multi-seed, genuinely settled, includes converged PREGRASP_Q + wrist-perturbed variants)...")
-        seed_q, _ = _find_best_seed(
-            env, robot, robot_entity_cfg, num_arm_joints, grasp_pos_b, target_quat_b, seed_j1,
-            extra_full_seeds=[KNOWN_GOOD_GRASP_Q, pregrasp_q] + wrist_perturbed_seeds,
-        )
-        print("[INFO] Polishing GRASP waypoint (fixed-Jacobian, pose-DLS)...")
-        grasp_q, grasp_residual, grasp_rot_residual = polish_from_seed(
-            env, ik_controller, robot_entity_cfg, ik_jacobi_idx, grasp_pos_b, target_quat_b, seed_q, num_arm_joints, joint_pos_limits
-        )
+        if args_cli.num_descent_steps <= 1:
+            # Old one-shot behavior, preserved for direct comparison against
+            # the incremental descent below (--num-descent-steps 1).
+            print("\n[INFO] Finding best seed for GRASP waypoint (multi-seed, genuinely settled, includes converged PREGRASP_Q + wrist-perturbed variants)...")
+            seed_q, _ = _find_best_seed(
+                env, robot, robot_entity_cfg, num_arm_joints, grasp_pos_b, target_quat_b, seed_j1,
+                extra_full_seeds=[KNOWN_GOOD_GRASP_Q, pregrasp_q] + wrist_perturbed_seeds,
+            )
+            print("[INFO] Polishing GRASP waypoint (fixed-Jacobian, pose-DLS, one-shot independent target)...")
+            grasp_q, grasp_residual, grasp_rot_residual = polish_from_seed(
+                env, ik_controller, robot_entity_cfg, ik_jacobi_idx, grasp_pos_b, target_quat_b, seed_q, num_arm_joints, joint_pos_limits
+            )
+        else:
+            # 2026-07-22 (ar4-grasp-descent-continuity task): disconnected-
+            # basin hypothesis test. The prior session found GRASP solved as
+            # an independent one-shot target (multi-seed search, including
+            # PREGRASP's own converged config as a candidate seed) deadlocks
+            # at a stable ~1.1-1.4rad rotation error, tilt/damping/seed
+            # independent, with no single joint pinned at a hard limit -
+            # "a big jump from PREGRASP's config can't reach [GRASP's] basin
+            # directly." Instead of jumping to GRASP in one shot, interpolate
+            # ONLY the height (x,y and orientation are already shared between
+            # PREGRASP and GRASP - see grasp_pos_b/pregrasp_pos_b above) from
+            # PREGRASP's converged height down to GRASP_AT_HEIGHT in
+            # args_cli.num_descent_steps increments, re-solving
+            # polish_from_seed at each sub-height. Critically, this loop does
+            # NOT call _settle_at/teleport between sub-steps (aside from the
+            # one explicit re-settle immediately below, a safety net to
+            # guarantee the descent's OWN starting point is genuinely
+            # PREGRASP's converged config) - polish_from_seed's own
+            # documented behavior (never teleports to its seed_q argument,
+            # always continues from the robot's live state) is exactly what
+            # makes chaining these calls back-to-back a genuine continuous
+            # resolve through configuration space, not a series of
+            # independent re-solves.
+            print(
+                f"\n[INFO] Descending to GRASP waypoint via {args_cli.num_descent_steps} incremental "
+                "height sub-waypoints from PREGRASP's converged config (disconnected-basin hypothesis test)..."
+            )
+            _settle_at(env, robot, robot_entity_cfg, num_arm_joints, pregrasp_q, SEED_SETTLE_STEPS)
+            z_start = GRASP_AT_HEIGHT + PREGRASP_HOVER
+            z_end = GRASP_AT_HEIGHT
+            grasp_q = pregrasp_q
+            grasp_residual = pregrasp_residual
+            grasp_rot_residual = pregrasp_rot_residual
+            for sub_idx in range(1, args_cli.num_descent_steps + 1):
+                sub_z = z_start + (z_end - z_start) * sub_idx / args_cli.num_descent_steps
+                sub_target_pos_b = cube_pos_b.clone()
+                sub_target_pos_b[:, 2] = sub_z
+                grasp_q, grasp_residual, grasp_rot_residual = polish_from_seed(
+                    env, ik_controller, robot_entity_cfg, ik_jacobi_idx, sub_target_pos_b, target_quat_b, grasp_q,
+                    num_arm_joints, joint_pos_limits,
+                    max_steps=DESCENT_SUBSTEP_MAX_STEPS, stagnation_break_steps=DESCENT_SUBSTEP_STAGNATION_STEPS,
+                )
+                print(
+                    f"  [DESCENT {sub_idx:2d}/{args_cli.num_descent_steps}] z_target={sub_z:.5f}m "
+                    f"pos_err={grasp_residual:.5f}m rot_err={grasp_rot_residual:.4f}rad"
+                )
 
         print(
             f"\n[SUMMARY] grasp_residual={grasp_residual:.5f}m/{grasp_rot_residual:.4f}rad "

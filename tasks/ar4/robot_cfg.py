@@ -18,6 +18,25 @@ ARM_JOINT_NAMES = ["joint_1", "joint_2", "joint_3", "joint_4", "joint_5", "joint
 GRIPPER_JOINT_NAMES = ["gripper_jaw1_joint", "gripper_jaw2_joint"]
 GRIPPER_OPEN_POS = 0.014
 GRIPPER_CLOSED_POS = 0.0
+# UPDATE 2026-07-23: the -1.0-gearing convention below (2026-07-21) was
+# ITSELF WRONG, empirically disproven by a direct live measurement
+# (scripts/_sweep_jaw2_symmetry.py, see kb/wiki/concepts/
+# ar4-vs-franka-root-cause-comparison.md's 2026-07-23 UPDATE for the full
+# writeup). That script held jaw1 fixed at its OPEN target and swept
+# jaw2's commanded joint value directly, reading back both jaws' actual
+# world-frame body positions: jaw2's world-X position is exactly
+# -1.0 * (jaw2's own commanded joint value) - i.e. jaw2's local-to-world
+# mapping ALREADY contains a -1 factor (from its 180-degree-rotated joint
+# frame, see robot_cfg.py history / the 2026-07-21 asset debugging doc).
+# Commanding jaw2 to -1.0 * jaw1's value (this file's old convention)
+# therefore DOUBLE-NEGATES and drives jaw2 to the SAME world point as
+# jaw1 (measured separation 0.00001m - confirmed live, both jaws
+# collapsing onto one point instead of spreading into a pincer). The
+# correct command, confirmed by the same sweep (q2=+0.014 -> a clean
+# 0.02800m/28mm separation, the full intended open aperture) is the SAME
+# signed value for both joints. Original comment (2026-07-21, now
+# superseded) is kept below for history:
+#
 # gripper_jaw2_joint's PhysxMimicJointAPI mirrors gripper_jaw1_joint with
 # gearing=-1.0, offset=0.0 (confirmed by direct USD inspection, commit
 # 64ab5cc / docs/superpowers/specs/research/2026-07-21-ar4-usd-asset-debugging.md):
@@ -37,8 +56,14 @@ GRIPPER_CLOSED_POS = 0.0
 # writeup of why this may be a genuine root-cause candidate for AR4's own
 # long-standing jaw-asymmetry problem (Experiments 17-22's three failed
 # jaw-mimic fix attempts never diagnosed this specific sign error).
-GRIPPER_OPEN_COMMAND_EXPR = {"gripper_jaw1_joint": GRIPPER_OPEN_POS, "gripper_jaw2_joint": -GRIPPER_OPEN_POS}
-GRIPPER_CLOSED_COMMAND_EXPR = {"gripper_jaw1_joint": GRIPPER_CLOSED_POS, "gripper_jaw2_joint": -GRIPPER_CLOSED_POS}
+#
+# scripts/build_asset.py's jaw2 hard-limit derivation was corrected to
+# match (gearing flipped from -1.0 to +1.0 there too, see that file) -
+# jaw2's own hard physics:lowerLimit/upperLimit now mirror jaw1's own
+# [0.000, 0.014] directly, not negated, so this corrected command range
+# is actually reachable rather than silently clamped.
+GRIPPER_OPEN_COMMAND_EXPR = {"gripper_jaw1_joint": GRIPPER_OPEN_POS, "gripper_jaw2_joint": GRIPPER_OPEN_POS}
+GRIPPER_CLOSED_COMMAND_EXPR = {"gripper_jaw1_joint": GRIPPER_CLOSED_POS, "gripper_jaw2_joint": GRIPPER_CLOSED_POS}
 
 
 def _resolve_usd_path() -> str:

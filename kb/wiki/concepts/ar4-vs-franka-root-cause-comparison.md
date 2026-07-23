@@ -1705,3 +1705,84 @@ this session stops without a validated grasp+lift.
 **Script changes** (`scripts/grasp_demo_v2.py`): new `--radius-sweep`/reused `--bearing-sweep-radius`-style radius argument; cube-parking (`_CUBE_PARK_POS_W`) replacing the old capture-then-restore logic; `_print_gripper_state()` plus per-phase midpoint snapshot images (`ar4_grasp_gripper_check<suffix>/phase<N>_mid_{demo,perception}.png`). New one-off diagnostic scripts (not part of the normal script set, prefixed `_` per this repo's existing convention for throwaway diagnostics): `scripts/_inspect_jaw_symmetry.py`, `scripts/_inspect_jaw_axis_math.py`, `scripts/_inspect_jaw_symmetry_live.py`, `scripts/_sweep_jaw2_symmetry.py`.
 
 **Sources**: this session's own live runs on the desktop (non-headless where rendering was needed, headless for the two pure-USD-inspection scripts) — one `--radius-sweep` launch (`logs/radius_sweep_v1.log`), one `_inspect_jaw_symmetry.py` static-USD launch, one `_inspect_jaw_symmetry_live.py` live-dynamics launch (`logs/videos/ar4_jaw_symmetry_check_demo_camera.mp4`, reviewed via extracted/cropped frames — inconclusive at this camera's resolution/distance, superseded by the direct numeric telemetry which is unambiguous), one `_inspect_jaw_axis_math.py` static-math launch (found unreliable, see above), one `_sweep_jaw2_symmetry.py` empirical sweep (`logs/jaw2_sweep.log`, the authoritative source for finding 4). Two Isaac Sim processes this session were found hung in post-work shutdown teardown (the documented "known gap" pattern — GPU/CPU still showing activity, log stalled with no progress for several minutes after the run's own final output was already fully written) and killed via `kill -TERM`/`-KILL` after confirming their real output was already captured; desktop confirmed fully torn down at session end (no stray Isaac Sim/kit processes, `nvidia-smi --query-compute-apps` empty, flock lock free, no tmux sessions).
+
+## UPDATE 2026-07-23 (later, record-jaw-bug-video task): jaw2 open-command asymmetry bug FIXED and video-confirmed — real 28mm pincer open/close now working
+
+Dispatched to record a video of the jaw-collapse bug from the immediately-
+prior UPDATE (above); scope was widened mid-task by the coordinator to
+implement the actual fix first, since the root cause and correct value
+were already fully diagnosed and only needed applying.
+
+**Fix applied, two files:**
+- `tasks/ar4/robot_cfg.py`: `GRIPPER_OPEN_COMMAND_EXPR`/`GRIPPER_CLOSED_COMMAND_EXPR`
+  now command `gripper_jaw2_joint` to the SAME signed value as
+  `gripper_jaw1_joint` (previously negated) — per the prior UPDATE's own
+  empirical sweep finding that jaw2's local-to-world mapping already
+  contains a -1 factor from its 180°-rotated joint frame, so negating the
+  command a second time was cancelling out the intended mirror.
+- `scripts/build_asset.py`'s `_remove_gripper_jaw2_mimic_constraint`: the
+  gearing value used to derive jaw2's hard `physics:lowerLimit`/
+  `upperLimit` from jaw1's own limits changed from -1.0 (the URDF-authored
+  mimic's own gearing, read off the mimic API before stripping it) to a
+  hardcoded +1.0, for the same reason — the URDF-authored gearing
+  describes the raw kinematic joint relationship, not the corrected
+  command convention. Asset rebuilt via the full URDF→USD pipeline
+  (`AR4_DESCRIPTION_PATH` + `PYTHONPATH=/home/saps/_ament_index_shim` env,
+  the shim needed to resolve xacro's `$(find ...)` substitution without a
+  full ROS install — not on `PYTHONPATH` by default in a plain SSH
+  session, unlike an interactive shell that sources it) — jaw2's hard
+  limits went from `[-0.0028, 0.0168]` (pre-existing, already-known-wrong
+  from the 2026-07-21 doc) to `[0.0000, 0.0140]`, matching jaw1's own
+  `[0.0000, 0.0140]` directly.
+
+**Live confirmation, via a new script `scripts/_record_jaw_fix_open_close_cycle.py`**
+(same direct `set_joint_position_target` mechanism as
+`_sweep_jaw2_symmetry.py`, driving the two jaws through the actual
+production `GRIPPER_OPEN_COMMAND_EXPR`/`GRIPPER_CLOSED_COMMAND_EXPR`
+constants unmodified, not a widened/swept range) — an OPEN→CLOSE→OPEN
+cycle (3s held per phase) with both jaws' world-frame body positions
+printed at the end of each phase:
+
+| Phase | separation_dist |
+|---|---|
+| reset (initial, spawns at OPEN per init_state) | 0.02800m |
+| end of Phase 1 (OPEN) | 0.02800m |
+| end of Phase 2 (CLOSE) | 0.00000m |
+| end of Phase 3 (OPEN again) | 0.02800m |
+
+This is a clean, repeatable 0mm/28mm cycle matching the full intended
+open aperture — a large change from the pre-fix measurement in the prior
+UPDATE (OPEN command produced 0.00001m separation, i.e. both jaws
+collapsed onto the same point). **The jaw2 open-command asymmetry bug is
+now fixed and directly video-confirmed, not just root-caused.**
+
+Video recorded with a tight close-up camera (repurposed
+`Ar4GraspVerifyEnvCfg.demo_camera`, repositioned/re-zoomed via
+`create_rotation_matrix_from_view`/`quat_from_matrix` rather than a new
+camera system) framed directly on the gripper jaws:
+`logs/videos/ar4_gripper_jaw_open_close_cycle_fixed.mp4` (desktop path;
+synced to the Pi at the matching `logs/videos/` path for the controller
+to view directly).
+
+**Not yet done / explicitly out of scope for this task:** no grasp+lift
+attempt was run with the fix in place — this task was bounded to fixing
+and video-confirming the jaw open/close dynamics in isolation, not the
+broader grasp-discoverability investigation. The Z-height reachability
+shortfall documented earlier in this file is a separate, still-unresolved
+issue. Whoever resumes the grasp+lift validation should now do so with a
+gripper that actually opens into a real pincer shape, removing one of the
+two known-independent confounds this file has been tracking.
+
+**Sources**: this session's own live runs on the desktop (non-headless,
+`DISPLAY=:1`, under `/tmp/rl_isaac_sim.lock`) — one full `build_asset.py`
+rebuild (log confirms `[mimic-removal]` printed the corrected
+`[0.0000, 0.0140]` limits) and one `_record_jaw_fix_open_close_cycle.py`
+launch (video + the four separation measurements above, read directly
+from its own stdout log). Isaac Sim was killed by something external
+mid-teardown once this session (the run's own `[DONE]`-equivalent final
+lines — "Video recorded to: ..." — were already written to disk before
+the kill, and the video file was confirmed present/valid, `file` reporting
+a genuine ISO Media MP4 container, before being synced to the Pi);
+desktop confirmed fully torn down afterward (no stray Isaac Sim/kit
+processes, `nvidia-smi --query-compute-apps` empty, flock lock free, no
+tmux sessions).

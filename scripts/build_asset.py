@@ -297,9 +297,31 @@ def _remove_gripper_jaw2_mimic_constraint(output_usd: str) -> None:
     GRIPPER_CLOSED_COMMAND_EXPR in tasks/ar4/robot_cfg.py) driving BOTH
     jaws as independent ImplicitActuatorCfg PD targets. jaw2's own hard
     limits are still re-derived from jaw1's own limits under the
-    known mirror geometry (gearing=-1.0, offset=0.0) so its physical
-    range of motion is still correct - only the physics-level spring
-    constraint is removed, not the limit correction from the original fix.
+    known mirror geometry so its physical range of motion is still
+    correct - only the physics-level spring constraint is removed, not
+    the limit correction from the original fix.
+
+    UPDATE 2026-07-23: the gearing=-1.0 value below (read off the URDF's
+    own authored PhysxMimicJointAPI) was empirically DISPROVEN as the
+    correct command-to-world mapping by a direct live measurement
+    (scripts/_sweep_jaw2_symmetry.py - see tasks/ar4/robot_cfg.py's own
+    2026-07-23 UPDATE comment and kb/wiki/concepts/
+    ar4-vs-franka-root-cause-comparison.md for the full writeup): with
+    jaw1 held at its OPEN target and jaw2's commanded joint value swept
+    directly, jaw2's actual world-frame position came back as exactly
+    -1.0 * (jaw2's own commanded value) - meaning jaw2's local-to-world
+    mapping (a consequence of its 180-degree-rotated joint frame, not of
+    the mimic's gearing attribute) ALREADY contains the sign flip. Using
+    the URDF-authored gearing=-1.0 AGAIN here to map jaw1's limits onto
+    jaw2 double-negates and produces limits ([-0.014, 0.000]) that reject
+    the one command value that actually produces a real mirrored-open
+    pincer (+0.014, the same signed value as jaw1). The corrected,
+    empirically-confirmed gearing for this derivation is +1.0 (jaw2's
+    hard limits should equal jaw1's own [0.000, 0.014] directly, not
+    negated) - hardcoded below rather than trusting the mimic API's own
+    authored attribute, since that attribute describes the raw URDF joint
+    kinematic relationship, not the corrected command convention this
+    session's live measurement established.
     """
     from pxr import PhysxSchema, Usd
 
@@ -316,21 +338,29 @@ def _remove_gripper_jaw2_mimic_constraint(output_usd: str) -> None:
         print("[mimic-removal] WARNING: gripper_jaw1_joint limits unreadable - skipping fix")
         return
 
-    # Known mirror geometry (gearing=-1.0, offset=0.0), confirmed by direct
-    # USD inspection in the 2026-07-21 asset debugging doc. Read it off the
-    # mimic API itself if still present, so we don't hardcode a value that
-    # could silently drift from what the importer actually authored.
-    gearing, offset = -1.0, 0.0
+    # gearing=+1.0 is the EMPIRICALLY-CORRECTED value (2026-07-23, see
+    # docstring UPDATE above) - deliberately NOT read from the mimic API's
+    # own authored gearing attribute (URDF-authored, -1.0), which was
+    # shown to produce the wrong (collapsed-jaw) limits/command
+    # convention. The mimic API is still stripped below (removes the
+    # physics-level spring constraint per the 2026-07-21 fix this
+    # function is named for) - only the NUMERIC gearing used for the
+    # limit computation is overridden.
+    gearing, offset = 1.0, 0.0
     mimic = PhysxSchema.PhysxMimicJointAPI.Get(jaw2, "rotX")
     if mimic:
-        gearing = mimic.GetGearingAttr().Get()
-        offset = mimic.GetOffsetAttr().Get()
+        urdf_gearing = mimic.GetGearingAttr().Get()
+        urdf_offset = mimic.GetOffsetAttr().Get()
         removed = jaw2.RemoveAPI(PhysxSchema.PhysxMimicJointAPI, "rotX")
-        print(f"[mimic-removal] PhysxMimicJointAPI:rotX removed from gripper_jaw2_joint (success={removed})")
+        print(
+            f"[mimic-removal] PhysxMimicJointAPI:rotX removed from gripper_jaw2_joint (success={removed}); "
+            f"URDF-authored gearing={urdf_gearing}/offset={urdf_offset} intentionally NOT used for the limit "
+            f"derivation below (empirically disproven 2026-07-23 - using corrected gearing={gearing}/offset={offset} instead)"
+        )
     else:
         print(
             "[mimic-removal] WARNING: no PhysxMimicJointAPI:rotX found on gripper_jaw2_joint to remove "
-            f"(nothing to strip; proceeding to set limits from the known gearing={gearing}, offset={offset} geometry anyway)"
+            f"(nothing to strip; proceeding to set limits from the corrected gearing={gearing}, offset={offset} anyway)"
         )
 
     mapped_a = gearing * lower1 + offset

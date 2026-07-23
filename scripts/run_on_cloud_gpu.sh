@@ -193,6 +193,7 @@ INSTANCE_CREATED=0
 JOB_START_TS=0
 TEARDOWN_DONE=0
 STREAM_FIFO=""
+STREAM_FD=""
 SSH_TAIL_PID=""
 LOCAL_TMP_SCRIPT=""
 
@@ -214,6 +215,7 @@ cleanup() {
   # Idempotent -- safe to call more than once (EXIT trap + explicit calls
   # on every code path below). Never tears down in --detach mode: the job
   # is deliberately left running.
+  [ -n "${STREAM_FD:-}" ] && exec {STREAM_FD}<&- 2>/dev/null || true
   [ -n "$STREAM_FIFO" ] && rm -f "$STREAM_FIFO" 2>/dev/null || true
   [ -n "$SSH_TAIL_PID" ] && kill "$SSH_TAIL_PID" 2>/dev/null || true
   [ -n "$LOCAL_TMP_SCRIPT" ] && rm -f "$LOCAL_TMP_SCRIPT" 2>/dev/null || true
@@ -418,12 +420,36 @@ start_tail() {
   gcloud compute ssh "$INSTANCE_NAME" --zone "$INSTANCE_ZONE" \
     --command "tail -n +1 -f ${REMOTE_LOG}" -- "${SSH_EXTRA[@]}" > "$STREAM_FIFO" 2>/dev/null &
   SSH_TAIL_PID=$!
+  # Open the FIFO for reading ONCE here and keep this fd (STREAM_FD) open
+  # for the whole life of the stream, instead of letting the main loop's
+  # `read ... < "$STREAM_FIFO"` open/close a fresh fd on every single call
+  # (found live, 2026-07-23, ar4-jaw-bisector-hypothesis task dispatch: a
+  # real bug, not a hypothetical). Re-opening per read creates a genuine
+  # reader-count-drops-to-zero race: in the gap between one `read` call
+  # closing its own fd and the next iteration's `read` reopening it, ANY
+  # write attempt by the writer (the backgrounded `tail -f`/ssh pipe above)
+  # gets an immediate SIGPIPE - once a FIFO has had an attached reader,
+  # POSIX semantics do NOT make a writer block waiting for a new reader if
+  # the reader count transiently hits zero, it delivers SIGPIPE right away.
+  # This silently kills the tail stream with nothing in the main loop ever
+  # checking whether SSH_TAIL_PID is still alive - the observed symptom was
+  # the locally-streamed log going permanently silent very early in a run
+  # while the REMOTE job kept making real, eventually-successful progress
+  # (only discovered via an out-of-band direct SSH check of the raw remote
+  # log, which showed the job had long since moved far past where the
+  # local stream had stalled). Holding one persistent reader fd open for
+  # the FIFO's entire lifetime removes the zero-reader window entirely.
+  exec {STREAM_FD}<"$STREAM_FIFO"
 }
 
 stop_tail() {
   [ -n "$SSH_TAIL_PID" ] && kill "$SSH_TAIL_PID" 2>/dev/null || true
   [ -n "$SSH_TAIL_PID" ] && wait "$SSH_TAIL_PID" 2>/dev/null || true
   SSH_TAIL_PID=""
+  if [ -n "${STREAM_FD:-}" ]; then
+    exec {STREAM_FD}<&- 2>/dev/null || true
+    STREAM_FD=""
+  fi
   [ -n "$STREAM_FIFO" ] && rm -f "$STREAM_FIFO" || true
   STREAM_FIFO=""
 }
@@ -447,7 +473,7 @@ PREEMPTION_RESTARTS=0
 RESULT_CODE=""
 
 while true; do
-  if IFS= read -r -t 20 line < "$STREAM_FIFO"; then
+  if IFS= read -r -t 20 -u "$STREAM_FD" line; then
     echo "$line"
     if [[ "$line" == "${DONE_MARKER} exit="* ]]; then
       REMOTE_EXIT="${line#${DONE_MARKER} exit=}"

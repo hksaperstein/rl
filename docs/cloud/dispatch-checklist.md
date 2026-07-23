@@ -8,6 +8,48 @@ these were reconstructed from memory each time instead of copied from a
 canonical source — see `BACKLOG.md` and `AUTONOMY.md`'s 2026-07-17
 entries.
 
+## Preferred entry point: `scripts/run_on_cloud_gpu.sh`
+
+**Use `scripts/run_on_cloud_gpu.sh [--detach] [--cost-cap DOLLARS]
+<command...>` as the default way to dispatch cloud work going forward**
+(added 2026-07-23) — the cloud analog of `scripts/run_on_desktop_gpu.sh`.
+It implements the recipe below end-to-end as one blocking call: pre-checks
+`scripts/check_cloud_state.sh`-style state to refuse dispatching if an
+instance already exists project-wide, provisions per the proven recipe
+(SPOT `g2-standard-4` + 1x `nvidia-l4`, zone-fallback list included),
+ships this repo via `git archive` to `~/rl` on the instance, runs your
+command in a detached remote `tmux` session, and — in the default
+(non-`--detach`) mode — **blocks natively inside the script itself**,
+streaming the remote log live until a completion marker appears, then
+always tears the instance down (success, failure, cost-cap breach, or
+preemption-retry exhaustion) and reports `scripts/check_cloud_state.sh`'s
+output so you can see the clean state without a separate call. This
+exists specifically so a dispatched subagent cannot background-and-forget
+a cloud job even if it tried — read the script's own header comment for
+its full behavior, retry/preemption handling, and exit-code scheme before
+using it for anything non-trivial. The manual step-by-step recipe below
+is still the reference this script's own constants are drawn from, and is
+still the right thing to read/copy when a job's needs don't fit the
+script's generic-command model (e.g. you need fine control mid-run beyond
+what an opaque `<command...>` allows).
+
+**Known gap (2026-07-23):** the script's own live verification round-tripped
+the full mechanics (busy pre-check, provisioning, zone-fallback-on-stockout,
+repo shipping, blocking log streaming, cost-cap enforcement, `--detach`,
+teardown) against real non-GPU instances, but could NOT independently
+verify the actual GPU-instance-creation path for real in that session —
+the project's entire `GPUS_ALL_REGIONS` quota (limit 1) was held by a
+different, legitimately active concurrent instance (`rl-ar4-capstone`) at
+verification time. The GPU-specific `gcloud compute instances create`
+invocation itself is unchanged from the already-separately-proven recipe
+below, so risk there is bounded, but re-confirm the full path end-to-end
+against a real GPU instance the next time cloud GPU capacity is free and
+update this note once done. The SPOT-preemption-retry code path (restart
++ re-run fresh, capped at 3 attempts) is similarly not yet independently
+live-fire tested against a real preemption — it mirrors the already-
+documented retry mitigation further down this file, but treat it as
+best-effort until observed working live.
+
 ## 1. Blocking instruction (put this first, its own paragraph)
 
 > **CRITICAL — read this before anything else: this dispatch launches

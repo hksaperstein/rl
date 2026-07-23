@@ -114,6 +114,19 @@ if one call's own timeout is hit. If you're handed a literal blocking poll
 command, run it verbatim (already noted under Hard environment rules below)
 rather than polling manually in a loop of your own devising.
 
+**For cloud (GCP) dispatch specifically, use `scripts/run_on_cloud_gpu.sh
+[--detach] [--cost-cap DOLLARS] <command...>`** (added 2026-07-23) instead
+of hand-rolling your own provision/SSH/poll sequence — it is a REAL
+blocking call: the script itself does not return control until the remote
+job is actually done (or a cost cap/preemption-retry budget is hit),
+streaming output live and tearing the instance down automatically. This is
+the cloud analog of `scripts/run_on_desktop_gpu.sh` mentioned above, built
+specifically because manual cloud orchestration (provision, SSH in, kick
+off work, hand-roll polling) was the exact place this project's own
+background-and-forget failure mode kept recurring. See its own header
+comment and `docs/cloud/dispatch-checklist.md` for full behavior and exit
+codes.
+
 ## Verification standard
 
 - Real evidence over proxies. Don't call something done off exit codes or a

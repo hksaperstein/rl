@@ -75,10 +75,21 @@ VIDEO_PATH = os.path.join(LOG_DIR, "videos", "ar4_gripper_jaw_open_close_cycle_f
 # position at the default reset pose, (~0.014, 0.364, 0.470) - measured
 # directly by scripts/_sweep_jaw2_symmetry.py's own printed jaw1_world/
 # base_pos output at this identical reset configuration. Eye placed at
-# lower Y (in front of the gripper) and slightly lower Z, looking up/back
-# at the jaws so the world-X jaw separation reads as clean left-right
+# lower Y (in front of the gripper) and slightly higher Z, looking down/
+# back at the jaws so the world-X jaw separation reads as left-right
 # motion in frame (jaw1/jaw2 differ only in X per that same sweep data;
 # Y and Z stayed fixed across the whole swept range).
+#
+# TRIED AND REVERTED (same session): a second attempt leveled the eye to
+# the jaws' own Z height (0, 0.20, 0.475) with a tighter focal_length=70,
+# aiming for a less-occluded frontal view of the fingertips specifically -
+# this instead rendered solid black/near-black frames end to end (almost
+# certainly the eye landing inside/behind solid gripper geometry at that
+# closer, level position - not investigated further given limited
+# remaining desktop time). Reverted back to these known-good values,
+# which DO render correctly (confirmed via extracted, non-black video
+# frames) even though the jaw fingertips are smaller/more foreshortened
+# in frame than that failed attempt was aiming for.
 _EYE = (0.0, 0.15, 0.52)
 _TARGET = (0.0, 0.364, 0.47)
 

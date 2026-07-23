@@ -122,6 +122,7 @@ for the full investigation and the final grasp+lift validation result.
 import argparse
 import math
 import os
+import random
 import sys
 
 from isaaclab.app import AppLauncher
@@ -162,6 +163,78 @@ parser.add_argument(
 parser.add_argument(
     "--num-descent-steps", type=int, default=30,
     help="Number of incremental sub-waypoints for the PREGRASP->GRASP height descent (2026-07-22, ar4-grasp-descent-continuity task). Instead of solving GRASP as an independent one-shot target from a multi-seed search (which the prior session found deadlocks at ~1.1-1.4rad rotation error, a stable tilt/damping/seed-independent local optimum), interpolate the target height from PREGRASP's own converged height down to GRASP_AT_HEIGHT in this many steps, re-solving polish_from_seed at each sub-height WITHOUT re-teleporting in between (chaining calls this way is what makes each sub-step start from the previous one's genuinely converged live state, mirroring Experiment 11's RL-driven incremental IK and demo_franka_ik_dice_line.py's own per-step continuous resolve). Set to 1 to reproduce the old one-shot independent-GRASP-target behavior for direct comparison.",
+)
+# 2026-07-22 (ar4-grasp-z-envelope task): the descent-continuity task above
+# left an explicit follow-up - "directly sweep the reachable Z-height
+# envelope at this XY position ... to map exactly how low this basin can
+# genuinely descend before the position residual starts growing, and
+# cross-reference against each joint's own live margin at that specific
+# height". Both new flags below run their sweep in a SINGLE Isaac Sim
+# launch (avoiding per-height/per-bearing app-startup overhead) and exit
+# before the one-shot GRASP solve / phased pick-and-place execution - they
+# are envelope-mapping diagnostics, not grasp attempts.
+parser.add_argument(
+    "--z-sweep", type=float, nargs="+", default=None,
+    help="Sweep multiple GRASP-waypoint target heights (root-frame z, meters) at the CURRENT --cube-xy/--tilt-deg bearing, via the same incremental-descent method used for the real GRASP waypoint. PREGRASP is solved once as usual; each swept height then settles back to PREGRASP's own converged config first (so every sweep point starts from an identical place, not compounding drift from the previous point) before descending via --num-descent-steps sub-waypoints from PREGRASP's height down to that swept height. Logs the final position/rotation residual, the per-axis (x,y,z) residual, and the full joint config against robot.data.joint_pos_limits for every swept height - this is the direct evidence for whether the Z-shortfall is a hard cliff at one height or a smoothly growing shortfall, and which specific joint(s) are pinned/near-pinned when it appears. Exits after the sweep (skips the one-shot GRASP solve and phased pick execution).",
+)
+parser.add_argument(
+    "--bearing-sweep", type=float, nargs="+", default=None,
+    help="Sweep multiple cube BEARINGS (degrees; 0 = the scene's own default straight-ahead position at the given --bearing-sweep-radius, positive rotates toward world +X) at a FIXED reach radius, instead of varying reach distance (already tested in an earlier session) or tilt (also already tested). For each bearing, teleports the cube to that angle/radius, then runs the full seed-search + PREGRASP polish + incremental descent to --grasp-height (default 0.009, the true cube grasp point) and logs the same residual/joint-margin data as --z-sweep. Tests whether the Z-height reachability floor found at the default bearing is a property of THIS specific approach direction (a different bearing might relieve the joint_3-vs-vertical-orientation conflict) or holds at every angle (a genuine, direction-independent kinematic limit). Overrides/ignores --cube-xy when set. Exits after the sweep.",
+)
+parser.add_argument(
+    "--bearing-sweep-radius", type=float, default=0.275,
+    help="Reach radius (meters, world-frame distance from the cube to the robot base) used by --bearing-sweep. Defaults to 0.275, the scene's own default cube distance (matches the (0.0, 0.275) default cube position at bearing=0), a distance already confirmed reachable at the default bearing.",
+)
+# 2026-07-22/23 (ar4-grasp-deployability-check task, coordinator-directed):
+# `_find_best_seed` teleports the robot (via write_joint_position_to_sim)
+# through several candidate configs and picks the best-scoring one BEFORE
+# ever running the real DLS resolve - a real AR4 can never do this (there
+# is no "try a config, see how close it is, undo, try another" operation on
+# physical hardware). This flag swaps that teleport-based search for
+# `_wiggle_and_resolve` (see its own docstring): starts from wherever the
+# robot's live state actually is (after env.reset(), that's HOME_Q -
+# tasks/ar4/robot_cfg.py's own init_state, all-zero joint_pos - a real,
+# natural starting pose, not a special case invented for this flag) and, if
+# the direct continuous DLS resolve doesn't converge, retries from a SMALL,
+# BOUNDED joint perturbation reached via normal commanded-target PD motion
+# (env.step, matching every other real move in this script) - never a
+# teleport. Only affects PREGRASP's own seeding (the only place in the
+# CURRENTLY-DEFAULT --num-descent-steps>1 pipeline that ever calls
+# _find_best_seed at all - the incremental GRASP descent already reuses
+# PREGRASP's own converged config with no separate seed search, so it was
+# already teleport-free before this flag existed).
+parser.add_argument(
+    "--deployable-seed", action="store_true",
+    help="Replace _find_best_seed's teleport-based PREGRASP seed search with _wiggle_and_resolve's bounded, PD-driven local retry (no teleportation anywhere) - tests whether the already-fixed continuous-DLS-resolve/interpolated-descent pipeline still converges without a simulation-only search mechanism.",
+)
+parser.add_argument(
+    "--max-wiggles", type=int, default=6,
+    help="Max number of bounded local perturbation retries for --deployable-seed's _wiggle_and_resolve before giving up and reporting whatever it last converged to.",
+)
+parser.add_argument(
+    "--wiggle-max-rad", type=float, default=0.3,
+    help="Max per-joint perturbation magnitude (radians, ~17 degrees at the default) for --deployable-seed's wiggle retries - deliberately small/bounded (a real jog/dither move, not a big jump) per the coordinator's own framing of what makes this physically realizable on real hardware.",
+)
+# 2026-07-22/23 (ar4-grasp-deployability-check task, coordinator-directed,
+# follow-up after --deployable-seed's own bounded wiggle retries were found
+# NOT to escape a ~1.0-1.4rad rotation-error basin from HOME_Q at any of 6
+# attempts): a real robot CAN make one large, DELIBERATE commanded move to a
+# specific known/precomputed reference posture (that's an ordinary PD-driven
+# joint move, not a teleport) - it just cannot cheaply "try many candidates
+# and roll back" the way write_joint_position_to_sim does. This flag tests
+# the coordinator's own suggested fallback ("a smarter single initial guess
+# ... rather than either teleporting or wiggling"): before any DLS resolve
+# attempt, commands a genuine PD move (env.step loop, held for
+# SEED_SETTLE_STEPS, NO write_joint_position_to_sim anywhere) from wherever
+# the robot currently is to KNOWN_GOOD_PREGRASP_Q - a fixed reference
+# posture already independently established across several earlier sessions
+# (and consistent with what the teleport search itself usually converges
+# near for this cube height/bearing) - then proceeds with the normal
+# --deployable-seed resolve/wiggle logic from THAT starting point instead of
+# from raw HOME_Q.
+parser.add_argument(
+    "--fixed-posture-move", action="store_true",
+    help="With --deployable-seed: before resolving, make one real PD-driven move (no teleport) to the fixed KNOWN_GOOD_PREGRASP_Q reference posture, then resolve/wiggle from there instead of from raw HOME_Q.",
 )
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
@@ -635,6 +708,103 @@ def _find_best_seed(env, robot, robot_entity_cfg, num_arm_joints, target_pos_b, 
     return best_q, best_dist
 
 
+def _wiggle_and_resolve(
+    env, ik_controller, robot_entity_cfg, ik_jacobi_idx, target_pos_b, target_quat_b, num_arm_joints,
+    joint_pos_limits, max_wiggles=6, wiggle_settle_steps=60, wiggle_max_rad=0.3, rng_seed=0,
+):
+    """Real-robot-deployable replacement for _find_best_seed's teleport-based
+    multi-candidate search (2026-07-22/23, ar4-grasp-deployability-check
+    task, coordinator-directed). _find_best_seed calls
+    write_joint_position_to_sim to instantly snap the robot into several
+    candidate configs and score each one before committing - a genuine
+    simulation-only capability with no real-hardware analogue (a physical
+    AR4 cannot "try" a configuration and undo it). This function instead:
+
+    1. Attempts the direct continuous DLS resolve (polish_from_seed, already
+       real/deployable - the Jacobian-frame fix, EE-offset fix, and
+       per-physics-step continuous resolve it uses are all genuine, no
+       teleportation inside polish_from_seed itself) from wherever the
+       robot's live state ACTUALLY is right now - no teleport.
+    2. If that doesn't converge (final pos/rot residual still above the
+       normal convergence thresholds), applies a SMALL, BOUNDED per-joint
+       perturbation (uniform in [-wiggle_max_rad, wiggle_max_rad], default
+       ~17 degrees - a real jog/dither move, not a distant jump) as a
+       normal COMMANDED joint-position target, held for wiggle_settle_steps
+       physics steps of ordinary PD-driven motion via env.step - the exact
+       same mechanism every other move in this script uses, never
+       write_joint_position_to_sim - then retries the resolve from that new,
+       physically-reached nearby state.
+    3. Repeats up to max_wiggles times, returning whatever the best attempt
+       achieved (by the same combined position+orientation score
+       polish_from_seed itself uses) if none fully converges.
+
+    This is deliberately NOT claimed to be equivalent in search power to the
+    teleport-based multi-seed search - it is a bounded LOCAL search around
+    wherever the robot currently is, which is exactly the constraint a real
+    robot actually has. Comparing its result quality against the
+    teleport-assisted version's is the whole point of this function.
+    """
+    robot = env.scene["robot"]
+    rng = random.Random(rng_seed)
+
+    def _combined_score(pos_err: float, rot_err: float) -> float:
+        return pos_err + ORIENTATION_SCORE_WEIGHT * rot_err
+
+    cur_q = robot.data.joint_pos[0, robot_entity_cfg.joint_ids].tolist()
+    best_q, best_pos_res, best_rot_res = polish_from_seed(
+        env, ik_controller, robot_entity_cfg, ik_jacobi_idx, target_pos_b, target_quat_b, cur_q,
+        num_arm_joints, joint_pos_limits,
+    )
+    best_score = _combined_score(best_pos_res, best_rot_res)
+    print(f"  [WIGGLE 0/{max_wiggles}] direct resolve (no teleport, no wiggle): pos={best_pos_res:.5f}m rot={best_rot_res:.4f}rad score={best_score:.5f}")
+
+    attempt = 0
+    lo = joint_pos_limits[0, :, 0].tolist()
+    hi = joint_pos_limits[0, :, 1].tolist()
+    while (best_pos_res >= CONVERGENCE_THRESHOLD or best_rot_res >= ROT_CONVERGENCE_THRESHOLD) and attempt < max_wiggles:
+        attempt += 1
+        base_q = robot.data.joint_pos[0, robot_entity_cfg.joint_ids].tolist()
+        wiggle_q = [
+            min(max(q + rng.uniform(-wiggle_max_rad, wiggle_max_rad), l), h)
+            for q, l, h in zip(base_q, lo, hi)
+        ]
+        for _ in range(wiggle_settle_steps):
+            action = torch.zeros(env.num_envs, num_arm_joints + 1, device=env.device)
+            action[:, :num_arm_joints] = torch.tensor([wiggle_q], device=env.device)
+            action[:, num_arm_joints] = GRIPPER_OPEN
+            env.step(action)
+        print(f"  [WIGGLE {attempt}/{max_wiggles}] PD-driven nudge (no teleport) to q={['%.4f' % v for v in wiggle_q]}, retrying resolve...")
+        cand_q, cand_pos_res, cand_rot_res = polish_from_seed(
+            env, ik_controller, robot_entity_cfg, ik_jacobi_idx, target_pos_b, target_quat_b, wiggle_q,
+            num_arm_joints, joint_pos_limits,
+        )
+        cand_score = _combined_score(cand_pos_res, cand_rot_res)
+        print(f"  [WIGGLE {attempt}/{max_wiggles}] result: pos={cand_pos_res:.5f}m rot={cand_rot_res:.4f}rad score={cand_score:.5f}")
+        if cand_score < best_score:
+            best_q, best_pos_res, best_rot_res, best_score = cand_q, cand_pos_res, cand_rot_res, cand_score
+        else:
+            # This attempt was worse than an earlier one - the robot's LIVE
+            # state is now sitting at this worse config, not best_q.
+            # polish_from_seed always resumes from the robot's actual live
+            # state (never teleports to its seed_q argument, see its own
+            # docstring), so a caller chaining another polish_from_seed call
+            # after this function returns would silently start from the
+            # wrong place unless we explicitly move back to best_q here -
+            # via a normal commanded PD move, same as every other move in
+            # this function, never a teleport.
+            for _ in range(wiggle_settle_steps):
+                action = torch.zeros(env.num_envs, num_arm_joints + 1, device=env.device)
+                action[:, :num_arm_joints] = torch.tensor([best_q], device=env.device)
+                action[:, num_arm_joints] = GRIPPER_OPEN
+                env.step(action)
+
+    print(
+        f"  [WIGGLE] final (after {attempt} wiggle attempt(s), no teleport used anywhere): "
+        f"pos={best_pos_res:.5f}m rot={best_rot_res:.4f}rad"
+    )
+    return best_q, best_pos_res, best_rot_res
+
+
 def polish_from_seed(
     env, ik_controller, robot_entity_cfg, ik_jacobi_idx, target_pos_b, target_quat_b, seed_q, num_arm_joints, joint_pos_limits,
     max_steps=None, stagnation_break_steps=None,
@@ -903,6 +1073,93 @@ def main() -> None:
         target_quat_b = _build_canonical_target_quat_b(root_pos_w, root_quat_w, tilt_deg=args_cli.tilt_deg)
         print(f"[INFO] Canonical target orientation (root frame, w,x,y,z): {target_quat_b[0].tolist()}")
 
+        # Known-good absolute configs from a prior offline multi-seed search
+        # at this exact target (cube (0.0, 0.275, 0.009)) - see
+        # _find_best_seed's own docstring for why these are included
+        # directly rather than trusting this run's live search alone to
+        # reproduce the same basin. Moved up here (2026-07-22, ar4-grasp-
+        # z-envelope task) from further down in main() so --bearing-sweep's
+        # own per-bearing seed search (below, which runs BEFORE the rest of
+        # main()'s normal single-position pipeline) can also use
+        # KNOWN_GOOD_PREGRASP_Q as an extra seed candidate.
+        KNOWN_GOOD_GRASP_Q = [-0.014429761096835136, 1.240863561630249, 0.3401874601840973, -0.08906537294387817, 1.1987247467041016, 0.0052983760833740234]
+        KNOWN_GOOD_PREGRASP_Q = [0.00014747596287634224, 0.9648232460021973, 0.9025915265083313, -0.0006890640361234546, -0.6352600455284119, 0.008003178983926773]
+
+        # 2026-07-22 (ar4-grasp-z-envelope task): --bearing-sweep supersedes
+        # the normal single-position pipeline entirely (it does its own
+        # per-bearing cube teleport + seed-search + PREGRASP polish + descent,
+        # independent of whatever --cube-xy/the scene default set cube_pos_b
+        # to above) - checked here, before the rest of main() commits to one
+        # specific cube position.
+        if args_cli.bearing_sweep is not None:
+            grasp_h = GRASP_AT_HEIGHT
+            print(
+                f"\n[BEARING-SWEEP] radius={args_cli.bearing_sweep_radius}m grasp_height={grasp_h}m "
+                f"bearings(deg)={args_cli.bearing_sweep}"
+            )
+            for bearing_deg in args_cli.bearing_sweep:
+                theta = math.radians(bearing_deg)
+                bx = args_cli.bearing_sweep_radius * math.sin(theta)
+                by = args_cli.bearing_sweep_radius * math.cos(theta)
+                override_z = cube.data.root_pos_w[0, 2].item()
+                override_pos = torch.tensor([[bx, by, override_z]], device=env.device)
+                override_quat = cube.data.root_quat_w[0:1].clone()
+                cube.write_root_pose_to_sim(
+                    torch.cat([override_pos, override_quat], dim=-1), env_ids=torch.tensor([0], device=env.device)
+                )
+                cube.write_root_velocity_to_sim(torch.zeros((1, 6), device=env.device), env_ids=torch.tensor([0], device=env.device))
+
+                cube_pos_w_i = cube.data.root_pos_w[0:1].clone()
+                cube_pos_b_i, _ = subtract_frame_transforms(root_pos_w, root_quat_w, cube_pos_w_i)
+                bearing_i = math.atan2(cube_pos_b_i[0, 1].item(), cube_pos_b_i[0, 0].item())
+                seed_j1_i = -(bearing_i - CALIBRATION_C)
+
+                pregrasp_pos_b_i = cube_pos_b_i.clone()
+                pregrasp_pos_b_i[:, 2] = grasp_h + PREGRASP_HOVER
+                grasp_pos_b_i = cube_pos_b_i.clone()
+                grasp_pos_b_i[:, 2] = grasp_h
+
+                seed_q_i, _ = _find_best_seed(
+                    env, robot, robot_entity_cfg, num_arm_joints, pregrasp_pos_b_i, target_quat_b, seed_j1_i,
+                    extra_full_seeds=[KNOWN_GOOD_PREGRASP_Q],
+                )
+                pregrasp_q_i, _, _ = polish_from_seed(
+                    env, ik_controller, robot_entity_cfg, ik_jacobi_idx, pregrasp_pos_b_i, target_quat_b, seed_q_i,
+                    num_arm_joints, joint_pos_limits,
+                )
+
+                _settle_at(env, robot, robot_entity_cfg, num_arm_joints, pregrasp_q_i, SEED_SETTLE_STEPS)
+                cur_q_i = pregrasp_q_i
+                z_start_i = grasp_h + PREGRASP_HOVER
+                last_target_i = None
+                pos_res_i = rot_res_i = None
+                for sub_idx in range(1, args_cli.num_descent_steps + 1):
+                    sub_z = z_start_i + (grasp_h - z_start_i) * sub_idx / args_cli.num_descent_steps
+                    sub_target_i = grasp_pos_b_i.clone()
+                    sub_target_i[:, 2] = sub_z
+                    last_target_i = sub_target_i
+                    cur_q_i, pos_res_i, rot_res_i = polish_from_seed(
+                        env, ik_controller, robot_entity_cfg, ik_jacobi_idx, sub_target_i, target_quat_b, cur_q_i,
+                        num_arm_joints, joint_pos_limits,
+                        max_steps=DESCENT_SUBSTEP_MAX_STEPS, stagnation_break_steps=DESCENT_SUBSTEP_STAGNATION_STEPS,
+                    )
+                residual_vec_i = _measure_dist_vec(robot, robot_entity_cfg, last_target_i)
+                live_q_i = robot.data.joint_pos[0, robot_entity_cfg.joint_ids].tolist()
+                lo_i = joint_pos_limits[0, :, 0].tolist()
+                hi_i = joint_pos_limits[0, :, 1].tolist()
+                margins_i = [min(q - l, h - q) for q, l, h in zip(live_q_i, lo_i, hi_i)]
+                print(
+                    f"[BEARING-SWEEP] bearing_deg={bearing_deg:.1f} cube_xy_w=({bx:.4f},{by:.4f}) "
+                    f"pos_err={pos_res_i:.5f}m rot_err={rot_res_i:.4f}rad "
+                    f"xyz_residual={['%.5f' % v for v in residual_vec_i]} "
+                    f"q={['%.4f' % v for v in live_q_i]} margins={['%.4f' % v for v in margins_i]}"
+                )
+            print("[BEARING-SWEEP] done - exiting before one-shot GRASP solve / phased execution.")
+            video_writer.close()
+            demo_video_writer.close()
+            env.close()
+            return
+
         # Capture the cube's TRUE pose right after reset, before any
         # seed-search/polish runs. The multi-seed search below teleports the
         # arm through several very different configurations (some close to
@@ -927,14 +1184,6 @@ def main() -> None:
         grasp_pos_b[:, 2] = GRASP_AT_HEIGHT
         pregrasp_pos_b = cube_pos_b.clone()
         pregrasp_pos_b[:, 2] = GRASP_AT_HEIGHT + PREGRASP_HOVER
-
-        # Known-good absolute configs from a prior offline multi-seed search
-        # at this exact target (cube (0.0, 0.275, 0.009)) - see
-        # _find_best_seed's own docstring for why these are included
-        # directly rather than trusting this run's live search alone to
-        # reproduce the same basin.
-        KNOWN_GOOD_GRASP_Q = [-0.014429761096835136, 1.240863561630249, 0.3401874601840973, -0.08906537294387817, 1.1987247467041016, 0.0052983760833740234]
-        KNOWN_GOOD_PREGRASP_Q = [0.00014747596287634224, 0.9648232460021973, 0.9025915265083313, -0.0006890640361234546, -0.6352600455284119, 0.008003178983926773]
 
         # 2026-07-22 (orientation-fix task, live-run finding): solve PREGRASP
         # FIRST, then seed GRASP's polish from PREGRASP's own CONVERGED
@@ -962,12 +1211,79 @@ def main() -> None:
         # re-solved basin - and matches how the phased execution actually
         # moves the arm anyway (pregrasp_q -> grasp_q as consecutive,
         # nearby waypoints, not independent teleports).
-        print("\n[INFO] Finding best seed for PREGRASP waypoint (multi-seed, genuinely settled)...")
-        seed_q, _ = _find_best_seed(env, robot, robot_entity_cfg, num_arm_joints, pregrasp_pos_b, target_quat_b, seed_j1, extra_full_seeds=[KNOWN_GOOD_PREGRASP_Q])
-        print("[INFO] Polishing PREGRASP waypoint (fixed-Jacobian, pose-DLS)...")
-        pregrasp_q, pregrasp_residual, pregrasp_rot_residual = polish_from_seed(
-            env, ik_controller, robot_entity_cfg, ik_jacobi_idx, pregrasp_pos_b, target_quat_b, seed_q, num_arm_joints, joint_pos_limits
-        )
+        if args_cli.deployable_seed:
+            # 2026-07-22/23 (ar4-grasp-deployability-check task): real-robot-
+            # deployable path - no write_joint_position_to_sim teleportation
+            # anywhere in this branch. The robot is already sitting at
+            # HOME_Q (tasks/ar4/robot_cfg.py's own init_state, all-zero
+            # joint_pos) right after env.reset() - that IS the starting
+            # point, not a teleport target.
+            if args_cli.fixed_posture_move:
+                # 2026-07-22/23 (deployability-check follow-up): one real,
+                # deliberate PD-driven move (NOT a teleport) from HOME_Q to a
+                # fixed reference posture, before any DLS resolve attempt -
+                # see this flag's own docstring above.
+                print(f"\n[INFO] --fixed-posture-move: commanding one real PD move (no teleport) to KNOWN_GOOD_PREGRASP_Q={KNOWN_GOOD_PREGRASP_Q}...")
+                for _ in range(SEED_SETTLE_STEPS):
+                    action = torch.zeros(env.num_envs, num_arm_joints + 1, device=env.device)
+                    action[:, :num_arm_joints] = torch.tensor([KNOWN_GOOD_PREGRASP_Q], device=env.device)
+                    action[:, num_arm_joints] = GRIPPER_OPEN
+                    env.step(action)
+            print("\n[INFO] --deployable-seed: resolving PREGRASP from the robot's live state via bounded PD-driven wiggle retries, NO teleportation...")
+            pregrasp_q, pregrasp_residual, pregrasp_rot_residual = _wiggle_and_resolve(
+                env, ik_controller, robot_entity_cfg, ik_jacobi_idx, pregrasp_pos_b, target_quat_b, num_arm_joints,
+                joint_pos_limits, max_wiggles=args_cli.max_wiggles, wiggle_max_rad=args_cli.wiggle_max_rad,
+            )
+        else:
+            print("\n[INFO] Finding best seed for PREGRASP waypoint (multi-seed, genuinely settled)...")
+            seed_q, _ = _find_best_seed(env, robot, robot_entity_cfg, num_arm_joints, pregrasp_pos_b, target_quat_b, seed_j1, extra_full_seeds=[KNOWN_GOOD_PREGRASP_Q])
+            print("[INFO] Polishing PREGRASP waypoint (fixed-Jacobian, pose-DLS)...")
+            pregrasp_q, pregrasp_residual, pregrasp_rot_residual = polish_from_seed(
+                env, ik_controller, robot_entity_cfg, ik_jacobi_idx, pregrasp_pos_b, target_quat_b, seed_q, num_arm_joints, joint_pos_limits
+            )
+
+        # 2026-07-22 (ar4-grasp-z-envelope task): map the reachable Z-height
+        # envelope at THIS cube_pos_b (the descent-continuity task's own
+        # flagged follow-up) - reuses the already-converged pregrasp_q as a
+        # common, identical starting point for every swept height (settled
+        # back to it before each height, so sweep points don't compound), and
+        # descends via the exact same incremental method already validated to
+        # avoid the one-shot rotation-deadlock. Exits after logging every
+        # swept height's residual + joint-limit-margin data.
+        if args_cli.z_sweep is not None:
+            z_start = pregrasp_pos_b[0, 2].item()
+            sweep_heights = sorted(args_cli.z_sweep, reverse=True)
+            print(f"\n[Z-SWEEP] cube_pos_b={cube_pos_b[0].tolist()} pregrasp_height(z_start)={z_start:.5f} heights={sweep_heights}")
+            for h in sweep_heights:
+                _settle_at(env, robot, robot_entity_cfg, num_arm_joints, pregrasp_q, SEED_SETTLE_STEPS)
+                cur_q = pregrasp_q
+                last_target = None
+                pos_res = rot_res = None
+                for sub_idx in range(1, args_cli.num_descent_steps + 1):
+                    sub_z = z_start + (h - z_start) * sub_idx / args_cli.num_descent_steps
+                    sub_target = cube_pos_b.clone()
+                    sub_target[:, 2] = sub_z
+                    last_target = sub_target
+                    cur_q, pos_res, rot_res = polish_from_seed(
+                        env, ik_controller, robot_entity_cfg, ik_jacobi_idx, sub_target, target_quat_b, cur_q,
+                        num_arm_joints, joint_pos_limits,
+                        max_steps=DESCENT_SUBSTEP_MAX_STEPS, stagnation_break_steps=DESCENT_SUBSTEP_STAGNATION_STEPS,
+                    )
+                residual_vec = _measure_dist_vec(robot, robot_entity_cfg, last_target)
+                live_q = robot.data.joint_pos[0, robot_entity_cfg.joint_ids].tolist()
+                lo_list = joint_pos_limits[0, :, 0].tolist()
+                hi_list = joint_pos_limits[0, :, 1].tolist()
+                margins = [min(q - l, hh - q) for q, l, hh in zip(live_q, lo_list, hi_list)]
+                print(
+                    f"[Z-SWEEP] height={h:.4f} pos_err={pos_res:.5f}m rot_err={rot_res:.4f}rad "
+                    f"xyz_residual={['%.5f' % v for v in residual_vec]} "
+                    f"q={['%.4f' % v for v in live_q]} margins={['%.4f' % v for v in margins]}"
+                )
+            print("[Z-SWEEP] done - exiting before one-shot GRASP solve / phased execution.")
+            video_writer.close()
+            demo_video_writer.close()
+            env.close()
+            return
 
         # 2026-07-22 (ar4-tilt-fix task): also try several WRIST-PERTURBED
         # variants of pregrasp_q (small offsets to j4/j6, the two joints

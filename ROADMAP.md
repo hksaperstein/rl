@@ -216,6 +216,41 @@ Roughly in the order they'd likely be picked up:
    `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s 2026-07-22
    (later still, ar4-grasp-descent-continuity task) UPDATE.
 
+   **Z-height envelope mapped + bearing sweep + deployability check, done
+   2026-07-23 (ar4-grasp-z-envelope task): the Z-height reachability floor
+   is now confirmed genuine, direction-independent, and NOT a teleport-
+   search artifact — still no lift, and this line of investigation is now
+   fairly exhausted for this exact cube position.** New `--z-sweep`/
+   `--bearing-sweep` CLI modes in `scripts/grasp_demo_v2.py` mapped the
+   envelope directly: the Z-shortfall grows SMOOTHLY (not a cliff) from
+   ~0mm at 33mm height to 23mm at the true 9mm height, tracking joint_3's
+   own margin shrinking smoothly in lockstep (0.136rad → 0.084rad) —
+   joint_3 is unambiguously the binding constraint but never reaches exact
+   zero margin (a soft Jacobian-conditioning effect, not a literal hard-stop
+   collision). A 7-point bearing sweep (±60°) found the SAME ~19.2mm
+   shortfall at every angle to within 0.02mm — ruling out approach
+   direction as a fix, on top of reach distance and tilt (already ruled out
+   in prior sessions). A scene-setup sanity check found no cube/table
+   height calibration mismatch. **Coordinator-directed deployability check**
+   (does the finding depend on `_find_best_seed`'s simulation-only
+   teleport-based candidate search?): a bounded local "wiggle" retry
+   mechanism (no teleport, small PD-driven perturbations from HOME_Q)
+   FAILED to converge in 7/7 attempts (stuck at 59-80° rotation error) —
+   but one single deliberate real move (still no teleport) to the
+   already-known-good reference posture, then the normal resolve, converged
+   immediately and reproduced essentially the same ~17mm Z-shortfall. The
+   finding is real, not a simulation-only artifact. Verdict: this is a
+   genuine, method-independent kinematic property of this arm/cube-height
+   combination. Candidate next step (not decided here, flagged for the
+   controller per this task's own instruction): adjust the cube's spawn
+   height/position closer to this arm's comfortable envelope — a scene-
+   design change that could affect other AR4 experiments' randomization
+   ranges, not applied unilaterally. `_find_best_seed`'s teleport-based
+   search itself is a real deployability gap independent of this specific
+   finding, logged to `BACKLOG.md`. Full detail:
+   `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s 2026-07-23
+   UPDATE.
+
 See `BACKLOG.md` for further-out candidates not yet on this list.
 
 ## Recently landed

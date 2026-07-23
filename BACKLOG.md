@@ -106,6 +106,31 @@ one-line pointer, not the reasoning inline.
   changed unilaterally, since it could affect existing trained checkpoints/
   dynamics fidelity across the whole AR4 task suite).
 
+## AR4 grasp-demo seed selection is not real-robot-deployable (2026-07-23 finding, not yet fixed)
+
+- **`scripts/grasp_demo_v2.py`'s `_find_best_seed` teleports the robot
+  (`write_joint_position_to_sim`) through several candidate joint configs
+  and scores each before committing to one — no real AR4 can do this (there
+  is no "try a config, check, undo, try another" operation on physical
+  hardware).** Tested directly (2026-07-23, ar4-grasp-z-envelope task,
+  coordinator-directed): a bounded local "wiggle" retry (small PD-driven
+  perturbations from HOME_Q, no teleport) FAILED to converge in 7/7 attempts
+  (stuck at 59-80° rotation error) — bounded local search cannot substitute
+  for the teleport search's much broader candidate pool. **But** a single
+  deliberate real move (still no teleport, an ordinary commanded joint move)
+  to the already-known-good `KNOWN_GOOD_PREGRASP_Q` reference posture,
+  followed by the normal resolve, converged immediately (1.5mm/2.7°, zero
+  retries needed) and reproduced the investigation's main Z-height finding
+  just as well as the teleport-based version. **Candidate fix, not done
+  here**: replace `_find_best_seed`'s live teleport search with either (a)
+  this same fixed-posture-move pattern (a single hardcoded good reference
+  posture per task/cube-height class, reached via one real commanded move),
+  or (b) a small closed-form/geometric heuristic that computes a reasonable
+  initial elbow-up/down posture directly from the target position, rather
+  than searching at all. Full detail:
+  `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s 2026-07-23
+  UPDATE.
+
 ## AR4 classical-IK positioning precision (Hypothesis 1 — RESOLVED 2026-07-22, was a measurement/frame-bug artifact, not a solver-mechanics problem)
 
 - **UPDATE 2026-07-22 (later, same day): the "~3.3cm, DLS-trapped-in-a-

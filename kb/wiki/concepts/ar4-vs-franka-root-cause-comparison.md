@@ -693,6 +693,193 @@ sustained antipodal contact on this platform, so this positioning problem
 may be specific to single-big-jump classical scripts rather than a
 fundamental limit for AR4 grasping generally.
 
+## UPDATE 2026-07-23 (ar4-grasp-z-envelope task): Z-height envelope mapped directly (smooth, not a cliff), joint_3 confirmed as the binding constraint by direct margin data, bearing sweep rules out approach-direction as a fix, and a real-robot-deployability check confirms the shortfall is NOT a teleport-search artifact - still no lift
+
+Tasked with directly answering the prior session's own flagged follow-up:
+map the reachable Z-height envelope at the default cube position/bearing via
+`--grasp-height` in fine increments through the already-validated
+incremental-descent method, cross-reference each joint's own live margin at
+each height to identify the actual binding constraint, and test whether a
+different approach bearing (not just reach distance, already tested)
+relieves the conflict. Two new CLI capabilities were added to
+`scripts/grasp_demo_v2.py` to do this in a single Isaac Sim launch each
+(avoiding per-point app-startup overhead): `--z-sweep` (a list of target
+heights, each re-settled to PREGRASP's own converged config first so sweep
+points don't compound) and `--bearing-sweep`/`--bearing-sweep-radius` (a
+list of bearing angles at a fixed radius, each running its own full
+seed-search + PREGRASP polish + descent). Both exit after logging results,
+before the one-shot GRASP solve / phased pick execution.
+
+**Z-height sweep result (default bearing/reach, 9 heights from 9mm to
+41mm): a smoothly growing shortfall, NOT a hard cliff.**
+
+| Target height (m) | pos residual (m) | Z-axis residual (m) | joint_3 margin (rad) |
+|---|---|---|---|
+| 0.041 | 0.00153 | +0.00148 | 0.1314 |
+| 0.037 | 0.00190 | +0.00181 | 0.1371 |
+| 0.033 | 0.00117 | -0.00070 | 0.1357 |
+| 0.029 | 0.00296 | -0.00146 | 0.1366 |
+| 0.025 | 0.00569 | -0.00289 | 0.1324 |
+| 0.021 | 0.00984 | -0.00696 | 0.1259 |
+| 0.017 | 0.01405 | -0.01107 | 0.1174 |
+| 0.013 | 0.01877 | -0.01517 | 0.1013 |
+| 0.009 (true grasp height) | 0.02331 | -0.01918 | 0.0843 |
+
+Both the Z-residual and joint_3's own margin (the smallest, and by far the
+fastest-shrinking, of any joint's margin at every height - joint_1/4/6 stay
+essentially flat near their own full range, joint_2/5 shrink only mildly)
+degrade smoothly and monotonically as the target height drops - there is no
+sudden jump/cliff at any specific height. **Critically, joint_3 never
+actually reaches zero margin even at the true 9mm target (0.0843rad, ~4.8
+degrees of travel still remaining)** - this rules out "joint_3 physically
+hits its hard stop" as the literal mechanism, even though joint_3 is
+unambiguously the binding/tightest constraint by a wide margin over every
+other joint. The more accurate characterization: this is a **Jacobian-
+conditioning/reachability-envelope effect as the arm approaches joint_3's
+boundary**, not a literal hard-limit collision - consistent with, and a
+direct sharpening of, the "soft multi-joint reachability-envelope boundary"
+language earlier sessions used at the farther 32cm reach position.
+
+**Bearing sweep result (7 bearings, -60 to +60 degrees off the default
+straight-ahead direction, same 0.275m radius, true 9mm grasp height): the
+Z-shortfall is essentially BEARING-INDEPENDENT.**
+
+| Bearing (deg) | pos residual (m) | Z-axis residual (m) | joint_3 margin (rad) |
+|---|---|---|---|
+| -60 | 0.01990 | -0.01921 | 0.1194 |
+| -40 | 0.02057 | -0.01921 | 0.1128 |
+| -20 | 0.02232 | -0.01920 | 0.0953 |
+| 0 | 0.01727 | -0.01699 | 0.1968 (but rot_err=0.199rad - joint_6 pinned at its own hard limit for this bearing/heading choice specifically, a different, orientation-side deadlock, not the Z-shortfall mechanism) |
+| +20 | 0.02257 | -0.01920 | 0.0921 |
+| +40 | 0.02068 | -0.01920 | 0.1113 |
+| +60 | 0.01987 | -0.01922 | 0.1187 |
+
+Six of the seven bearings converged cleanly in orientation (rot_err
+0.008-0.021rad) yet ALL SEVEN land on the same ~19.2mm Z-shortfall to
+within 0.02mm - a remarkably tight, direction-independent signature. This
+directly answers the standing "does a different approach bearing help"
+question from the prior two sessions: **no** - this is not a property of
+the default straight-ahead approach direction specifically, it reproduces
+identically across a full 120-degree bearing sweep. Combined with the
+already-established finding that reach distance (20/27.5/32cm) and tilt
+angle (0/10/15/25/30 degrees) also don't resolve it, this now rules out
+every "just approach differently" candidate this investigation has tried:
+bearing, reach distance, and tilt all leave the same shortfall in place.
+
+**Scene/table-height sanity check: no calibration mismatch found.** Direct
+comparison of `tasks/ar4/objects_cfg.py`'s raw `CUBE_CFG` (`pos=(0.20, 0.28,
+0.006)`), `tasks/ar4/pickplace_graspgoal_env_cfg.py`'s cube spawn
+(`(0.20, 0.28, 0.006)`), and `tasks/ar4/pickplace_mirror_env_cfg.py`'s
+recentered spawn (`(0.0, 0.275, 0.006)`, the scene `grasp_demo_v2.py`
+actually uses) all agree on a cube resting height of `z=0.006` (half the
+cube's own 12mm edge, i.e. resting directly on a table top at `z=0`) -
+consistent with this script's own `GRASP_AT_HEIGHT=0.009` (3mm above the
+cube's center, a reasonable pinch height for a side-approach grasp of a
+12mm cube). No scene-setup/calibration bug found here; this is not a
+contributing factor.
+
+**Deployability check (coordinator-directed, addressed before treating any
+of the above as settled): does the Z-shortfall finding depend on a
+simulation-only teleport-based search?** `_find_best_seed` (used by every
+prior session's PREGRASP solve, including this task's own z-sweep/bearing-
+sweep above) calls `write_joint_position_to_sim` to instantly snap the
+robot through several candidate configs and score each before committing -
+a real AR4 can never do this. Two new mechanisms were added and tested
+directly against this concern:
+
+1. **`--deployable-seed`'s bounded local "wiggle" retry
+   (`_wiggle_and_resolve`): starting from HOME_Q (the robot's actual
+   post-reset state, `tasks/ar4/robot_cfg.py`'s own all-zero init_state -
+   not a special case, the real starting pose) with NO teleportation
+   anywhere, and retrying via small (<=0.3rad, ~17 degree) per-joint
+   perturbations commanded through normal PD-driven `env.step` motion (not
+   `write_joint_position_to_sim`) if the direct resolve doesn't converge.
+   Result: FAILED to converge in 7/7 attempts (1 direct + 6 wiggles) - every
+   attempt got stuck at a catastrophic 1.03-1.40rad (59-80 degree) rotation
+   error, nowhere near the 0.05rad convergence threshold, and no bounded
+   local perturbation ever escaped this basin.** This is a genuinely
+   important finding in its own right, independent of the Z-height
+   question: PREGRASP's orientation-resolve has a real, severe basin-of-
+   attraction problem starting from HOME_Q that small dither motions cannot
+   fix - the good basin the teleport search finds is NOT locally reachable
+   from HOME_Q via bounded perturbation.
+2. **`--fixed-posture-move`: one single, deliberate, real PD-driven move
+   (not a teleport - an ordinary commanded joint move, physically identical
+   in kind to Phase 0 of the phased execution) from HOME_Q to the
+   already-established `KNOWN_GOOD_PREGRASP_Q` reference posture, THEN the
+   normal resolve.** This converged immediately: `pos=1.5mm, rot=2.7
+   degrees` on the FIRST direct resolve attempt, zero wiggles needed.
+   Running the full pipeline from there (real move -> resolve -> the
+   already-validated incremental descent) to the true 9mm height gave
+   `pos_err=17.1mm, xyz Z-residual=-17.1mm` - **essentially the SAME
+   Z-shortfall magnitude as the teleport-search baseline (19.2mm at this
+   bearing)**, though this run's final rotation error (0.1885rad, ~10.8
+   degrees) was noticeably worse than the teleport baseline's (0.0045rad)
+   - the descent drifted into a somewhat different orientation branch
+   partway down in this particular run, a real but secondary difference
+   from the exact basin the teleport search's broader candidate pool
+   happened to find.
+
+**What this means.** The core Z-height-shortfall finding is **not an
+artifact of the teleport-based multi-seed search** - it reproduces (17mm,
+even marginally better than the 19mm teleport baseline) under a pipeline
+that is honestly, fully real-robot-deployable: one deliberate commanded
+move to a known good reference posture (itself a completely ordinary,
+physically-executable robot action - not a search, not a teleport, not
+even an online decision, just "move here first"), followed by the
+already-validated continuous-DLS-resolve + interpolated-descent mechanism
+(all genuinely real: Jacobian-frame correction, EE-offset correction,
+per-physics-step continuous resolve, incremental height descent). This
+resolves the coordinator's concern in the direction the coordinator's own
+decision tree anticipated for a wiggle-failure outcome: bounded local
+perturbation cannot substitute for a good initial guess, but a single
+smarter deliberate starting posture can, and does, work as well as (and
+without needing) the teleport-assisted search. The `_find_best_seed`
+mechanism as currently written remains a real code-cleanliness/deployability
+gap (it should be replaced with exactly this fixed-posture-move pattern, or
+a small closed-form/geometric heuristic for the initial posture, going
+forward) - flagged to `BACKLOG.md` - but it was NOT hiding or fabricating
+the Z-height finding itself.
+
+**Gripper open/closed state during measurement (separate, coordinator-
+raised concern, addressed directly): confirmed OPEN throughout every
+measurement in both the z-sweep and bearing-sweep.** Both `_settle_at` and
+`polish_from_seed` hardcode `action[:, num_arm_joints] = GRIPPER_OPEN`
+(`=1.0`) on every single `env.step` call in this script, and neither of
+this session's new sweep code paths ever calls the `PHASES` loop (the only
+place `GRIPPER_CLOSE` is ever commanded). Verified against Isaac Lab's own
+`BinaryJointPositionAction.process_actions`
+(`isaaclab/envs/mdp/actions/binary_joint_actions.py`): `binary_mask =
+actions < 0` selects close, so `GRIPPER_OPEN=1.0` (`>=0`) unambiguously
+maps to the open command
+(`GRIPPER_OPEN_COMMAND_EXPR`, jaw1/jaw2 at `+-0.014`, a real ~28mm
+aperture) at every step this session measured against. Whatever prompted
+the "gripper looked closed" visual observation, it was not either of this
+session's own sweep runs - most likely a stale/leftover frame from a
+different (pre-existing, this-session-unrelated) process, since this
+session's own code never issues a close command outside the (never-reached,
+in sweep mode) phased pick sequence.
+
+**Verdict on the standing task question.** The Z-height reachability floor
+at the cube's true ~9mm grasp point is now confirmed, by four independent
+and mutually corroborating lines of evidence (the original descent-
+continuity session's 4-configuration test, this session's fine-grained
+Z-sweep, this session's 7-bearing sweep, and this session's real-deployable-
+pipeline retest), to be a **genuine, method-independent, direction-
+independent kinematic property of this arm reaching this specific low
+height with a near-vertical wrist** - not a search artifact, not a bearing
+artifact, not a scene-calibration bug. It is best characterized as a soft
+Jacobian-conditioning/reachability-envelope effect tied most closely to
+joint_3 (elbow), not a literal hard-limit collision (margin never reaches
+exactly zero). **No grasp+lift was achieved this session** (no run reached
+the phased pick-and-place stage - all sweep runs deliberately exit before
+it, per their own diagnostic design). Per this task's own instructions, the
+concrete next-step candidate this evidence supports - adjusting the cube's
+spawn position/height closer to this arm's comfortable envelope - is
+flagged for the controller to weigh in on (it could affect other AR4
+experiments' cube-randomization ranges) rather than applied unilaterally
+here.
+
 ## Related concepts
 
 [[reach-grasp-lift-gap]] — this comparison is the direct follow-up

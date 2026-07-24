@@ -521,6 +521,33 @@ def _fix_jaw2_collision_mesh_asymmetry(output_usd: str) -> None:
     # jaw1_local -> world -> jaw2_local, per-point.
     new_pts_jaw2_local = [jaw2_world_inv.Transform(jaw1_world.Transform(p)) for p in jaw1_pts]
 
+    # The URDF importer marks each imported mesh's ancestor instanceable for
+    # performance, which makes jaw2_mesh (and every prim below it) an
+    # INSTANCE PROXY - USD forbids authoring directly onto an instance
+    # proxy ("Cannot create property spec ... authoring to an instance
+    # proxy is not allowed", hit live testing this fix). Fix: walk up to
+    # the actual instance-root ancestor (the prim with instanceable=true
+    # authored - prim.IsInstance() is only True on THAT specific prim, not
+    # on its instance-proxy descendants), temporarily disable instancing on
+    # it so the descendant mesh prim becomes directly editable on this
+    # stage, make the edit, then restore instanceable=True afterward so
+    # this fix doesn't silently change the asset's instancing/performance
+    # characteristics beyond the one mesh's own geometry.
+    instance_root = jaw2_mesh
+    while instance_root and instance_root.IsValid() and not instance_root.IsInstance():
+        instance_root = instance_root.GetParent()
+    if not instance_root or not instance_root.IsValid():
+        print("[jaw2-collision-fix] WARNING: could not find an instance-root ancestor for gripper_jaw2_link's "
+              "collision mesh - skipping fix")
+        return
+    print(f"[jaw2-collision-fix] found instance-root ancestor at {instance_root.GetPath()} - "
+          "temporarily disabling instanceable to author the fix")
+    instance_root.SetInstanceable(False)
+
+    # Re-fetch jaw2_mesh: with instancing disabled on its ancestor, the prim
+    # object above may now resolve to the real (editable) prim rather than
+    # an instance-proxy view of it.
+    jaw2_mesh = stage.GetPrimAtPath(jaw2_mesh.GetPath())
     jaw2_mesh_api = UsdGeom.Mesh(jaw2_mesh)
     old_n_pts = len(jaw2_mesh_api.GetPointsAttr().Get() or [])
     old_n_faces = len(jaw2_mesh_api.GetFaceVertexCountsAttr().Get() or [])
@@ -528,6 +555,8 @@ def _fix_jaw2_collision_mesh_asymmetry(output_usd: str) -> None:
     jaw2_mesh_api.CreatePointsAttr(Vt.Vec3fArray([Gf.Vec3f(p) for p in new_pts_jaw2_local]))
     jaw2_mesh_api.CreateFaceVertexCountsAttr(jaw1_mesh_api.GetFaceVertexCountsAttr().Get())
     jaw2_mesh_api.CreateFaceVertexIndicesAttr(jaw1_mesh_api.GetFaceVertexIndicesAttr().Get())
+
+    instance_root.SetInstanceable(True)
     stage.GetRootLayer().Save()
 
     print(

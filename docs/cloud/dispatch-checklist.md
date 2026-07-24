@@ -71,7 +71,7 @@ real, repeated time across many dispatches. The new path:
    `docker/.env.base` — no version discrepancy to work around.
 3. Downloads the AR4 USD asset from this project's GCS cache
    (`scripts/download_ar4_asset_from_gcs.sh`, reading
-   `gs://rl-manipulation-hks-runs/assets/ar4_mk5/`) instead of rebuilding it
+   `gs://rl-manipulation-hks-models/ar4_mk5/`) instead of rebuilding it
    from the vendor ROS package + `scripts/build_asset.py` every time.
 4. Runs the actual task command inside the container with `--gpus all`
    (needs `nvidia-container-toolkit` + `nvidia-ctk runtime configure

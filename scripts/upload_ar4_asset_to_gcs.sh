@@ -13,10 +13,10 @@
 # build script, independent of unrelated commits elsewhere in the repo.
 #
 # GCS layout written:
-#   gs://rl-manipulation-hks-runs/assets/ar4_mk5/<build_asset.py-git-sha>/ar4_mk5/...   (mirrors assets/ar4_mk5/)
-#   gs://rl-manipulation-hks-runs/assets/ar4_mk5/<build_asset.py-git-sha>/shapes/...     (mirrors assets/shapes/)
-#   gs://rl-manipulation-hks-runs/assets/ar4_mk5/<build_asset.py-git-sha>/PROVENANCE.txt
-#   gs://rl-manipulation-hks-runs/assets/ar4_mk5/LATEST   (plain text pointer, updated
+#   gs://rl-manipulation-hks-models/ar4_mk5/<build_asset.py-git-sha>/ar4_mk5/...   (mirrors assets/ar4_mk5/)
+#   gs://rl-manipulation-hks-models/ar4_mk5/<build_asset.py-git-sha>/shapes/...     (mirrors assets/shapes/)
+#   gs://rl-manipulation-hks-models/ar4_mk5/<build_asset.py-git-sha>/PROVENANCE.txt
+#   gs://rl-manipulation-hks-models/ar4_mk5/LATEST   (plain text pointer, updated
 #     LAST so a partially-uploaded version is never advertised as latest)
 #
 # Usage: scripts/upload_ar4_asset_to_gcs.sh
@@ -58,7 +58,7 @@ if [ -z "$BUILD_SCRIPT_SHA" ]; then
 fi
 HEAD_SHA="$(git rev-parse HEAD 2>/dev/null || echo "unknown (no .git dir in this checkout)")"
 
-GCS_BASE="gs://rl-manipulation-hks-runs/assets/ar4_mk5"
+GCS_BASE="gs://rl-manipulation-hks-models/ar4_mk5"
 GCS_DEST="${GCS_BASE}/${BUILD_SCRIPT_SHA}"
 
 echo "Uploading AR4 asset to ${GCS_DEST}/ ..."

@@ -165,6 +165,16 @@ def get_package_share_directory(package_name):
     return path
 PYEOF
 
+# The container's plain --entrypoint bash shell has NO system python3/pip
+# on PATH at all (confirmed live, 2026-07-24) -- the only python is Isaac
+# Sim's own bundled interpreter at /isaac-sim/python.sh (isaaclab.sh -p
+# itself resolves to this same binary internally, see its own
+# extract_python_exe()). A plain `pip install ...` fails with "pip:
+# command not found" and (since this script has no `set -e`) silently lets
+# the rest of the `&&` chain never run -- found live the hard way: an
+# earlier version of this line produced a "build succeeded" (misleadingly
+# fast, ~3s) timing number while build_asset.py had never actually
+# executed. Use /isaac-sim/python.sh -m pip explicitly instead.
 sudo docker run --rm --gpus all --network host --entrypoint bash \
   -e ACCEPT_EULA=Y -e OMNI_KIT_ACCEPT_EULA=YES -e PRIVACY_CONSENT=Y \
   -v "$HOME/rl:/workspace/rl" \
@@ -174,12 +184,16 @@ sudo docker run --rm --gpus all --network host --entrypoint bash \
   -e PYTHONPATH=/opt/ament_shim \
   -w /workspace/rl \
   "$IMAGE" \
-  -c "pip install --quiet xacro==2.1.1 && yes | /workspace/isaaclab/isaaclab.sh -p scripts/build_asset.py" \
+  -c "/isaac-sim/python.sh -m pip install --quiet xacro==2.1.1 && yes | /workspace/isaaclab/isaaclab.sh -p scripts/build_asset.py" \
   2>&1 | tee "$HOME/build_asset_container.log"
 BUILD_EXIT="${PIPESTATUS[0]}"
 check "$BUILD_EXIT" "build_asset.py inside container"
 T4_END=$(date +%s)
 echo "TIMING one_time_asset_build_sec=$((T4_END - T4_START))"
+if [ "$BUILD_EXIT" -ne 0 ] || [ ! -f "$HOME/rl/assets/ar4_mk5/ar4_mk5.usd" ]; then
+  echo "FATAL: asset build did not actually produce assets/ar4_mk5/ar4_mk5.usd -- aborting remaining steps (upload/download/smoke-test would all be against a missing asset)." >&2
+  exit 1
+fi
 
 # The container runs as root by default (DOCKER_USER_HOME=/root, Isaac
 # Lab's own official docker layout) -- normalize ownership of whatever it

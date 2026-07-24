@@ -19,7 +19,7 @@ FALLBACK, not the preferred path.** The preferred path (2026-07-24,
   IsaacLab/v2.3.1/docker/.env.base` directly. No version discrepancy to
   flag — this is not a "closest compatible" judgment call, it's exact.
 - Downloads the AR4 USD asset from this project's GCS cache
-  (`gs://rl-manipulation-hks-runs/assets/ar4_mk5/`, see
+  (`gs://rl-manipulation-hks-models/ar4_mk5/`, see
   `scripts/upload_ar4_asset_to_gcs.sh` / `scripts/download_ar4_asset_from_gcs.sh`)
   instead of rebuilding it from the vendor ROS package + `scripts/build_asset.py`
   every dispatch. Versioned by `scripts/build_asset.py`'s own git commit

@@ -27,7 +27,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-GCS_BASE="gs://rl-manipulation-hks-runs/assets/ar4_mk5"
+GCS_BASE="gs://rl-manipulation-hks-models/ar4_mk5"
 
 SHA="${1:-}"
 if [ -z "$SHA" ]; then

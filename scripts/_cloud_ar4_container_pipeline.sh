@@ -238,6 +238,22 @@ check "${PIPESTATUS[0]}" "download_ar4_asset_from_gcs.sh"
 T6_END=$(date +%s)
 echo "TIMING gcs_download_sec=$((T6_END - T6_START))"
 
+# download_ar4_asset_from_gcs.sh runs on the HOST (no GPU/container needed
+# for a plain gsutil download) and correctly rewrites usd_path.txt to ITS
+# OWN absolute path -- but that's the HOST's view of the repo ($HOME/rl,
+# e.g. /home/pi/rl). Every consumer in THIS pipeline reads that file from
+# INSIDE the container, where the exact same bind-mounted files live at
+# /workspace/rl instead -- same underlying file, different absolute path
+# STRING on each side of the bind mount. Found live (2026-07-24): the
+# smoke test crashed with "AR4 USD asset manifest points at a missing
+# file: /home/pi/rl/assets/ar4_mk5/ar4_mk5.usd" because robot_cfg.py read
+# that host-path string verbatim from inside the container, where no such
+# path exists. Overwrite with the container-side path here, after the
+# host-side download step, rather than teaching download_ar4_asset_from_gcs.sh
+# itself about this container-specific mount point (it's correct as-is for
+# any non-containerized consumer).
+echo "/workspace/rl/assets/ar4_mk5/ar4_mk5.usd" > "$HOME/rl/assets/ar4_mk5/usd_path.txt"
+
 # --- [7/7] SMOKE TEST: gripper open/close cycle video, using the cache ----
 step "[7/7] SMOKE TEST: gripper open/close cycle video capture, containerized, using the GCS-cached asset"
 T7_START=$(date +%s)

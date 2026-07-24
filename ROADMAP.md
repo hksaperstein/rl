@@ -333,6 +333,48 @@ Roughly in the order they'd likely be picked up:
    or treat this as AR4's practical classical-IK precision ceiling and
    revisit priority against the already-working Franka platform.
 
+   **Convergence-tightening + narrow neighborhood sweep (2026-07-24,
+   ar4-grasp-ik-convergence-tightening task): CONFIRMED this is a genuine
+   local-optimum floor, not a solver-budget limitation, and no nearby
+   configuration resolves it either — a clean, direct negative result
+   closing off both remaining "just push the solver harder" candidates.**
+   New `--grasp-deep-polish-steps`/`--grasp-pos-threshold`/
+   `--grasp-rot-threshold` flags (`scripts/grasp_demo_v2.py`, commit
+   `bc466a2`) ran one extra polish pass at GRASP's own target with 15x the
+   iteration budget and a 3-5x tighter convergence bound than any prior
+   pass at reach=0.36m/tilt=65° (the middle of the known 0.30-0.36m
+   plateau) — the pass diverged to a WORSE, stable local optimum within
+   100 steps (9.4mm/5.7° → 16.4mm/26.9°, frozen there for 1500+ steps) and
+   had to be rescued by the existing keep-best guard, landing back at
+   9.4mm/6.7° — more solver effort makes things worse here, not better. A
+   full phased grasp+lift attempt at the restored config again failed:
+   `jaw1_cube_force`/`jaw2_cube_force` both EXACTLY `0.0000N` throughout
+   (zero contact on BOTH jaws this run — not even the prior session's
+   brief one-sided contact), cube z flat at its `0.0060m` resting height,
+   no lift. A follow-up narrow neighborhood sweep (7 tilts 60-70° at
+   reach=0.36m fixed, then 4 reaches 0.32-0.38m at tilt=65° fixed — cheap,
+   sweep-only launches) found a genuinely shallow, broad plateau: position
+   residual flat within ~1.5% (9.38-9.52mm) across the whole 64-68°/
+   0.32-0.36m neighborhood, with only sub-1.5° rotation-residual
+   improvements at 66° tilt (4.83° vs 65°'s 5.66°) or 0.32-0.34m reach
+   (4.26-4.36°) — real but not qualitatively different; 0.38m reach
+   clearly falls off the plateau's edge (15.64mm/23.6°), consistent with
+   the capstone session's own "degrades past 0.39m" finding. **Honest
+   assessment: this specific cube/table/arm-mount geometry has reached a
+   genuine, hard-to-avoid classical-scripted-IK precision ceiling at this
+   reach/tilt range** — not a solver-tuning or nearby-configuration
+   opportunity. Two SPOT preemptions hit mid-session but were recovered
+   via `gcloud compute instances start` on the same persisted boot disk
+   (no asset rebuild needed either time); cost ≈$0.91 against the $2 cap.
+   Full detail: `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s
+   2026-07-24 (later) UPDATE. **Next step flagged to Principal, not
+   decided here**: a genuinely different approach-orientation methodology
+   (per-waypoint rather than PREGRASP-shared orientation, or an untested
+   bearing at this newer tilt/reach range) is real Tier-1-gated
+   methodology work, not a bug fix — or treat this as AR4's practical
+   classical-IK ceiling and prioritize the already-working Franka
+   platform per the North Star.
+
 See `BACKLOG.md` for further-out candidates not yet on this list.
 
 ## Recently landed

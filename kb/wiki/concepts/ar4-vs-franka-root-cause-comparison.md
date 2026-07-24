@@ -2311,3 +2311,187 @@ instance, key lines quoted above); `gcloud compute operations list` for the
 preemption/restart/stockout timeline; `scripts/_verify_asset_jaw_fixes.py`'s
 own 8/8 PASS output confirming the freshly-built asset carried every
 previously-found gripper/collision fix before the diagnostic ran against it.
+
+## UPDATE 2026-07-24 (ar4-grasp-ik-convergence-tightening task): more solver iterations + a tighter convergence bound do NOT shrink the ~9.4mm/~5-6deg residual — confirmed a genuine local-optimum floor, not an iteration-budget limitation; a narrow neighborhood sweep around the known-best 65deg/reach=0.30-0.36m point finds no qualitatively better configuration either
+
+Dispatched to directly test whether the best-known configuration's
+(65deg tilt, reach 0.30-0.36m) ~9.5mm/4.2deg residual — real but not tight
+enough for the antipodal-hypothesis session above's jaw1-only-light-contact
+signature — was a genuine local-optimum floor or an artifact of the
+existing incremental descent's comparatively small per-sub-step iteration
+budget (`DESCENT_SUBSTEP_MAX_STEPS=400`/`DESCENT_SUBSTEP_STAGNATION_STEPS=150`
+per sub-step, unchanged since the 2026-07-22 descent-continuity task).
+
+**Code change**: `scripts/grasp_demo_v2.py` (commit `bc466a2`) gained
+`--grasp-deep-polish-steps`/`--grasp-deep-polish-stagnation-steps`/
+`--grasp-pos-threshold`/`--grasp-rot-threshold` — one additional
+`polish_from_seed` pass at GRASP's own full-precision target, run
+immediately after the normal descent (or one-shot) resolve finishes,
+continuing live from wherever that left off (no teleport, matching
+`polish_from_seed`'s own existing no-teleport-on-seed design) with a much
+larger iteration budget and, optionally, a tighter position/rotation
+convergence threshold than the module defaults. Disabled by default (0
+steps) — does not change PREGRASP or the descent's own per-sub-step
+budgets, only adds an optional extra pass at the very end. Also added
+`scripts/_cloud_ar4_convergence_tightening.sh` (commit `8729136`), a
+from-scratch cloud asset-build-and-run recipe adapted from the
+jaw-bisector task's own proven script.
+
+**Configuration chosen: reach=0.36m, tilt=65deg** — the middle of the
+capstone session's own confirmed-flat 0.30-0.36m plateau, picked over the
+0.30m/0.39m endpoints since 0.36m had the best in-plateau position residual
+of the three originally-tested points (9.38mm vs 9.53mm@0.30m/9.35mm@0.39m)
+without sitting at either tested edge.
+
+**Deep-polish result: a clean, direct NO — more iterations make the
+residual WORSE, not better, and the existing "keep-best" guard has to
+actively rescue the result.** Pre-pass residual (the descent's own
+converged state): `pos=0.00938m rot=0.0987rad` (9.38mm / 5.66deg). Given a
+6000-step budget (15x the descent's own 400-step per-substep budget),
+2000-step stagnation tolerance (13x the descent's 150-step tolerance), and
+a MUCH tighter convergence bound (1mm/0.01rad vs the module default
+3mm/0.05rad) than any prior pass at this configuration used: the pass
+diverged to `pos=0.01644m rot=0.4695rad` (16.4mm / 26.9deg) within the
+FIRST 100 steps and then sat EXACTLY there (residual unchanged to 4 decimal
+places) for at least the next 1500+ printed steps — a genuine, stable,
+different (and substantially WORSE) local optimum immediately adjacent to
+the descent's own converged point, not a slow ongoing improvement cut short
+by budget. `polish_from_seed`'s own pre-existing "restore best round" guard
+correctly caught this and reverted before phased execution — final
+reported residual `pos=0.00943m rot=0.1161rad` (9.43mm / 6.65deg), matching
+the pre-pass state to within measurement/settle noise (marginally worse by
+0.05mm/1deg, consistent with the restore's own settle-then-remeasure not
+being bit-for-bit identical, not a real regression). **Conclusion: this is
+unambiguously a genuine local-optimum floor, not an iteration-budget
+limitation** — giving the solver 15x the iterations and a 3-5x tighter
+convergence demand did not find a better nearby solution; it found an
+immediately-adjacent worse one and had to be rescued from it. This also
+retroactively validates the descent's own careful small-per-substep-budget
+design as protective, not merely conservative — a bigger "polish harder at
+the end" step is actively counterproductive here.
+
+**Full phased grasp+lift attempt at this (restored, ~9.4mm/~6.7deg)
+config: contact-force-confirmed negative result, if anything WORSE than the
+capstone session's own finding at this exact position.** `jaw1_cube_force`
+AND `jaw2_cube_force` both read EXACTLY `0.0000N` at every single logged
+step across PHASE 2/3/4/5 (open-approach through CLOSE-and-hold) — zero
+contact on BOTH jaws this run, not the capstone session's own brief
+one-sided `jaw1=0.037-0.038N` contact at this same reach=0.36m position.
+`cube.data.root_pos_w`'s z stayed flat at its resting `0.0060m` throughout
+every phase (no lift, confirmed numerically not just via video); cube xy
+shifted only `~1.5mm` (less than the capstone run's own `~1mm` at this
+position — i.e. even less disturbance than before). Gripper open/close
+joint tracking itself remained clean and correct throughout (`[0.014,
+0.014]` open / `[~0.0, ~0.0]` closed at every phase boundary) — this is not
+a gripper-mechanism regression, just a run-to-run realization of an
+already-marginal contact signature landing at exactly zero instead of
+barely-nonzero this time. A fresh bisector re-check at this run's actual
+converged `grasp_q` reproduced the 2026-07-24 (earlier) bisector session's
+own counter-intuitive finding almost exactly: `_EE_OFFSET` discrepancy
+negligible (0.36mm), but jaw2 (16.9mm to cube) is CLOSER than jaw1 (19.8mm
+to cube, asymmetry 2.9mm) while jaw1 is still the one registering the
+(here, zero) contact — reinforcing that simple jaw-to-center distance is
+not the right lens for this asymmetry; the residual rotation error is the
+more likely mechanism.
+
+**Narrow neighborhood sweep (7 tilts x reach=0.36m fixed, then 4 reaches x
+tilt=65deg fixed — cheap, sweep-only launches, no phased execution) finds
+a genuinely shallow, broad plateau, not a sharper nearby optimum:**
+
+| Tilt (deg, reach=0.36m fixed) | pos_err | rot_err |
+|---|---|---|
+| 60 | 10.62mm | 6.70deg |
+| 62 | 10.12mm | 5.90deg |
+| 64 | 9.43mm | 5.61deg |
+| 65 | 9.38mm | 5.66deg |
+| 66 | 9.38mm | **4.83deg (best rotation)** |
+| 68 | 9.49mm | 4.93deg |
+| 70 | 9.87mm | 6.46deg |
+
+| Reach (m, tilt=65deg fixed) | pos_err | rot_err |
+|---|---|---|
+| 0.32 | 9.52mm | **4.26deg (best rotation)** |
+| 0.34 | 9.48mm | 4.36deg |
+| 0.36 | 9.38mm | 5.66deg |
+| 0.38 | 15.64mm | 23.6deg (clearly off the plateau's edge) |
+
+Position residual is flat within ~1.5% (9.38-9.52mm) across the entire
+64-68deg/0.32-0.36m neighborhood — genuinely a shallow bowl bottom, not a
+sharp point. Rotation residual varies a bit more (4.26-6.70deg across the
+full swept range) and IS marginally better at 66deg tilt (4.83deg) and at
+0.32-0.34m reach (4.26-4.36deg) than the originally-declared-best
+65deg/0.36m point (5.66deg) — real, reproducible, but not a qualitative
+difference (all still in the same 4-7deg band, none close to fixing the
+antipodal-contact problem on their own). 0.38m reach is the one point that
+clearly falls off the plateau's edge (15.64mm/23.6deg), consistent with
+the capstone session's own "degrading again past 0.39m" finding.
+
+**Verdict.** Both halves of this task's own decision tree fired the same
+way: (1) more solver effort/tighter tolerance does not help — confirmed
+directly, not assumed; (2) the narrow local neighborhood search around the
+known optimum does not find a meaningfully better point either — the
+existing 65deg/0.30-0.36m answer remains close to the best available in
+this neighborhood, with only sub-1.5-degree rotation improvements at 66deg
+tilt or 0.32-0.34m reach. Combined with a full grasp+lift attempt at this
+best-available point again failing to produce real bilateral contact (and
+this time not even the prior brief one-sided contact), the honest
+assessment is that this specific cube/table/arm-mount geometry has reached
+a genuine, hard-to-avoid classical-scripted-IK precision ceiling at this
+reach/tilt range — the ~9.4mm position / ~4-6deg rotation residual looks
+like a real kinematic-reachability-envelope property of this arm
+approaching this specific low grasp height at this tilt range, not a
+solver-tuning or nearby-configuration opportunity. Whether a genuinely
+different next step (an untested bearing at this newer 65deg-tilt/
+comfortable-reach position range, a per-waypoint rather than
+shared-with-PREGRASP orientation search, or treating this as AR4's
+classical-IK ceiling and continuing to prioritize the already-working
+Franka platform per the North Star) is worth pursuing is flagged back to
+the controller rather than decided unilaterally here — each candidate
+constitutes a real methodology change (Tier 1 territory), not a bug fix or
+parameter tweak within this task's own scope.
+
+**Infrastructure notes**: hit the documented "fresh GCP DLVM instance boots
+with a broken NVIDIA driver, PhysX silently falls back to a software
+solver" gap (`docs/cloud/dispatch-checklist.md`'s known infra gaps) live
+this session — caught by noticing repeated identical log lines (a
+`SimulationApp` "Starting the simulation" message unchanged across 5+
+minutes of polling) plus a direct `nvidia-smi` check showing "Driver/
+library version mismatch"; the documented fix (`sudo dpkg --configure -a`
+then `sudo reboot`) resolved it, confirmed via a fresh, honest re-run of
+`scripts/_verify_asset_jaw_fixes.py` (8/8 PASS with a real GPU, vs. the
+same script's silent no-op the first time it ran mid-driver-mismatch — a
+`python: command not found` error from an un-activated venv in one retry,
+then a hung EULA prompt in the next, before the actually-correct
+`yes | ... isaaclab.sh` + `source ~/isaac-venv/bin/activate` invocation
+worked). Two genuine SPOT preemptions hit during this session (confirmed
+via `compute.instances.preempted` system events, not manual stops) —
+`gcloud compute instances start` on the same (persisted, `--instance-
+termination-action=STOP`) boot disk recovered both times without needing a
+fresh asset rebuild, since the already-built/verified asset and installed
+Isaac Lab stack survive a stop/start cycle. Also independently reproduced
+this project's own documented `pkill -f <pattern>` footgun live: `sudo
+pkill -9 -f grasp_demo_v2.py` sent as an SSH `--command` killed the SSH
+session's own invoking shell (its `bash -c "...grasp_demo_v2.py..."`
+command line matches its own pattern) before ever confirming the target
+process was dead, producing several apparently-mysterious SSH-level
+connection failures until root-caused — resolved by not relying on
+pattern-based process kills over SSH for this pattern going forward.
+
+**Cost: ≈$0.91 cumulative against the task's $2 cap** (2.37hr of SPOT
+compute across 3 running periods split by the two preemptions, at
+$0.382/hr, plus negligible disk-only cost during the ~21min of combined
+stopped time) — well under cap despite the two preemption-driven restarts,
+since neither required repeating the ~15-20min asset build. Full teardown
+confirmed (`scripts/check_cloud_state.sh`: zero instances/disks/
+snapshots). Videos (`logs/videos/ar4_grasp_demo_v2_convtighten_r036_t65_deep*.mp4`,
+matching `ar4_grasp_gripper_check_convtighten_r036_t65_deep/` per-phase
+snapshots) and raw run logs (`logs/cloud_runs/grasp_convtighten_run2.log`,
+`tiltsweep_r036.log`, `tiltsweep_r036_b.log`, `radiussweep_t65.log`) synced
+to the Pi for the record.
+
+**Sources**: entirely this session's own live cloud runs (all four logs
+above), `robot.data.joint_pos_limits`/live joint-margin printouts (unused
+this session — no run hit a hard limit at this configuration), and this
+article's own 2026-07-23 (ar4-capstone-grasp) and 2026-07-24 (earlier,
+ar4-jaw-bisector-hypothesis) UPDATEs for the prior baseline this session's
+own numbers are compared against.

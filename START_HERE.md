@@ -114,6 +114,22 @@ if one call's own timeout is hit. If you're handed a literal blocking poll
 command, run it verbatim (already noted under Hard environment rules below)
 rather than polling manually in a loop of your own devising.
 
+**A long-running foreground call can get silently auto-converted to a
+background task by the tool itself, with no `run_in_background: true` and
+no decision point of your own** (observed: a plain foreground poll,
+running past roughly 10 minutes, was converted to background without being
+asked for). This is worse than the voluntary case above because there's
+nothing you chose wrong — but the same rule still applies: this does NOT
+mean you'll be notified when it resolves, regardless of whether you or the
+tool did the backgrounding. The fix is to never let a single call run long
+enough to risk it: keep each poll loop's own total duration comfortably
+under that threshold (e.g. a bounded `for i in $(seq 1 15); do sleep 30;
+<check>; done` that returns definitively within ~7-8 minutes rather than an
+open-ended `until` loop with no outer bound), and if the condition still
+isn't met when that bounded loop returns, immediately issue another fresh
+foreground blocking call — never end your turn on an ambiguous "it's still
+running" without an explicit check already in flight.
+
 **For cloud (GCP) dispatch specifically, use `scripts/run_on_cloud_gpu.sh
 [--detach] [--cost-cap DOLLARS] <command...>`** (added 2026-07-23) instead
 of hand-rolling your own provision/SSH/poll sequence — it is a REAL

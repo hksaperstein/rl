@@ -50,6 +50,66 @@ live-fire tested against a real preemption — it mirrors the already-
 documented retry mitigation further down this file, but treat it as
 best-effort until observed working live.
 
+## AR4 work specifically: container + GCS-cached-asset path (2026-07-24, preferred)
+
+**For any AR4 cloud task, prefer `scripts/_cloud_ar4_container_pipeline.sh`
+as the `<command...>` payload to `scripts/run_on_cloud_gpu.sh`, instead of
+the from-scratch pip-install-Isaac-Lab + rebuild-the-asset-from-the-vendor-
+ROS-package recipe below.** Every AR4 cloud dispatch before this date
+rebuilt the entire environment from scratch every single time (~15-20min
+pip-installing Isaac Sim/Isaac Lab, then ~10-20min rebuilding the AR4 USD
+asset from the vendor ROS package) before doing any actual work — this cost
+real, repeated time across many dispatches. The new path:
+
+1. Installs Docker + the NVIDIA Container Toolkit on the instance
+   (one-time per instance, minutes not tens of minutes).
+2. Pulls NVIDIA's own official container `nvcr.io/nvidia/isaac-lab:2.3.1`
+   directly from NGC (anonymous pull, no NGC API key/login needed — the
+   `nvidia/isaac-lab` NGC repo allows anonymous `pull` scope) instead of a
+   from-scratch pip install. Confirmed EXACT match to this project's pinned
+   stack: IsaacLab's own `v2.3.1` git tag sets `ISAACSIM_VERSION=5.1.0` in
+   `docker/.env.base` — no version discrepancy to work around.
+3. Downloads the AR4 USD asset from this project's GCS cache
+   (`scripts/download_ar4_asset_from_gcs.sh`, reading
+   `gs://rl-manipulation-hks-runs/assets/ar4_mk5/`) instead of rebuilding it
+   from the vendor ROS package + `scripts/build_asset.py` every time.
+4. Runs the actual task command inside the container with `--gpus all`
+   (needs `nvidia-container-toolkit` + `nvidia-ctk runtime configure
+   --runtime=docker` on the instance first, done by step 1).
+
+**EULA note (important, do not skip):** the NVIDIA Isaac Sim Additional
+Software and Materials License prohibits redistributing the Isaac Sim/Isaac
+Lab container to any third-party registry (see `docker/README.md`) — this
+pipeline stays compliant because every cloud instance pulls
+`nvcr.io/nvidia/isaac-lab:2.3.1` **directly from NVIDIA's own NGC registry
+itself**, under its own EULA acceptance (`ACCEPT_EULA=Y`), never from an
+intermediary. Nothing about this repo's own image is ever pushed anywhere.
+
+**Cache versioning**: the GCS cache is versioned by the git commit hash of
+`scripts/build_asset.py` itself (not overall repo HEAD), with a `LATEST`
+pointer file — see `scripts/upload_ar4_asset_to_gcs.sh` and
+`scripts/download_ar4_asset_from_gcs.sh`'s own header comments for the
+exact layout and the staleness check the download script prints if the
+cached sha doesn't match the current checkout's `scripts/build_asset.py`.
+If a task's own changes touch `scripts/build_asset.py` (a real asset-build
+fix, not just a task-script change), rebuild + re-upload the cache after —
+see `scripts/_cloud_ar4_container_pipeline.sh`'s own steps 4-5 for the
+one-time build+upload sequence, or run `scripts/build_asset.py` +
+`scripts/upload_ar4_asset_to_gcs.sh` directly on any machine with a real
+Isaac Lab install and the vendor ROS package available.
+
+**Fallback (documented, not deleted)**: the from-scratch pip-install +
+rebuild-from-vendor-ROS-package recipe (`docs/cloud/franka-cloud-shakedown.md`,
+`scripts/_cloud_ar4_jaw_bisector_setup.sh` as a worked example) still works
+and remains the fallback if the container/cache path ever hits a real
+compatibility gap — e.g. a GPU driver/toolkit mismatch on some future DLVM
+image, or a task needing an Isaac Lab source-level change that isn't
+reflected in the pinned `2.3.1` container tag.
+
+**Real end-to-end timing (2026-07-24 verification)**: see
+`docs/cloud/franka-cloud-shakedown.md`'s own timing entry for the actual
+before/after numbers measured live against a real GCP instance.
+
 ## 1. Blocking instruction (put this first, its own paragraph)
 
 > **CRITICAL — read this before anything else: this dispatch launches

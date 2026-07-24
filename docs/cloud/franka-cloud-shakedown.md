@@ -1,3 +1,63 @@
+## Superseded as the default for AR4 work (2026-07-24) — see container + GCS-cache path
+
+**For AR4 cloud tasks, the from-scratch recipe below (pip-install Isaac
+Sim/Isaac Lab, ~15-20min; rebuild the AR4 USD asset from the vendor ROS
+package, ~10-20min — repeated on EVERY dispatch) is now the documented
+FALLBACK, not the preferred path.** The preferred path (2026-07-24,
+`scripts/_cloud_ar4_container_pipeline.sh`, dispatched via
+`scripts/run_on_cloud_gpu.sh`) instead:
+
+- Installs Docker + the NVIDIA Container Toolkit (one-time per instance,
+  minutes not tens of minutes).
+- Pulls NVIDIA's own official `nvcr.io/nvidia/isaac-lab:2.3.1` container
+  directly from NGC (anonymous pull — no NGC API key needed) instead of
+  pip-installing Isaac Sim/Isaac Lab from scratch. Confirmed EXACT match to
+  this doc's own pinned stack below: IsaacLab's `v2.3.1` git tag sets
+  `ISAACSIM_VERSION=5.1.0` in its own `docker/.env.base` — verified via the
+  NGC container registry API (anonymous token, `nvcr.io/v2/nvidia/isaac-lab/
+  tags/list` lists `2.3.1`) and via `raw.githubusercontent.com/isaac-sim/
+  IsaacLab/v2.3.1/docker/.env.base` directly. No version discrepancy to
+  flag — this is not a "closest compatible" judgment call, it's exact.
+- Downloads the AR4 USD asset from this project's GCS cache
+  (`gs://rl-manipulation-hks-runs/assets/ar4_mk5/`, see
+  `scripts/upload_ar4_asset_to_gcs.sh` / `scripts/download_ar4_asset_from_gcs.sh`)
+  instead of rebuilding it from the vendor ROS package + `scripts/build_asset.py`
+  every dispatch. Versioned by `scripts/build_asset.py`'s own git commit
+  hash (not overall repo HEAD), with a `LATEST` pointer and an automatic
+  staleness check against the current checkout.
+
+**Real timing, measured live (2026-07-24)** against a real GCP
+`g2-standard-4` + 1x `nvidia-l4` SPOT instance (same machine type/image as
+this doc's own proven recipe below) — see
+`docs/cloud/dispatch-checklist.md`'s "AR4 work specifically" section for
+the full mechanism:
+
+- Docker + NVIDIA Container Toolkit install: **[FILL IN]s**
+- `docker pull nvcr.io/nvidia/isaac-lab:2.3.1` (cold, ~8.4GB compressed):
+  **[FILL IN]s**
+- AR4 asset download from GCS cache (steady-state, real future-dispatch
+  cost — NOT the one-time build+upload also exercised in this same run):
+  **[FILL IN]s**
+- **Real steady-state future-dispatch setup time (docker/toolkit install +
+  cold container pull + GCS asset download, i.e. everything before a task's
+  own command starts running): [FILL IN]s ≈ [FILL IN] minutes**, vs. this
+  doc's own previously-documented ~15-20min pip install + ~10-20min asset
+  rebuild ≈ 25-40 minutes for the equivalent from-scratch setup window —
+  see `.superpowers/sdd/progress.md` or the container-cache-cloud-infra
+  task's own report for the exact comparison.
+- Smoke test (containerized gripper open/close cycle video capture,
+  `scripts/_record_jaw_fix_open_close_cycle.py`, using the GCS-cached
+  asset): **[FILL IN]s**, video synced to
+  `gs://rl-manipulation-hks-runs/container-cache-pipeline-verify/`.
+
+EULA compliance: this pipeline pulls `nvcr.io/nvidia/isaac-lab:2.3.1`
+directly from NVIDIA's own NGC registry on each instance under that
+instance's own EULA acceptance (`ACCEPT_EULA=Y`) — the exact
+redistribution-compliant pattern `docker/README.md` already documents for
+this repo's own local Dockerfile, just using NVIDIA's pre-built image
+instead of building on `isaac-lab-base` ourselves. Nothing is pushed to any
+registry by this project.
+
 # Franka cloud training shakedown — recipe (PROVEN end-to-end, 2026-07-13; re-verified 2026-07-14/15)
 
 Status as of 2026-07-13 (attempt 3, quota granted): this recipe has been

@@ -143,6 +143,19 @@ background-and-forget failure mode kept recurring. See its own header
 comment and `docs/cloud/dispatch-checklist.md` for full behavior and exit
 codes.
 
+**For any AR4 cloud task specifically, prefer the container + GCS-cached-
+asset path (2026-07-24)** — pass `scripts/_cloud_ar4_container_pipeline.sh`
+as the `<command...>` to `run_on_cloud_gpu.sh` instead of a from-scratch
+pip-install-Isaac-Lab + rebuild-the-asset-from-the-vendor-ROS-package
+recipe. Pulls NVIDIA's own official `nvcr.io/nvidia/isaac-lab:2.3.1`
+container directly from NGC (confirmed exact match to this project's
+pinned Isaac Lab v2.3.1 / Isaac Sim 5.1.0 stack) and downloads the AR4 USD
+asset from this project's GCS cache instead of rebuilding either from
+scratch every dispatch. See `docs/cloud/dispatch-checklist.md`'s "AR4 work
+specifically" section for the full mechanism, EULA-compliance note, and
+cache-versioning scheme; the from-scratch recipe in
+`docs/cloud/franka-cloud-shakedown.md` remains the documented fallback.
+
 ## Verification standard
 
 - Real evidence over proxies. Don't call something done off exit codes or a

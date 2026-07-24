@@ -128,6 +128,25 @@ def get_package_share_directory(package_name):
 PYEOF
 export PYTHONPATH="$HOME/ament_shim:${PYTHONPATH:-}"
 
+# GCS_DEST fixed once, early, and logs synced incrementally after EACH
+# step below (not just videos at the very end) - found live (2026-07-23):
+# a real successful end-to-end run's own final output (including this
+# script's numeric diagnostic prints) never reached this dispatch's local
+# terminal capture at all, because a SPOT preemption happened to race with
+# the script's own completion - the remote process finished and wrote its
+# log to local disk just fine, but the SSH connection streaming it back
+# degraded/died in the same narrow window, and by the time the wrapper's
+# own retry/restart logic kicked in, it re-launched the script FRESH on
+# the same (still-mid-preemption-cycle) disk, whose own later "already
+# exists" failure was the only thing this session's own terminal ever
+# captured - the actual successful run's own numbers were sitting on the
+# now-deleted instance's boot disk the whole time, unrecoverable after
+# teardown. Syncing each log to GCS as its own step completes means a
+# repeat of this exact race loses at most the sync interval since the
+# last completed step, not the whole run's data.
+GCS_DEST="gs://rl-manipulation-hks-runs/ar4-jaw-bisector-check/$(date -u +%Y%m%d-%H%M%S)/"
+echo "GCS_DEST=${GCS_DEST}"
+
 step "[4/6] build AR4 USD asset"
 cd "$HOME/rl"
 # `yes` feeds an endless "y\n" to stdin - a generic mitigation for the
@@ -143,10 +162,12 @@ cd "$HOME/rl"
 yes | PYTHONUNBUFFERED=1 "$HOME/IsaacLab/isaaclab.sh" -p scripts/build_asset.py 2>&1 | tee "$HOME/build_asset.log"
 BUILD_ASSET_EXIT="${PIPESTATUS[1]}"
 check "$BUILD_ASSET_EXIT" "build_asset.py"
+gsutil -q cp "$HOME/build_asset.log" "${GCS_DEST}logs/build_asset.log" 2>&1 || echo "WARNING: GCS sync of build_asset.log failed (non-fatal)"
 
 step "[5/6] verify the built asset actually carries every known fix"
 "$HOME/IsaacLab/isaaclab.sh" -p scripts/_verify_asset_jaw_fixes.py 2>&1 | tee "$HOME/verify_asset.log"
 check "${PIPESTATUS[0]}" "asset verification (see PASS/FAIL lines above for which specific checks)"
+gsutil -q cp "$HOME/verify_asset.log" "${GCS_DEST}logs/verify_asset.log" 2>&1 || echo "WARNING: GCS sync of verify_asset.log failed (non-fatal)"
 
 step "[6/6] run the instrumented grasp_demo_v2.py bisector diagnostic"
 # reach=0.30m, tilt=65deg, grasp-height=0.009m: the best-known kinematic
@@ -163,9 +184,13 @@ PYTHONUNBUFFERED=1 "$HOME/IsaacLab/isaaclab.sh" -p scripts/grasp_demo_v2.py --he
     --cube-xy 0 0.30 --tilt-deg 65 --grasp-height 0.009 --video-suffix jawbisector_r030_t65 \
     2>&1 | tee "$HOME/grasp_bisector_run.log"
 check "${PIPESTATUS[0]}" "grasp_demo_v2.py bisector diagnostic run"
+# Sync the diagnostic's own log FIRST, immediately, before the (larger,
+# slower) video sync below - this is the actual numeric deliverable this
+# whole dispatch exists to produce, so it gets priority if anything
+# interrupts the rest of this step.
+gsutil -q cp "$HOME/grasp_bisector_run.log" "${GCS_DEST}logs/grasp_bisector_run.log" 2>&1 || echo "WARNING: GCS sync of grasp_bisector_run.log failed (non-fatal)"
 
 echo "=== best-effort GCS video sync (non-fatal) ==="
-GCS_DEST="gs://rl-manipulation-hks-runs/ar4-jaw-bisector-check/$(date -u +%Y%m%d-%H%M%S)/"
-gsutil -m cp -r "$HOME/rl/logs/videos" "$GCS_DEST" 2>&1 || echo "WARNING: GCS video sync failed (non-fatal - the numeric diagnostic is already fully captured in the streamed log above)"
+gsutil -m cp -r "$HOME/rl/logs/videos" "$GCS_DEST" 2>&1 || echo "WARNING: GCS video sync failed (non-fatal - the numeric diagnostic log was already synced above)"
 echo "GCS_DEST=${GCS_DEST}"
 echo "ALL DONE."

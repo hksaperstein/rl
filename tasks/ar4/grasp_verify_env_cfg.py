@@ -76,6 +76,19 @@ World-frame target chosen to center on the square-path demo's workspace
 region (robot-frame x=0.17-0.33 maps to world x=-0.17..-0.33 given the
 robot's 180deg base yaw - see tasks/ar4/robot_cfg.py's InitialStateCfg)."""
 
+_CLOSEUP_CAMERA_POS = (0.15, 0.36, 0.10)
+_CLOSEUP_CAMERA_QUAT_OPENGL = (1.0, 0.0, 0.0, 0.0)
+"""Placeholder eye/orientation only - a genuinely useful close-up on the
+gripper-fingertip/cube contact region depends on the arm's own live-solved
+GRASP_Q waypoint (reach/tilt-dependent, not fixed), so these values are
+overwritten at runtime via closeup_camera.set_world_poses() once that
+waypoint's real jaw1/jaw2/cube world positions are measured - see
+scripts/grasp_demo_v2.py's ``--closeup-camera``/``_compute_closeup_camera``
+(2026-07-24, ar4-closeup-grasp-video task), which follows the same
+live-measure-then-reposition pattern already established by
+scripts/_record_jaw_fix_open_close_cycle.py's own camera-tuning history
+(see that script's own comments for what worked/produced black frames)."""
+
 
 @configclass
 class Ar4GraspVerifySceneCfg(Ar4PickPlaceMirrorSceneCfg):
@@ -103,6 +116,30 @@ class Ar4GraspVerifySceneCfg(Ar4PickPlaceMirrorSceneCfg):
             focal_length=18.0, focus_distance=400.0, horizontal_aperture=40.0, clipping_range=(0.1, 5.0)
         ),
         offset=CameraCfg.OffsetCfg(pos=_DEMO_CAMERA_POS, rot=_DEMO_CAMERA_QUAT_OPENGL, convention="opengl"),
+    )
+
+    # 2026-07-24 (ar4-closeup-grasp-video task): a THIRD camera, distinct
+    # from both perception_camera (tuned for object detection, tight but
+    # fixed to the resting/vertical pose) and demo_camera (wide 3/4 view,
+    # never resolves the 12mm cube clearly per this project's own standing
+    # finding - kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md's
+    # 2026-07-24 ar4-jaw-contact-sensor-hypothesis UPDATE). Always present
+    # in the scene (harmless/unused when not recorded) so
+    # scripts/grasp_demo_v2.py's --closeup-camera flag can reposition and
+    # record it without a scene-cfg-level conditional. Narrower aperture
+    # (20.955mm, the PinholeCameraCfg default - left unset here, same as
+    # _record_jaw_fix_open_close_cycle.py's own close-up camera) combined
+    # with a longer focal_length than demo_camera's wide-view 18mm gives a
+    # tighter FOV appropriate for resolving a 12mm cube's contact with the
+    # jaw fingertips at close range.
+    closeup_camera: CameraCfg = CameraCfg(
+        prim_path="{ENV_REGEX_NS}/CloseupCamera",
+        update_period=0.0,
+        height=480,
+        width=640,
+        data_types=["rgb"],
+        spawn=sim_utils.PinholeCameraCfg(focal_length=40.0, focus_distance=400.0, clipping_range=(0.02, 1.0)),
+        offset=CameraCfg.OffsetCfg(pos=_CLOSEUP_CAMERA_POS, rot=_CLOSEUP_CAMERA_QUAT_OPENGL, convention="opengl"),
     )
 
 

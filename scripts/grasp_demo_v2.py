@@ -311,6 +311,49 @@ parser.add_argument(
     "--capture-close-phase-frames", action="store_true",
     help="2026-07-24 (ar4-jaw-contact-sensor-hypothesis task): if set, save a demo-camera still frame AND print jaw1/jaw2 cube-contact forces at EVERY step (not just every 20th) during Phase 3 (CLOSE at grasp_q) only, to <snapshot_dir>/phase3_frames/step<NNN>.png. Lets a close-up frame be pulled at the EXACT step a printed contact-force line shows nonzero jaw1 force, to directly, visually inspect whether jaw2's fingertip overlaps/touches the cube at that same instant or is visibly separated - Hypothesis B's own verification method, not inferable from the existing every-20-steps/phase-midpoint-only snapshots. Disabled by default (adds ~60 small PNG writes only when set, no effect on any other phase or existing behavior).",
 )
+parser.add_argument(
+    "--closeup-camera", action="store_true",
+    help="2026-07-24 (ar4-closeup-grasp-video task): record a THIRD video "
+    "(<video>_closeup.mp4) from a dedicated close-up camera "
+    "(tasks/ar4/grasp_verify_env_cfg.py's closeup_camera), repositioned at "
+    "runtime once GRASP_Q's real jaw1/jaw2/cube world positions are "
+    "measured (never guessed - see _compute_closeup_camera below), tight "
+    "enough to resolve the 12mm cube and both jaw fingertips clearly - "
+    "neither of the existing perception_camera (tuned for the resting pose) "
+    "nor demo_camera (wide 3/4 view) does this at this tilted/descended "
+    "grasp configuration, per this project's own standing finding "
+    "(kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md's 2026-07-24 "
+    "ar4-jaw-contact-sensor-hypothesis UPDATE). The camera is fixed for the "
+    "whole phased sequence (positioned once, at the GRASP_Q pose) rather "
+    "than re-tracked every phase - the arm approaches/recedes through a "
+    "static frame, mirroring how a real close-up shot of a grasp attempt "
+    "would be filmed. Disabled by default (adds one extra camera "
+    "read+encode per step only when set).",
+)
+parser.add_argument(
+    "--closeup-standoff", type=float, default=0.15,
+    help="Eye offset (meters, world +X) from the closeup camera's target "
+    "(the midpoint between the live jaw1/jaw2 midpoint and the cube center "
+    "at GRASP_Q). World +X is perpendicular to the world +Y axis the jaws "
+    "close along (see this module's own _build_canonical_target_quat_w "
+    "docstring / kb doc's 2026-07-24 arm-chain-fk-check UPDATE), so an "
+    "eye offset purely along X gives a side-profile view where jaw "
+    "separation reads as horizontal motion in frame, with no risk of the "
+    "eye landing inside arm/gripper geometry (the arm's own motion stays "
+    "in the Y-Z plane at this scene's bearing=0 default).",
+)
+parser.add_argument(
+    "--closeup-z-lift", type=float, default=0.05,
+    help="Additional eye offset (meters, world +Z) added on top of "
+    "--closeup-standoff's X offset, for a slightly elevated look-down "
+    "angle instead of a flat side profile (helps keep the cube's top face "
+    "and both jaw fingertips visible instead of a pure edge-on view).",
+)
+parser.add_argument(
+    "--closeup-focal-length", type=float, default=40.0,
+    help="Override closeup_camera's spawn.focal_length (mm) at runtime, "
+    "for iterating on FOV/zoom without editing tasks/ar4/grasp_verify_env_cfg.py.",
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 args_cli.enable_cameras = True
@@ -328,6 +371,7 @@ from isaaclab.envs import ManagerBasedEnv  # noqa: E402
 from isaaclab.managers import SceneEntityCfg  # noqa: E402
 from isaaclab.utils.math import (  # noqa: E402
     compute_pose_error,
+    create_rotation_matrix_from_view,
     matrix_from_quat,
     quat_from_matrix,
     quat_inv,
@@ -1069,6 +1113,51 @@ def polish_from_seed(
     return robot.data.joint_pos[0, robot_entity_cfg.joint_ids].tolist(), final_pos_residual, final_rot_residual
 
 
+def _lookat_quat_opengl(eye, target):
+    """OpenGL look-at convention (forward=-Z, up=+Y), same helper pattern
+    already established by scripts/_record_jaw_fix_open_close_cycle.py's
+    own camera-repositioning code."""
+    eyes = torch.tensor([eye])
+    targets = torch.tensor([target])
+    rot_mat = create_rotation_matrix_from_view(eyes, targets, up_axis="Z")
+    return tuple(quat_from_matrix(rot_mat)[0].tolist())
+
+
+def _compute_closeup_camera(jaw1_pos, jaw2_pos, cube_pos, standoff=0.15, z_lift=0.05):
+    """2026-07-24 (ar4-closeup-grasp-video task): given LIVE-MEASURED
+    (never guessed) jaw1/jaw2/cube world positions at the settled GRASP_Q
+    pose, return (eye, target) for a close-up camera tight enough to
+    resolve the 12mm cube and both jaw fingertips.
+
+    target = midpoint between the gripper's own pinch point (jaw1/jaw2
+    midpoint) and the cube's center - these should nearly coincide at a
+    good grasp, but averaging both keeps the frame centered on "the
+    contact region" even when the standing ~9-10mm residual (see this
+    module's own docstring / kb doc) leaves them slightly apart.
+
+    eye = target, offset by `standoff` along world +X and `z_lift` along
+    world +Z. World +X is perpendicular to the world +Y axis the jaws
+    close along (target_quat's jaw-slide axis is pinned to world (0,1,0)
+    regardless of tilt_deg - see kb/wiki/concepts/ar4-vs-franka-root-cause-
+    comparison.md's 2026-07-24 arm-chain-fk-check UPDATE), so a pure-X eye
+    offset gives a side-profile view where jaw separation reads as
+    horizontal motion, without the eye ever landing inside arm/gripper
+    geometry (this scene's default bearing=0 approach keeps the whole arm
+    in the Y-Z plane, X~0) - the documented black-frame failure mode from
+    _record_jaw_fix_open_close_cycle.py's own tuning history."""
+    import numpy as np
+
+    jaw1 = np.asarray(jaw1_pos, dtype=float)
+    jaw2 = np.asarray(jaw2_pos, dtype=float)
+    cube = np.asarray(cube_pos, dtype=float)
+    jaw_mid = (jaw1 + jaw2) / 2.0
+    target = (jaw_mid + cube) / 2.0
+    eye = target.copy()
+    eye[0] += standoff
+    eye[2] += z_lift
+    return tuple(eye.tolist()), tuple(target.tolist())
+
+
 def main() -> None:
     env_cfg = Ar4GraspVerifyEnvCfg()
     env_cfg.sim.device = args_cli.device
@@ -1086,6 +1175,12 @@ def main() -> None:
     # whether that's the actual blocker for this specific classical-IK demo.
     env_cfg.scene.robot.actuators["arm"].stiffness = 4000.0
     env_cfg.scene.robot.actuators["arm"].damping = 200.0
+
+    if args_cli.closeup_camera:
+        # Placeholder pos/rot are overwritten at runtime below, once
+        # GRASP_Q's real jaw/cube world positions are measured - only the
+        # lens itself needs to be set before env creation.
+        env_cfg.scene.closeup_camera.spawn.focal_length = args_cli.closeup_focal_length
 
     env = ManagerBasedEnv(cfg=env_cfg)
 
@@ -1213,6 +1308,18 @@ def main() -> None:
     demo_video_path = VIDEO_PATH.replace(".mp4", "_demo_camera.mp4")
     demo_video_writer = imageio.get_writer(demo_video_path, fps=int(1.0 / env.step_dt), codec="libx264")
     demo_camera = env.scene["demo_camera"]
+
+    # 2026-07-24 (ar4-closeup-grasp-video task): third camera/video, only
+    # opened when --closeup-camera is set (see this flag's own docstring
+    # above). closeup_camera itself is repositioned later, once GRASP_Q's
+    # real jaw/cube world positions are measured (see the
+    # _compute_closeup_camera call right after grasp_q is solved, below).
+    closeup_video_path = VIDEO_PATH.replace(".mp4", "_closeup.mp4")
+    closeup_video_writer = None
+    closeup_camera = None
+    if args_cli.closeup_camera:
+        closeup_video_writer = imageio.get_writer(closeup_video_path, fps=int(1.0 / env.step_dt), codec="libx264")
+        closeup_camera = env.scene["closeup_camera"]
 
     with torch.inference_mode():
         env.reset()
@@ -1342,6 +1449,8 @@ def main() -> None:
             print("[RADIUS-SWEEP] done - exiting before one-shot GRASP solve / phased execution.")
             video_writer.close()
             demo_video_writer.close()
+            if closeup_video_writer is not None:
+                closeup_video_writer.close()
             env.close()
             return
 
@@ -1401,6 +1510,8 @@ def main() -> None:
             print("[TILT-SWEEP] done - exiting before one-shot GRASP solve / phased execution.")
             video_writer.close()
             demo_video_writer.close()
+            if closeup_video_writer is not None:
+                closeup_video_writer.close()
             env.close()
             return
 
@@ -1476,6 +1587,8 @@ def main() -> None:
             print("[BEARING-SWEEP] done - exiting before one-shot GRASP solve / phased execution.")
             video_writer.close()
             demo_video_writer.close()
+            if closeup_video_writer is not None:
+                closeup_video_writer.close()
             env.close()
             return
 
@@ -1620,6 +1733,8 @@ def main() -> None:
             print("[Z-SWEEP] done - exiting before one-shot GRASP solve / phased execution.")
             video_writer.close()
             demo_video_writer.close()
+            if closeup_video_writer is not None:
+                closeup_video_writer.close()
             env.close()
             return
 
@@ -1800,6 +1915,34 @@ def main() -> None:
         # captured before parking, above) - this is the core test this task
         # was dispatched to run.
         _measure_jaw_bisector_vs_ee_offset("GRASP_Q (converged, this run's actual grasp target)", cube_pos_w=cube_init_pos)
+
+        if args_cli.closeup_camera:
+            # Robot is genuinely settled AT grasp_q right now (per
+            # _check_orientation_at's own settle loop, immediately above) -
+            # measure the REAL jaw1/jaw2 world positions here, live, rather
+            # than guessing/hardcoding them (this task's own explicit
+            # requirement). cube_init_pos is the cube's TRUE captured
+            # position (the cube itself is still parked far away at this
+            # point in the script - see the "Un-park the cube" comment
+            # below - so this is the correct target position to frame the
+            # camera around, not a live read of the currently-parked cube).
+            jaw_pos_w_for_cam = robot.data.body_pos_w[0, gripper_jaw_body_ids].cpu().tolist()
+            cube_pos_for_cam = cube_init_pos.cpu().tolist()
+            closeup_eye, closeup_target = _compute_closeup_camera(
+                jaw_pos_w_for_cam[0], jaw_pos_w_for_cam[1], cube_pos_for_cam,
+                standoff=args_cli.closeup_standoff, z_lift=args_cli.closeup_z_lift,
+            )
+            print(
+                f"[CLOSEUP CAMERA] jaw1_world={['%.5f' % v for v in jaw_pos_w_for_cam[0]]} "
+                f"jaw2_world={['%.5f' % v for v in jaw_pos_w_for_cam[1]]} "
+                f"cube_world={['%.5f' % v for v in cube_pos_for_cam]} "
+                f"-> EYE={['%.5f' % v for v in closeup_eye]} TARGET={['%.5f' % v for v in closeup_target]}"
+            )
+            closeup_quat = _lookat_quat_opengl(closeup_eye, closeup_target)
+            closeup_eye_t = torch.tensor([closeup_eye], device=env.device)
+            closeup_quat_t = torch.tensor([closeup_quat], device=env.device)
+            closeup_camera.set_world_poses(positions=closeup_eye_t, orientations=closeup_quat_t, convention="opengl")
+
         _check_orientation_at(pregrasp_q, "PREGRASP_Q")
 
         # Un-park the cube: move it from _CUBE_PARK_POS_W back to its
@@ -1868,6 +2011,9 @@ def main() -> None:
                 video_writer.append_data(rgb[:, :, :3].astype("uint8"))
                 demo_rgb = demo_camera.data.output["rgb"][0].cpu().numpy()
                 demo_video_writer.append_data(demo_rgb[:, :, :3].astype("uint8"))
+                if closeup_camera is not None:
+                    closeup_rgb = closeup_camera.data.output["rgb"][0].cpu().numpy()
+                    closeup_video_writer.append_data(closeup_rgb[:, :, :3].astype("uint8"))
 
                 if i == duration // 2:
                     # Numeric readout AND a saved still frame at the exact
@@ -1880,6 +2026,11 @@ def main() -> None:
                     imageio.imwrite(
                         os.path.join(snapshot_dir, f"phase{phase_idx}_mid_perception.png"), rgb[:, :, :3].astype("uint8")
                     )
+                    if closeup_camera is not None:
+                        imageio.imwrite(
+                            os.path.join(snapshot_dir, f"phase{phase_idx}_mid_closeup.png"),
+                            closeup_rgb[:, :, :3].astype("uint8"),
+                        )
 
                 if phase_idx in (2, 3, 4, 5, 6) and i % 20 == 0:
                     cube_z = env.scene["cube"].data.root_pos_w[0, 2].item()
@@ -1949,9 +2100,13 @@ def main() -> None:
 
     video_writer.close()
     demo_video_writer.close()
+    if closeup_video_writer is not None:
+        closeup_video_writer.close()
     env.close()
     print(f"\nVideo recorded to: {VIDEO_PATH}")
     print(f"Demo-camera video recorded to: {demo_video_path}")
+    if closeup_video_writer is not None:
+        print(f"Closeup-camera video recorded to: {closeup_video_path}")
     print(f"Gripper-check snapshots recorded to: {snapshot_dir}")
 
 

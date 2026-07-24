@@ -142,6 +142,17 @@ def main() -> None:
     env_cfg.scene.robot.actuators["arm"].stiffness = 4000.0
     env_cfg.scene.robot.actuators["arm"].damping = 200.0
 
+    # tasks/ar4/grasp_verify_env_cfg.py's Ar4GraspVerifyEnvCfg scene adds two
+    # cameras (for scripts/grasp_demo_v2.py's own video recording) - this
+    # script needs neither their output nor --enable_cameras (which forces a
+    # slow real RTX render-pipeline warmup/shader-compile on first
+    # env.reset(), observed live to take 10+ minutes on a fresh cloud
+    # instance with no benefit here). Drop them from the scene entirely
+    # before env creation - the same pattern scripts/plot_arm_skeleton.py
+    # already uses for an analogous camera-free diagnostic.
+    env_cfg.scene.perception_camera = None
+    env_cfg.scene.demo_camera = None
+
     env = ManagerBasedEnv(cfg=env_cfg)
     robot = env.scene["robot"]
 

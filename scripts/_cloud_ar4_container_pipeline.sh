@@ -111,8 +111,22 @@ if [ "$PULL_EXIT" -ne 0 ]; then
 fi
 
 # --- [3/7] probe container layout (cheap, confirms assumptions live) -------
+# IMPORTANT: the published nvcr.io/nvidia/isaac-lab image's default
+# ENTRYPOINT is /isaac-sim/runheadless.sh (Isaac Sim's own streaming-app
+# launcher), NOT a plain shell -- confirmed live via `docker inspect
+# --format '{{json .Config.Entrypoint}}'` (2026-07-24, this task). This
+# differs from IsaacLab's own docker-compose.yaml (`entrypoint: bash`),
+# which only applies when building/running via that compose file's own
+# `container.py` wrapper locally -- the raw NGC-published image keeps
+# Isaac Sim's own default entrypoint. Every docker run below MUST pass
+# `--entrypoint bash` or a plain `bash -c "..."` command silently becomes
+# an (invalid/ignored) argument to runheadless.sh instead of actually
+# running -- found live the hard way: an earlier version of this script
+# without --entrypoint bash produced generic Isaac Sim Kit startup logs
+# instead of scripts/build_asset.py's own output, because build_asset.py
+# was never actually invoked.
 step "[3/7] probe container layout"
-sudo docker run --rm "$IMAGE" bash -c \
+sudo docker run --rm --entrypoint bash "$IMAGE" -c \
   "echo isaaclab.sh: \$(ls -la /workspace/isaaclab/isaaclab.sh 2>&1); echo ISAACSIM_PATH=\$ISAACSIM_PATH; python3 -c 'import isaacsim; print(\"isaacsim import OK\")' 2>&1 | tail -3"
 check $? "container layout probe"
 
@@ -151,7 +165,7 @@ def get_package_share_directory(package_name):
     return path
 PYEOF
 
-sudo docker run --rm --gpus all --network host \
+sudo docker run --rm --gpus all --network host --entrypoint bash \
   -e ACCEPT_EULA=Y -e OMNI_KIT_ACCEPT_EULA=YES -e PRIVACY_CONSENT=Y \
   -v "$HOME/rl:/workspace/rl" \
   -v "$HOME/ar4_ros_driver:/opt/ar4_ros_driver:ro" \
@@ -160,7 +174,7 @@ sudo docker run --rm --gpus all --network host \
   -e PYTHONPATH=/opt/ament_shim \
   -w /workspace/rl \
   "$IMAGE" \
-  bash -c "pip install --quiet xacro==2.1.1 && yes | /workspace/isaaclab/isaaclab.sh -p scripts/build_asset.py" \
+  -c "pip install --quiet xacro==2.1.1 && yes | /workspace/isaaclab/isaaclab.sh -p scripts/build_asset.py" \
   2>&1 | tee "$HOME/build_asset_container.log"
 BUILD_EXIT="${PIPESTATUS[0]}"
 check "$BUILD_EXIT" "build_asset.py inside container"
@@ -194,12 +208,12 @@ echo "TIMING gcs_download_sec=$((T6_END - T6_START))"
 # --- [7/7] SMOKE TEST: gripper open/close cycle video, using the cache ----
 step "[7/7] SMOKE TEST: gripper open/close cycle video capture, containerized, using the GCS-cached asset"
 T7_START=$(date +%s)
-sudo docker run --rm --gpus all --network host \
+sudo docker run --rm --gpus all --network host --entrypoint bash \
   -e ACCEPT_EULA=Y -e OMNI_KIT_ACCEPT_EULA=YES -e PRIVACY_CONSENT=Y \
   -v "$HOME/rl:/workspace/rl" \
   -w /workspace/rl \
   "$IMAGE" \
-  bash -c "/workspace/isaaclab/isaaclab.sh -p scripts/_record_jaw_fix_open_close_cycle.py --headless" \
+  -c "/workspace/isaaclab/isaaclab.sh -p scripts/_record_jaw_fix_open_close_cycle.py --headless" \
   2>&1 | tee "$HOME/smoke_test.log"
 check "${PIPESTATUS[0]}" "gripper open/close cycle video capture (containerized)"
 T7_END=$(date +%s)

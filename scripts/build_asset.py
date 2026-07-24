@@ -528,11 +528,26 @@ def _fix_jaw2_collision_mesh_asymmetry(output_usd: str) -> None:
     # proxy is not allowed", hit live testing this fix). Fix: walk up to
     # the actual instance-root ancestor (the prim with instanceable=true
     # authored - prim.IsInstance() is only True on THAT specific prim, not
-    # on its instance-proxy descendants), temporarily disable instancing on
-    # it so the descendant mesh prim becomes directly editable on this
-    # stage, make the edit, then restore instanceable=True afterward so
-    # this fix doesn't silently change the asset's instancing/performance
-    # characteristics beyond the one mesh's own geometry.
+    # on its instance-proxy descendants) and disable instancing on it so the
+    # descendant mesh prim becomes directly editable on this stage.
+    #
+    # Deliberately does NOT restore instanceable=True afterward (an earlier
+    # version of this fix did, and silently undid itself - confirmed live: a
+    # fresh Usd.Stage.Open afterward still showed jaw2's OLD point count, its
+    # PointsAttr's property stack resolving entirely from
+    # configuration/ar4_mk5_base.usd with no contribution from the override
+    # this function had just authored and saved into the root layer. Once
+    # instanceable=True is restored, USD's instancing model composes this
+    # whole subtree through the SHARED PROTOTYPE again, and per-instance
+    # opinions authored below an instanceable root are simply not part of
+    # that composition - that's the entire point of instancing, and exactly
+    # why authoring onto an instance proxy is forbidden in the first place.
+    # Leaving instancing disabled for this one link's own collision-mesh
+    # subtree has no real cost here: gripper_jaw1_link.stl/gripper_jaw2_link.stl
+    # are each referenced exactly once in this asset (confirmed via
+    # ar_gripper_macro.xacro - they are NOT a shared/mirrored mesh), so there
+    # was never any sharing for USD's instancing to actually save memory on
+    # for this specific subtree.
     instance_root = jaw2_mesh
     while instance_root and instance_root.IsValid() and not instance_root.IsInstance():
         instance_root = instance_root.GetParent()
@@ -541,7 +556,7 @@ def _fix_jaw2_collision_mesh_asymmetry(output_usd: str) -> None:
               "collision mesh - skipping fix")
         return
     print(f"[jaw2-collision-fix] found instance-root ancestor at {instance_root.GetPath()} - "
-          "temporarily disabling instanceable to author the fix")
+          "disabling instanceable there (permanently - see docstring/comment above) to author the fix")
     instance_root.SetInstanceable(False)
 
     # Re-fetch jaw2_mesh: with instancing disabled on its ancestor, the prim
@@ -556,7 +571,6 @@ def _fix_jaw2_collision_mesh_asymmetry(output_usd: str) -> None:
     jaw2_mesh_api.CreateFaceVertexCountsAttr(jaw1_mesh_api.GetFaceVertexCountsAttr().Get())
     jaw2_mesh_api.CreateFaceVertexIndicesAttr(jaw1_mesh_api.GetFaceVertexIndicesAttr().Get())
 
-    instance_root.SetInstanceable(True)
     stage.GetRootLayer().Save()
 
     print(

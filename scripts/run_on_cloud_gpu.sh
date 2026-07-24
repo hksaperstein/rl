@@ -8,7 +8,19 @@
 # tears down its own instance).
 #
 # Usage:
-#   scripts/run_on_cloud_gpu.sh [--detach] [--cost-cap DOLLARS] <command> [args...]
+#   scripts/run_on_cloud_gpu.sh [--detach] [--on-demand] [--cost-cap DOLLARS] <command> [args...]
+#
+#   --on-demand    Provision STANDARD (on-demand, not preemptible) instead
+#                  of the default SPOT. Costs ~2x SPOT's hourly rate (this
+#                  project's own established approximation, not a
+#                  directly-queried on-demand SKU), but has zero
+#                  preemption risk -- worth it for short/cheap jobs (a
+#                  video capture, a quick verification) where a mid-job
+#                  SPOT preemption wastes the entire attempt for a savings
+#                  of a few cents. Leave unset (SPOT) for longer/larger
+#                  jobs (training) where the cost delta actually matters
+#                  and this script's own preemption-restart handling
+#                  (below) already covers it.
 #
 #   --detach       Dispatch and return immediately once the remote job has
 #                  actually started (repo shipped, tmux session confirmed
@@ -151,7 +163,15 @@ ZONES=(us-central1-a us-central1-b us-central1-c us-east1-b us-east1-c us-east1-
 # machine type/accelerator/disk size above ever changes -- it is not
 # queried live (no billing API path for real-time SKU lookup was found;
 # see the same doc section for why).
-RATE_PER_HOUR="0.382"
+SPOT_RATE_PER_HOUR="0.382"
+# On-demand (STANDARD) approximation: this project's own established rule
+# of thumb (docs/cloud/dispatch-checklist.md's 2026-07-20 entry) is
+# on-demand runs ~2x SPOT's hourly rate -- not independently re-verified
+# via the Billing Catalog API the way the SPOT rate above was, since this
+# project has less on-demand runtime history to calibrate against. UPDATE
+# to a directly-queried rate if that history accumulates.
+ON_DEMAND_RATE_PER_HOUR="0.764"
+RATE_PER_HOUR="$SPOT_RATE_PER_HOUR"
 
 SSH_EXTRA=(-o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=10 -o ServerAliveCountMax=3)
 DONE_MARKER="__RL_CLOUD_GPU_JOB_DONE__"
@@ -160,9 +180,11 @@ MAX_PREEMPTION_RESTARTS=3
 # --- arg parsing ----------------------------------------------------------
 DETACH=0
 COST_CAP=""
+ON_DEMAND=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --detach) DETACH=1; shift ;;
+    --on-demand) ON_DEMAND=1; shift ;;
     --cost-cap)
       shift
       COST_CAP="${1:-}"
@@ -177,8 +199,12 @@ while [ "$#" -gt 0 ]; do
 done
 
 if [ "$#" -eq 0 ]; then
-  echo "Usage: $0 [--detach] [--cost-cap DOLLARS] <command> [args...]" >&2
+  echo "Usage: $0 [--detach] [--on-demand] [--cost-cap DOLLARS] <command> [args...]" >&2
   exit 3
+fi
+
+if [ "$ON_DEMAND" -eq 1 ]; then
+  RATE_PER_HOUR="$ON_DEMAND_RATE_PER_HOUR"
 fi
 
 CMD_QUOTED=""
@@ -253,6 +279,18 @@ if [ -n "$EXISTING" ]; then
 fi
 
 # --- 2. provision, trying each zone in order ------------------------------
+# --on-demand uses STANDARD provisioning (no preemption risk, ~2x SPOT's
+# hourly rate) instead of the default SPOT -- worth it for short, cheap
+# jobs (e.g. a video capture) where a mid-job preemption wastes the whole
+# attempt for a few cents of savings. SPOT remains the default for
+# longer/larger jobs (training) where the cost delta actually matters and
+# this script's own preemption-restart handling (below) already covers it.
+if [ "$ON_DEMAND" -eq 1 ]; then
+  PROVISIONING_ARGS=(--provisioning-model=STANDARD)
+  log "Using on-demand (STANDARD) provisioning per --on-demand -- not preemptible, no restart-on-preemption logic will fire."
+else
+  PROVISIONING_ARGS=(--provisioning-model=SPOT --instance-termination-action=STOP)
+fi
 INSTANCE_NAME="rl-cloud-gpu-job-$(date -u +%Y%m%d-%H%M%S)-$$"
 CREATE_OK=0
 for zone in "${ZONES[@]}"; do
@@ -260,8 +298,7 @@ for zone in "${ZONES[@]}"; do
   if CREATE_OUT="$(gcloud compute instances create "$INSTANCE_NAME" \
       --zone="$zone" \
       --machine-type="$MACHINE_TYPE" \
-      --provisioning-model=SPOT \
-      --instance-termination-action=STOP \
+      "${PROVISIONING_ARGS[@]}" \
       --accelerator="$ACCELERATOR" \
       --image-family="$IMAGE_FAMILY" \
       --image-project="$IMAGE_PROJECT" \

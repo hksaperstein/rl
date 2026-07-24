@@ -90,12 +90,56 @@ fi
 sudo nvidia-ctk runtime configure --runtime=docker
 sudo systemctl restart docker
 check $? "docker + nvidia-container-toolkit ready"
+
+# NVIDIA OpenGL/Vulkan userspace libraries -- the DLVM image's own driver
+# install is the compute-only flavor (libnvidia-cfg1-*-server etc, no GL),
+# same root cause docs/cloud/franka-cloud-shakedown.md already documents
+# for the plain pip-install recipe ("vkCreateInstance failed" without
+# libnvidia-gl-*-server). Isaac Sim's container image bundles its OWN
+# /etc/vulkan/icd.d/nvidia_icd.json pointing at libGLX_nvidia.so.0, but
+# nvidia-container-toolkit can only inject that library into a container
+# if the HOST actually has it -- confirmed live (2026-07-24) via `find /
+# -iname libGLX_nvidia*` returning nothing on a host without this package,
+# and the smoke-test container spinning at high CPU with near-zero GPU
+# util for 8+ minutes instead of crashing outright (a software/CPU render
+# fallback, not a hang).
+if ! find /usr/lib/x86_64-linux-gnu -iname 'libGLX_nvidia*' 2>/dev/null | grep -q .; then
+  DRIVER_MAJOR="$(nvidia-smi --query-gpu=driver_version --format=csv,noheader | cut -d. -f1)"
+  sudo apt-get install -y "libnvidia-gl-${DRIVER_MAJOR}-server"
+  check $? "libnvidia-gl-${DRIVER_MAJOR}-server install"
+  # KNOWN GAP, found live (2026-07-24): apt's currently-offered package
+  # version for this driver major can be a NEWER point release than the
+  # kernel module the DLVM image actually booted with (e.g. apt offered
+  # 580.173.02 while the running kernel module was 580.159.03) -- this
+  # breaks nvidia-smi itself ("Driver/library version mismatch") until a
+  # reboot loads the matching kernel module. A mid-script self-reboot
+  # can't cleanly resume this same bash process, so fail fast and loud
+  # here instead of burning 10+ minutes on a doomed Isaac Sim launch with
+  # a broken GPU: if this fires, `sudo reboot`, wait for SSH, and simply
+  # re-run this same script -- every step above is idempotent (checks
+  # before acting) so the re-run skips straight past what already
+  # succeeded.
+  if ! nvidia-smi >/dev/null 2>&1; then
+    echo "FATAL: nvidia-smi broke after installing libnvidia-gl-${DRIVER_MAJOR}-server (driver/library version mismatch)." >&2
+    echo "This needs a reboot to load the matching kernel module -- run: sudo reboot" >&2
+    echo "then wait for SSH and re-run this script (idempotent, will skip already-done steps)." >&2
+    exit 1
+  fi
+fi
 T1_END=$(date +%s)
 echo "TIMING docker_toolkit_install_sec=$((T1_END - T1_START))"
 
 step "[1b/7] GPU passthrough sanity check (small image, fails fast before the big pull if broken)"
 sudo docker run --rm --gpus all nvidia/cuda:12.4.0-base-ubuntu22.04 nvidia-smi
 check $? "GPU visible inside a container"
+step "[1c/7] Vulkan/GL library injection sanity check (small image again -- deliberately NOT using \$IMAGE here, to avoid an implicit pre-pull that would corrupt step 2's own timed cold-pull measurement)"
+# -e NVIDIA_DRIVER_CAPABILITIES=all: the plain nvidia/cuda base image does
+# NOT request the "graphics" capability by default (unlike the isaac-lab
+# image, which sets this in its own image config) -- without this override
+# here, this check would be a false negative even when the real image
+# would work fine, since less would actually be injected than the real run
+# requests.
+sudo docker run --rm --gpus all -e NVIDIA_DRIVER_CAPABILITIES=all nvidia/cuda:12.4.0-base-ubuntu22.04 bash -c 'find /usr/lib/x86_64-linux-gnu -iname "libGLX_nvidia*" 2>/dev/null | grep -q . && echo "[container-check] libGLX_nvidia present" || echo "[container-check] MISSING libGLX_nvidia -- Vulkan/RTX rendering will fail or silently fall back to a slow CPU path"'
 
 # --- [2/7] pull the official Isaac Lab container ---------------------------
 step "[2/7] docker pull ${IMAGE}"

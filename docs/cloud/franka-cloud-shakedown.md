@@ -280,6 +280,26 @@ found, the command shape below matches the tag verbatim):
 # or you get `vkCreateInstance failed: ERROR_INCOMPATIBLE_DRIVER` and the
 # process appears to hang indefinitely during scene construction. Match
 # the -580-server suffix to whatever driver version nvidia-smi reports.
+#
+# SAME ROOT CAUSE HITS THE CONTAINER PATH TOO (found live, 2026-07-24,
+# container+cache cloud infra task): a container pulling
+# nvcr.io/nvidia/isaac-lab:2.3.1 bundles its OWN /etc/vulkan/icd.d/
+# nvidia_icd.json pointing at libGLX_nvidia.so.0, but nvidia-container-
+# toolkit can only inject that library into the container if the HOST
+# actually has it -- installing it on the host (same libnvidia-gl-*-server
+# package as below) fixes it for the container case identically. Extra
+# gotcha specific to a live instance: apt's currently-offered package
+# version for a given driver major can be a NEWER point release than the
+# kernel module the instance actually booted with (observed: apt offered
+# 580.173.02 while the running kernel module was 580.159.03) -- this
+# breaks `nvidia-smi` itself ("Driver/library version mismatch") until
+# `sudo reboot` loads the matching kernel module. See
+# scripts/_cloud_ar4_container_pipeline.sh's own step 1 for a fail-fast
+# check that surfaces this immediately instead of burning 10+ minutes on
+# a doomed Isaac Sim launch with a silently broken renderer (symptom
+# without the fail-fast check: NOT an outright crash -- the smoke-test
+# container spun at 100%+ CPU with near-zero GPU utilization for 8+
+# minutes, a slow CPU/software rendering fallback rather than a hang).
 sudo apt-get update -y
 sudo apt-get install -y libgl1 libglx-mesa0 libegl1 libnvidia-gl-580-server \
     vulkan-tools libglu1-mesa libxt6 tmux cmake build-essential

@@ -307,6 +307,10 @@ parser.add_argument(
     "--grasp-rot-threshold", type=float, default=None,
     help="Override ROT_CONVERGENCE_THRESHOLD (radians) for --grasp-deep-polish-steps' extra pass only - lets this pass demand a tighter rotation convergence bound than the module default (0.05rad) without affecting PREGRASP or the descent sub-steps.",
 )
+parser.add_argument(
+    "--capture-close-phase-frames", action="store_true",
+    help="2026-07-24 (ar4-jaw-contact-sensor-hypothesis task): if set, save a demo-camera still frame AND print jaw1/jaw2 cube-contact forces at EVERY step (not just every 20th) during Phase 3 (CLOSE at grasp_q) only, to <snapshot_dir>/phase3_frames/step<NNN>.png. Lets a close-up frame be pulled at the EXACT step a printed contact-force line shows nonzero jaw1 force, to directly, visually inspect whether jaw2's fingertip overlaps/touches the cube at that same instant or is visibly separated - Hypothesis B's own verification method, not inferable from the existing every-20-steps/phase-midpoint-only snapshots. Disabled by default (adds ~60 small PNG writes only when set, no effect on any other phase or existing behavior).",
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 args_cli.enable_cameras = True
@@ -1830,6 +1834,12 @@ def main() -> None:
         # to which phase after the fact.
         snapshot_dir = os.path.join(LOG_DIR, "videos", f"ar4_grasp_gripper_check{_video_suffix}")
         os.makedirs(snapshot_dir, exist_ok=True)
+        # 2026-07-24 (ar4-jaw-contact-sensor-hypothesis task): only used
+        # when --capture-close-phase-frames is set (see its own per-step
+        # capture block below in the Phase 3 loop body) - created
+        # unconditionally since it's cheap and harmless if unused.
+        close_frames_dir = os.path.join(snapshot_dir, "phase3_frames")
+        os.makedirs(close_frames_dir, exist_ok=True)
 
         print("\n[INFO] Starting phased execution...\n")
         for phase_idx, (duration, target_q, gripper_cmd) in enumerate(PHASES):
@@ -1893,6 +1903,41 @@ def main() -> None:
                     print(
                         f"  [PHASE {phase_idx} step {i:3d}] cube z={cube_z:.4f}m xy={['%.4f' % x for x in cube_xy]} "
                         f"jaw1_cube_force={jaw1_force:.4f}N jaw2_cube_force={jaw2_force:.4f}N"
+                    )
+
+                # 2026-07-24 (ar4-jaw-contact-sensor-hypothesis task):
+                # optional EVERY-STEP capture during Phase 3 (CLOSE at
+                # grasp_q) only - the existing every-20-steps/midpoint-only
+                # snapshots above are not guaranteed to land on the exact
+                # step a brief, transient contact-force reading occurs
+                # (this investigation's own prior data: jaw1 contact was
+                # observed only in a narrow steps-20-40 window of this
+                # specific 60-step phase). Printing+saving every step here
+                # lets the exact frame matching a nonzero jaw1_cube_force
+                # line be pulled directly, for a real visual
+                # overlap-vs-separation check of jaw2 against the cube at
+                # that same instant - Hypothesis B's own verification
+                # method. Gated behind --capture-close-phase-frames so it
+                # never changes behavior/cost for any other invocation.
+                if phase_idx == 3 and args_cli.capture_close_phase_frames:
+                    close_jaw1_force = torch.linalg.vector_norm(
+                        env.scene["gripper_jaw1_contact"].data.force_matrix_w.view(1, 3)[0]
+                    ).item()
+                    close_jaw2_force = torch.linalg.vector_norm(
+                        env.scene["gripper_jaw2_contact"].data.force_matrix_w.view(1, 3)[0]
+                    ).item()
+                    close_cube_z = env.scene["cube"].data.root_pos_w[0, 2].item()
+                    print(
+                        f"  [PHASE 3 CLOSE-CAPTURE step {i:3d}] cube_z={close_cube_z:.4f}m "
+                        f"jaw1_cube_force={close_jaw1_force:.4f}N jaw2_cube_force={close_jaw2_force:.4f}N"
+                    )
+                    imageio.imwrite(
+                        os.path.join(close_frames_dir, f"step{i:03d}_demo.png"),
+                        demo_rgb[:, :, :3].astype("uint8"),
+                    )
+                    imageio.imwrite(
+                        os.path.join(close_frames_dir, f"step{i:03d}_perception.png"),
+                        rgb[:, :, :3].astype("uint8"),
                     )
 
             achieved_q = robot.data.joint_pos[0, robot_entity_cfg.joint_ids].tolist()

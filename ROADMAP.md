@@ -449,6 +449,37 @@ Roughly in the order they'd likely be picked up:
    ceiling and prioritize the already-working Franka platform per the
    North Star.
 
+   **Vertical-approach + fixed-gripper recheck (2026-07-24 later,
+   ar4-vertical-fixed-gripper-recheck task, direct user request): reproduced
+   `f9bde3e`'s own position-only-IK vertical config against the now-fully-
+   fixed gripper — gets real SIMULTANEOUS two-sided jaw contact for the
+   first time in this investigation, but still no lift.** Positioning
+   precision reproduced in the same ballpark (`pregrasp=1.81mm` vs.
+   `f9bde3e`'s 1.8mm; `grasp=15.09mm` vs. 10.5mm, same basin, normal
+   run-to-run variance) and the true ~9mm grasp height WAS reached —
+   confirmed via real physical contact, not just a low residual: at
+   CLOSE, both jaws registered real, sustained, simultaneous nonzero force
+   (jaw1≈0.11-0.12N, jaw2≈0.15-0.17N across the full phase), breaking this
+   investigation's standing "exactly one jaw always reads 0.0000N"
+   asymmetric signature for the first time. But contact drops to exactly
+   `0.0000N` on both jaws the moment the arm retreats toward PREGRASP and
+   stays there — the cube ends up dragged ~13.5mm across the table, z
+   rising only 2.4mm above resting, nowhere near a real lift. This
+   directly confirms, rather than overturns, `f9bde3e`'s own original
+   diagnosis ("a grasp-ORIENTATION gap — position-only IK has no incentive
+   to pick a sensible pinch geometry"). **Resolves the tension the task set
+   out to test**: `command_type="pose"` (orientation-locked) provably can't
+   reach the true height under a vertical wrist (joint_3 limit, unchanged);
+   `command_type="position"` (unlocked) reaches the height with real
+   contact but can't hold an orientation through retreat. Neither alone
+   produces a grasp+lift — combining both (a position search additionally
+   scored to reject non-antipodal orientations, or residual RL on top of
+   one of these classical seeds) is Tier 1 methodology work, flagged to
+   Principal rather than decided here. Full detail:
+   `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s 2026-07-24
+   (later) UPDATE. New `scripts/_verify_vertical_position_ik_fixed_gripper.py`
+   kept as a historical record.
+
 See `BACKLOG.md` for further-out candidates not yet on this list.
 
 ## Recently landed

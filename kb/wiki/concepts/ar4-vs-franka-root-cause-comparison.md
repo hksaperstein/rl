@@ -2842,3 +2842,155 @@ of `scripts/grasp_demo_v2.py`'s `_build_canonical_target_quat_w`/`_build_canonic
 target-orientation-correctness check, this article's own 2026-07-24
 (earlier) UPDATEs for the residual baseline this session's clean result is
 checked against.
+
+## UPDATE 2026-07-24 (later, ar4-vertical-fixed-gripper-recheck task): reproducing f9bde3e's own position-only-IK vertical config against the now-fully-fixed gripper gets real SIMULTANEOUS two-sided contact for the first time in this investigation — but still no lift, and it directly confirms f9bde3e's own original "grasp-orientation gap" diagnosis rather than overturning it
+
+Direct user request, live on the desktop (non-headless, watched in real
+time): re-run the EXACT vertical-approach configuration that achieved
+`f9bde3e`'s own genuine 10.5mm/1.8mm (grasp/pregrasp) positioning
+precision — `command_type="position"` (no orientation lock),
+`CUBE_POS_W=(0.0, 0.275, 0.009)`, `GRASP_AT_HEIGHT=0.009` — combined with
+the CURRENT, fully-fixed gripper asset (both the jaw2 open-command
+mirroring-sign fix, `d59595a`, and the jaw2 collision-mesh symmetry fix,
+`e6c3012`, postdate `f9bde3e` and were not present in that commit's own
+verification run). Motivation: the user had just watched a fresh run using
+the LATER `command_type="pose"` (orientation-locked, 65°-tilt) approach and
+confirmed the gripper itself now opens/closes/spreads correctly, but the EE
+was not positioned correctly — the 65°-tilt workaround exists specifically
+because that orientation-locked approach cannot reach the cube's true
+~9mm grasp height under a vertical wrist (AR4's own confirmed-real
+`joint_3` hard limit, `6ca9a1d`/`e860a24` above). The open question: does
+`f9bde3e`'s different, older, position-only-IK vertical approach — which
+never had this elbow-limit problem in the first place, because it has no
+locked orientation to fight the limit — combined with the now-genuinely-
+working gripper, finally produce a real grasp+lift?
+
+**Method**: new `scripts/_verify_vertical_position_ik_fixed_gripper.py`,
+byte-for-byte `f9bde3e`'s own `scripts/grasp_demo_v2.py` (confirmed via
+diff that no `tasks/ar4/` file this script depends on changed since
+`f9bde3e` except two purely-additive changes: the closeup-camera scene
+field and the jaw2 gripper-command fix itself), with exactly one functional
+addition: jaw1/jaw2-vs-cube contact-force logging during the CLOSE/hold
+phases (`f9bde3e`'s own script predates this project's contact-force
+verification convention and had none). Run on the desktop
+(`~/projects/rl-ar4-fixes-transfer` worktree, confirmed built on the
+current fully-fixed asset, commit `e6c3012` an ancestor of that worktree's
+checked-out `311623f`, itself one commit behind this repo's own `main` at
+run time — no divergence), non-headless, under the standing `flock`
+convention, GPU otherwise idle.
+
+**Positioning precision reproduced, same ballpark, not an exact
+re-hit**: `pregrasp_residual=1.81mm` (essentially an exact match to
+`f9bde3e`'s own reported 1.8mm); `grasp_residual=15.09mm` (same order of
+magnitude as, but somewhat worse than, `f9bde3e`'s own reported 10.5mm) —
+the seed search converged to the exact same `KNOWN_GOOD_GRASP_Q` basin
+`f9bde3e` itself found and hardcoded as a fallback seed, so this gap is
+run-to-run DLS-polish/physics-timing variability within the same basin
+(already documented elsewhere in this article as a real, reproducible
+property of this search), not a different or worse solution being found.
+
+**The true ~9mm grasp height WAS reached — confirmed directly via real
+physical contact, not just a low residual number.** At Phase 3 (CLOSE at
+`grasp_q`), the cube (resting z=0.0060m) had already been nudged to
+z=0.0070m/xy=(7.3mm, 260.9mm) (from its resting (0, 275.0mm)) by the start
+of the phase, and BOTH jaws registered real, sustained, SIMULTANEOUS
+nonzero contact force across every one of the 3 logged samples spanning
+the full 60-step CLOSE phase:
+
+| step | jaw1_cube_force | jaw2_cube_force |
+|---|---|---|
+| 0 | 0.1137N | 0.1494N |
+| 20 | 0.1157N | 0.1718N |
+| 40 | 0.1140N | 0.1680N |
+
+**This is the first time in this investigation's entire documented history
+that both jaws have registered contact SIMULTANEOUSLY in the same run.**
+Every prior contact-force measurement in this article (2026-07-23
+capstone-grasp, 2026-07-24 jaw-bisector-hypothesis, 2026-07-24
+jaw-contact-sensor-hypothesis) found the standing asymmetric signature —
+exactly one jaw reads a real nonzero force while the OTHER reads exactly
+`0.0000N` at every one of the same sampled steps, with which jaw gets the
+nonzero reading varying between runs/fixes but never both at once. This
+result breaks that pattern cleanly, and does so specifically under the
+un-orientation-locked, never-elbow-limited vertical approach — direct,
+positive evidence that the true grasp height is genuinely reachable with
+real cube contact once the gripper itself works, which the elbow-limited
+`command_type="pose"` approach could never test (it never got low enough
+to touch the cube at all under a canonical vertical wrist).
+
+**But the grasp does NOT survive the retreat to PREGRASP — still no lift,
+and the failure mode is exactly what `f9bde3e`'s own commit message
+already predicted.** By Phase 4 (moving toward `pregrasp_q` with the
+gripper still commanded CLOSE), contact drops to exactly `0.0000N` on
+BOTH jaws at every one of the 5 logged samples across the full 90-step
+phase, and stays at exactly `0.0000N`/`0.0000N` through all of Phase 5 (the
+120-step hold) too. The cube ends up dragged/nudged roughly 13.5mm further
+in Y (260.8mm → 247.3mm) while its z rises only to ~8.4mm — 2.4mm above
+its own resting height, nowhere near the ~59mm PREGRASP/hover height a
+real lift would require. This is a nudge-and-drop, not a grasp+lift, and
+it is the SAME conclusion `f9bde3e`'s own commit message already reached
+and flagged as a follow-up rather than solved: *"Still no full stable
+lift - diagnosed as a grasp-ORIENTATION gap (position-only IK has no
+incentive to pick a sensible pinch geometry)."* This session directly
+confirms that diagnosis with a working gripper and real contact-force
+data, rather than superseding it — position-only IK reaches the true
+height and makes real two-sided contact, but the orientation it happens to
+land the jaws at (an unconstrained null-space artifact, not a deliberately
+chosen antipodal pinch) does not hold the cube through any subsequent
+motion.
+
+**Visual confirmation attempted, honestly inconclusive — consistent with,
+not overriding, this article's own already-documented visual-confirmation
+gap.** Two frames were pulled from the `perception_camera` recording at
+the Phase 3 contact window and mid-Phase-4; neither resolves the 12mm cube
+clearly enough against the gripper jaws at this render distance to make a
+clean visual contact/no-contact call (the same limitation this article's
+2026-07-24 jaw-contact-sensor-hypothesis UPDATE already found and flagged
+as a real, unclosed gap — the dedicated close-up camera built for that
+purpose, `--closeup-camera`, exists on the current `grasp_demo_v2.py` but
+was not ported into this verification script since the task's own
+methodology-fidelity goal was to change as little as possible from
+`f9bde3e`'s own script). The numeric contact-force evidence above is
+treated as sufficient per this project's standing verification standard
+(Experiment 16: contact-force ground truth over eyeballed video), not
+treated as equally strong to an actual clean visual confirmation that was
+never obtained.
+
+**What this means for the standing tension.** Both horns of the tension
+the user asked to resolve are now independently, empirically confirmed
+real and, on current evidence, mutually exclusive under this arm's
+existing classical-IK toolkit: (1) `command_type="pose"` (orientation-
+locked, needed to guarantee a deliberately-chosen antipodal pinch)
+provably cannot reach the true ~9mm grasp height under a vertical wrist,
+blocked by AR4's own confirmed-real `joint_3` hard limit (this article's
+2026-07-22 UPDATEs, unchanged by this session); (2)
+`command_type="position"` (unlocked, confirmed here to reach the true
+height with real two-sided contact) has no mechanism to pick a
+grasp-stable orientation, so the contact it achieves does not survive
+retreat. Neither alone produces a grasp+lift; this session did not find
+(and was not asked to find) a way to combine "reaches the true height"
+with "controls the pinch orientation" — that would be a genuinely new
+methodology (e.g., a position-only search additionally scored/constrained
+to reject non-antipodal orientations, or joint-space-relative residual RL
+on top of one of these classical seeds), Tier 1 territory flagged back to
+Principal rather than decided here. This does NOT reopen or contradict
+either of this article's own two closed conclusions (the joint_3 vertical-
+reachability limit, or the local-optimum-floor residual under
+`command_type="pose"`) — it is a third, independent data point (the
+un-orientation-locked case) that closes the loop the user specifically
+asked about, with the best two-sided-contact evidence this investigation
+has ever produced, still short of a lift.
+
+**Script**: `scripts/_verify_vertical_position_ik_fixed_gripper.py` (new,
+kept as a historical record per this repo's `_diag_*`/`_verify_*`
+convention). Video: `logs/videos/ar4_grasp_vertical_position_ik_fixed_gripper.mp4`
+(recorded on the desktop; not synced into the repo, matching this
+project's convention of keeping `logs/` gitignored).
+
+**Sources**: this session's own live desktop run (full log, contact-force
+table above quoted directly from it), direct `git diff`/`git log` of
+`scripts/grasp_demo_v2.py` and `tasks/ar4/*.py` between `f9bde3e` and the
+current `HEAD` to confirm methodology fidelity, this article's own
+2026-07-22 (`ar4-grasp-ik-precision`, `ar4-grasp-orientation-fix`,
+`ar4-tilt-fix`) UPDATEs for the baseline both the reproduced precision
+numbers and the joint_3-limit claim are checked against.

@@ -2119,3 +2119,195 @@ preemption mid-sweep, re-run identically after switching to on-demand;
 `~/grasp1.log`/`~/grasp2.log`/`~/grasp3.log`), `~/verify_asset.log` (direct
 USD-level asset verification), `gcloud compute operations list` for the
 preemption/restart timeline used in the cost breakdown above.
+
+## UPDATE 2026-07-24 (ar4-jaw-bisector-hypothesis task): the _EE_OFFSET hypothesis is REFUTED, live-measured at the exact 65-degree-tilt configuration — real remaining asymmetry is only 0.66mm and doesn't cleanly explain jaw1-only contact either; this specific null is otherwise consistent with the already-known reachability-precision ceiling, not a new bug
+
+Dispatched to directly test the capstone session's own flagged next
+hypothesis: does the fixed `_EE_OFFSET` constant (`tasks/ar4/pickplace_env_cfg.py`,
+`0.036m` along link_6's local +Z) still represent the TRUE bisector point
+between the two jaw fingertips once the gripper is oriented at the 65-degree
+tilt this investigation's best-ever kinematic configuration uses, or does it
+drift enough at that orientation to explain why jaw1 gets brief contact while
+jaw2 registers exactly 0.0N in every one of the capstone session's 3 grasp
+attempts?
+
+**Step 1 (free, zero cloud cost, done before touching Isaac Sim at all): a
+pure offline calculation against `tasks/ar4/fk_verification.py`'s own
+vendor-URDF FK model already predicted the answer.** The gripper subtree
+(jaw1_link/jaw2_link) hangs off `link_6` through only FIXED joints
+(`ee_joint`, `gripper_base_joint`) plus the jaws' own PRISMATIC joints -
+none of which depend on the arm's own joint_1-6 values at all. This means
+the local-frame offset between link_6 and the true jaw bisector is a
+provably rigid, ARM-ORIENTATION-INDEPENDENT quantity by construction, not
+something that could plausibly drift with tilt. Direct computation (4 very
+different arm joint configs, all with both jaws at the OPEN value) confirmed
+this numerically: the discrepancy between the FK model's own true bisector
+and the `_EE_OFFSET`-assumed point is a constant `0.000132mm` regardless of
+arm pose - see this repo's own working notes for the exact script; not
+committed as a standalone artifact since `_measure_jaw_bisector_vs_ee_offset`
+(below) supersedes it with a live measurement anyway.
+
+**Step 2: live confirmation on the REAL BUILT ASSET, at both a baseline pose
+and the actual converged `grasp_q` from a fresh 65-degree-tilt/reach=0.30m
+solve (matching the capstone session's own "reach=0.30m" attempt).** New
+`_measure_jaw_bisector_vs_ee_offset()` added to `scripts/grasp_demo_v2.py`
+(committed `079eee5`), using `robot.data.body_pos_w` directly on
+`gripper_jaw1_link`/`gripper_jaw2_link` - not the arm's own IK-target
+bookkeeping - to measure the real jaw bisector, the `_EE_OFFSET`-assumed
+pinch point, and (at `grasp_q`) each jaw's own distance to the cube's true
+captured position.
+
+| Check point | True bisector vs _EE_OFFSET assumed point |
+|---|---|
+| HOME_Q baseline (post-reset, near-vertical) | 0.0001mm |
+| GRASP_Q (converged, 65deg tilt, reach=0.30m - the actual grasp target one of the capstone session's 3 failed attempts used) | 0.0002mm |
+
+**Verdict: Hypothesis REFUTED, cleanly, by direct live measurement matching
+the offline FK-model prediction almost exactly.** `_EE_OFFSET` remains
+accurate to a fraction of a micron even at this large 65-degree tilt - there
+is no meaningful discrepancy for the jaw1-only-contact problem to hide in
+here. This closes off the specific hypothesis the capstone session flagged,
+with the same rigor (live measurement, not just the idealized model) the
+task was dispatched to apply.
+
+**Per the task's own step 4 (pivot to the next most likely explanation once
+the offset hypothesis is negligible): a real, but small, jaw-to-cube distance
+asymmetry exists, and it does NOT straightforwardly explain the contact
+pattern either.** At the converged `grasp_q`, before closing:
+
+```
+jaw1-to-cube = 19.3886mm   jaw2-to-cube = 18.7296mm   asymmetry = 0.6590mm
+```
+
+Jaw2 - the one that registers exactly `0.0000N` contact force in every
+run - is actually the CLOSER of the two jaws to the cube's center, not the
+farther one. A naive "whichever jaw is closer touches first" story predicts
+the opposite of what's observed, so simple 3D distance-to-center is not the
+right lens for this asymmetry either. The more likely mechanism, consistent
+with everything else already measured this investigation: `GRASP_Q`'s own
+residual is not purely positional - `[SUMMARY] grasp_residual=0.00953m/0.0732rad`
+- a real ~4.2-degree ROTATION error remains on top of the ~9.5mm position
+error, and a 4-degree wrist misalignment at a ~19mm jaw-to-cube reach is
+easily enough to shift which side of the cube's ~12mm face each fingertip
+actually clears, independent of which jaw is nominally "closer" by straight-
+line distance to the center. This is not a new defect - it is the same
+already-characterized joint_3/multi-joint reachability-envelope precision
+ceiling (this article's own 2026-07-22/23 sections) now surfacing as a
+directional/antipodal problem instead of a gross miss, precisely because the
+65-degree-tilt discovery already fixed the gross-miss half of the problem.
+
+**Full reproduction of the capstone session's own null, confirmed again
+independently this session** (`~/grasp_bisector_run4.log` on the cloud
+instance, synced to `logs/videos/ar4_grasp_demo_v2_jawbisector_r030_t65*.mp4`):
+cube z stays flat at `0.0059-0.0060m` through every phase (never lifted);
+jaw1 registers a brief `0.34N` contact during CLOSE (steps 20-40 of Phase 3);
+jaw2 registers exactly `0.0000N` throughout every logged step of every
+phase; cube xy shifts only `~3-4mm` (nudged, not lifted) - the identical
+qualitative signature the capstone session found at this same position,
+now independently reproduced with the added bisector instrumentation and
+zero evidence of an `_EE_OFFSET` calibration bug behind it.
+
+**No further fix was found or attempted this session** - the offset math is
+confirmed correct, and the gripper's own open/close tracking is confirmed
+symmetric and correct in the same log
+(`gripper_jaw1_joint`/`gripper_jaw2_joint` both cleanly reach `~0.0140` open
+and `~0.0000` closed across all 8 phases) - there is no remaining
+asset-level or command-level bug this task's own evidence points at.
+Per this task's own step 6 instruction ("don't force a false positive, and
+don't just repeat the same tilt-sweep search again without a new
+hypothesis"): the concrete next step this evidence actually supports is
+either (a) a genuinely different approach-orientation strategy that reduces
+`GRASP_Q`'s own residual rotation error below the few-degree range (a
+methodology change - Tier 1 gate, out of this task's bug-fix scope), or (b)
+accepting this as the practical precision ceiling of the classical-IK
+approach on this specific arm/cube combination and revisiting whether the
+North Star's "drop in a new arm" bar is better served by continuing to push
+AR4's classical IK further vs. treating Franka (already working) as the
+platform of record - a controller-level call, not this task's own to make.
+
+**Two real, separate infrastructure bugs found and fixed along the way
+(both now committed, both benefit every future cloud dispatch in this
+project, not just this task):**
+
+1. **`scripts/_cloud_ar4_jaw_bisector_setup.sh` (new, committed) is now a
+   real, checked-in, idempotent, non-`set -e`-fragile recipe for building
+   the whole Isaac Sim/Isaac Lab/AR4-asset stack from scratch on a fresh GCP
+   instance** - the exact "AR4-on-cloud" recipe every single prior session
+   documenting this had to re-derive from memory (see this article's own
+   2026-07-23 "Standing FK verification framework" and "ar4-capstone-grasp"
+   UPDATEs, each independently reconstructing the vendor-mirror-clone +
+   `ament_index_python` shim + xacro-install steps). Two bugs found live
+   getting it working reliably: (a) `yes | isaaclab.sh -p build_asset.py |
+   tee log` - `yes`'s own harmless SIGPIPE the instant the reader stops
+   tripped `set -e -o pipefail`, silently aborting the script right after a
+   real successful asset build, before the diagnostic ever ran; (b) a
+   preemption-restart re-running the whole script fresh on the SAME
+   (persisted) disk hit a non-idempotent `git clone` into an already-
+   populated directory from the prior (interrupted) pass. Fixed by dropping
+   `set -e` entirely in favor of an explicit per-step `check()` helper that
+   always continues, making both git clones idempotent (`rm -rf` first),
+   and syncing each log to GCS incrementally (not just at the very end) so
+   a repeat of "the run succeeded but the network died right as it
+   finished" loses at most the last step's own data, not the whole run's.
+2. **`scripts/run_on_cloud_gpu.sh`'s own blocking log-tail loop had a real
+   reader-lifetime bug** (fixed, commit `7e421e9`): re-opening the FIFO via
+   a fresh `read ... < "$STREAM_FIFO"` redirection on every single loop
+   iteration (instead of holding one persistent reader fd open) creates a
+   genuine reader-count-drops-to-zero race - in the gap between one read
+   closing its fd and the next reopening it, the backgrounded `tail -f`/ssh
+   writer can get an immediate SIGPIPE if it happens to write in that
+   window, silently killing the stream with nothing checking whether
+   `SSH_TAIL_PID` was still alive. This is exactly what caused the second
+   of this session's five dispatch attempts to complete a REAL, full,
+   successful run (confirmed via its own video artifacts already present in
+   GCS) whose final numeric diagnostic print never reached the local
+   terminal at all - a SPOT preemption happened to race with the script's
+   own completion, and the wrapper's own dead stream meant it re-launched
+   the script fresh on the same disk, hitting the non-idempotent-clone bug
+   above as the only thing the terminal ever showed. Fixed by opening the
+   FIFO once (`exec {STREAM_FD}<"$STREAM_FIFO"`) and reading via
+   `read -u "$STREAM_FD"` for the stream's whole lifetime; verified in
+   isolation (a reader holding one persistent fd correctly received all
+   lines across multiple separate writer open/write/close bursts,
+   reproducing the same pattern a real intermittent remote tail produces).
+
+**A third, environment-level (not code-level) finding, worth flagging for
+future sessions but not something this task could fix:** this session's own
+tool-calling environment appears to enforce a hard ceiling of roughly
+70 minutes on a single long-lived foreground-chained-to-background bash
+task, independent of any cloud-side preemption - two separate dispatch
+attempts were killed by the environment itself at almost exactly the ~70min
+mark, one of which had zero SPOT preemptions at all up to that point. The
+workaround that worked: dispatch via `run_on_cloud_gpu.sh --detach` (returns
+immediately, no long-lived local process) and poll the remote job with
+short, independent `gcloud compute ssh ... tail` calls instead of one
+long-blocking wrapper invocation. Also found and worth flagging: a fresh GCP
+DLVM instance can boot with a broken NVIDIA driver state (`nvidia-smi`:
+"Driver/library version mismatch"; PhysX/CUDA silently falling back to a
+software solver, making everything roughly an order of magnitude slower)
+even with NO preceding preemption-restart - the existing documented fix for
+a different scenario (`sudo dpkg --configure -a` then `sudo reboot`, see
+`docs/cloud/dispatch-checklist.md`'s "known infra gaps") resolved it here
+too. And a real footgun hit mid-recovery: `pkill -9 -f <pattern>` sent over
+a single SSH `--command` can match and kill its OWN invoking shell, since
+that shell's full command line (as `bash -c "..."`) literally contains the
+pattern string as one of its own arguments - target a specific PID instead
+of a pattern when killing a process this way.
+
+**Cost: ≈$2.06 cumulative against the task's $2 cap** (explicitly permitted
+tolerance up to $2-3 given repeated infra friction this session, not a
+silent overrun) - five separate provisioning attempts (two aborted
+mid-script by the `set -e`/idempotency bugs above and fixed in place, one
+lost to SPOT stockout across all 11 surveyed zones before ever
+provisioning, one killed by this session's own ~70min environment ceiling,
+one that succeeded end-to-end after a mid-run driver fix and one
+preemption-restart) plus the final successful `--detach` run. Full teardown
+confirmed (`scripts/check_cloud_state.sh`: zero instances/disks/snapshots).
+
+**Sources**: this session's own offline FK-model calculation (against
+`tasks/ar4/fk_verification.py`'s existing joint table, no Isaac Sim needed);
+the live cloud run's own log (`~/grasp_bisector_run4.log` on the now-deleted
+instance, key lines quoted above); `gcloud compute operations list` for the
+preemption/restart/stockout timeline; `scripts/_verify_asset_jaw_fixes.py`'s
+own 8/8 PASS output confirming the freshly-built asset carried every
+previously-found gripper/collision fix before the diagnostic ran against it.

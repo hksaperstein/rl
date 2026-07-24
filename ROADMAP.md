@@ -303,18 +303,35 @@ Roughly in the order they'd likely be picked up:
    2026-07-23 but the diff never actually included cube-parking - a
    real doc/code discrepancy found and fixed this session) are now both
    genuinely implemented and exercised live for the first time.
-   **Next concrete diagnostic** (not done this session, flagged for
-   whoever resumes): the consistent jaw1-only-contact signature at the
-   65° optimum suggests the remaining ~9mm gap manifests as one jaw
-   reaching the cube before the other at this specific tilt geometry
-   (plausibly the same insufficient-approach-depth problem as before,
-   now showing up as asymmetric jaw height rather than a clean miss) -
-   worth checking whether `_EE_OFFSET`'s single fixed offset still
-   correctly represents the true bisector point between the two jaws at
-   a 65°-tilted (not near-vertical) approach, the same class of bug
-   Bug 3 (2026-07-22) found for the untitled/near-vertical case. Full
-   detail: `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s
-   2026-07-23 (ar4-capstone-grasp task) UPDATE.
+   **Follow-up (2026-07-24, ar4-jaw-bisector-hypothesis task): the
+   `_EE_OFFSET`-vs-true-bisector hypothesis this session flagged is
+   REFUTED, live-measured at the exact converged 65°-tilt/reach=0.30m
+   `grasp_q`** — discrepancy is 0.0002mm (vs. 0.0001mm at a near-vertical
+   baseline), utterly negligible against the ~9-13mm real residual; a
+   pure offline FK-model check (zero cost) had already predicted this
+   (the offset is a rigid, arm-orientation-independent quantity by
+   construction). A real but small (0.66mm) jaw-to-cube distance
+   asymmetry exists but doesn't cleanly explain jaw1-only contact either
+   (jaw2 — the one with zero contact force — is actually the CLOSER
+   jaw). Most likely mechanism: `GRASP_Q`'s own real ~4.2° residual
+   rotation error, on top of the ~9.5mm position error, at a ~19mm
+   jaw-to-cube reach — enough to shift which side of the cube's 12mm
+   face each fingertip clears, independent of raw distance-to-center.
+   No new asset/command-level bug found (offset math and jaw open/close
+   tracking both confirmed correct); this is the same already-
+   characterized joint_3/reachability-envelope precision ceiling
+   surfacing as a directional/antipodal problem now that the 65° tilt
+   fixed the gross-miss half. Two real, separate cloud-infra bugs found
+   and fixed along the way (a `set -e`/pipefail trip in the new AR4
+   cloud-build script, and a FIFO-reader-lifetime bug in
+   `scripts/run_on_cloud_gpu.sh` itself that could silently kill a
+   dispatch's log stream mid-run) — both now fixed and benefit every
+   future cloud dispatch. Full detail:
+   `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s
+   2026-07-24 UPDATE. Next step (not this task's to decide): either a
+   genuinely different approach-orientation methodology (Tier 1 gate),
+   or treat this as AR4's practical classical-IK precision ceiling and
+   revisit priority against the already-working Franka platform.
 
 See `BACKLOG.md` for further-out candidates not yet on this list.
 

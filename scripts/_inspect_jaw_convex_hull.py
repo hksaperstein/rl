@@ -73,25 +73,45 @@ stage = Usd.Stage.Open(usd_path)
 
 def find_collision_meshes(link_name: str):
     """Return [(prim_path, points_in_link_local_frame)] for every Mesh prim
-    under /mk5/root_joint/<link_name> that has UsdPhysics.CollisionAPI
-    applied, using instance-proxy traversal so instanceable-prototype mesh
-    references are actually visited (plain Usd.PrimRange does not descend
-    into them - confirmed 2026-07-21)."""
+    under /mk5/root_joint/<link_name>/collisions that represents actual
+    collision geometry, using instance-proxy traversal so instanceable-
+    prototype mesh references are actually visited (plain Usd.PrimRange does
+    not descend into them - confirmed 2026-07-21).
+
+    2026-07-24 correction (found live on this task's own first cloud run,
+    which returned zero matches everywhere): UsdPhysics.CollisionAPI /
+    MeshCollisionAPI are applied to the WRAPPER Xform prim
+    (.../collisions/<link_name>/node_STL_BINARY_), not to its child Mesh
+    prim (.../node_STL_BINARY_/mesh) that actually holds the geometry -
+    confirmed via a direct prim-by-prim dump (scripts/_debug_jaw_prim_dump.py).
+    Requiring BOTH UsdGeom.Mesh typing AND CollisionAPI on the SAME prim (the
+    original approach) therefore never matches anything. Fixed by walking
+    the dedicated .../<link_name>/collisions scope specifically (the URDF
+    importer's own <collision>-vs-<visual> scope separation, the same
+    convention scripts/build_asset.py's _add_substitute_link_collision
+    already relies on for the "visuals" scope) and taking every Mesh prim
+    found there directly, rather than re-checking CollisionAPI on each one -
+    anything under a link's own "collisions" scope is collision geometry by
+    construction, regardless of which specific ancestor prim happens to
+    carry the schema instance.
+    """
     link_prim = stage.GetPrimAtPath(f"/mk5/root_joint/{link_name}")
     if not link_prim.IsValid():
         print(f"[WARN] {link_name} prim not found at /mk5/root_joint/{link_name}")
         return []
+    collisions_prim = link_prim.GetChild("collisions")
+    if not collisions_prim or not collisions_prim.IsValid():
+        print(f"[WARN] {link_name}/collisions prim not found")
+        return []
 
-    link_path_str = str(link_prim.GetPath())
+    collisions_path_str = str(collisions_prim.GetPath())
     xf_cache = UsdGeom.XformCache()
     results = []
     for prim in stage.Traverse(Usd.TraverseInstanceProxies()):
         prim_path_str = str(prim.GetPath())
-        if not prim_path_str.startswith(link_path_str):
+        if not prim_path_str.startswith(collisions_path_str):
             continue
         if not prim.IsA(UsdGeom.Mesh):
-            continue
-        if not prim.HasAPI(UsdPhysics.CollisionAPI):
             continue
         mesh = UsdGeom.Mesh(prim)
         pts = mesh.GetPointsAttr().Get()

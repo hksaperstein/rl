@@ -454,6 +454,90 @@ def _add_gripper_jaw2_drive(output_usd: str) -> None:
     )
 
 
+def _fix_jaw2_collision_mesh_asymmetry(output_usd: str) -> None:
+    """Replace gripper_jaw2_link's own (apparently truncated) collision mesh
+    geometry with a copy of gripper_jaw1_link's own collision mesh,
+    transformed into jaw2's local frame.
+
+    Root cause (found 2026-07-24, ar4-jaw-contact-sensor-hypothesis task,
+    scripts/_inspect_jaw_convex_hull.py): direct extraction of both jaws'
+    raw collision-mesh points (the actual geometry PhysX's convexHull
+    approximation is computed from - both jaws DO carry an identical
+    ``UsdPhysics.MeshCollisionAPI.approximation == "convexHull"`` schema
+    instance, confirmed 2026-07-21, but the schema being symmetric says
+    nothing about whether the underlying MESH DATA is) found a real,
+    substantial asymmetry: jaw1's mesh has 1866 points/622 faces, jaw2's has
+    only 1782 points/594 faces. Critically, in each jaw's own link-local
+    frame, jaw1's and jaw2's bounding boxes match EXACTLY on x and y
+    (identical to ~1e-16) but differ on z: jaw1 spans
+    [-0.018475, +0.015825], jaw2 spans [-0.015675, +0.015825] - the SAME
+    upper bound, jaw2 missing exactly the bottom 2.8mm of the fingertip
+    that jaw1 has. This is not a mirror-geometry difference (a true mirror
+    would flip a sign, not truncate one bound) - it is far more consistent
+    with jaw2's vendor STL (``gripper_jaw2_link.stl``, confirmed via the
+    upstream ``ar_gripper_macro.xacro`` to be a wholly separate mesh file
+    from jaw1's ``gripper_jaw1_link.stl``, not a shared/mirrored reference)
+    being an incomplete/truncated export of what should be the same
+    fingertip shape as jaw1's. This gives a direct, concrete, physical
+    mechanism for this investigation's own long-standing "jaw1 gets brief
+    contact, jaw2 reads exactly 0.0N every time" signature: jaw2's own
+    collision geometry simply does not reach as far toward the cube as
+    jaw1's does, independent of any joint/command/limit fix already applied.
+
+    Fix: rather than trying to hand-author or guess the missing 2.8mm of
+    jaw2 geometry, copy jaw1's own (complete, presumably-correct) mesh
+    points/topology wholesale, transformed from jaw1's mesh-prim-local
+    frame into jaw2's mesh-prim-local frame via each prim's live
+    local-to-world transform (robust to whatever the actual wrapper-Xform
+    chain under each jaw's own ``collisions`` scope happens to be, rather
+    than assuming it's identity) - guaranteeing the two jaws are genuinely,
+    exactly geometrically symmetric by construction, the same standard this
+    project already holds the jaw2 joint-limit/drive/command fixes to.
+    """
+    from pxr import Gf, Usd, UsdGeom
+
+    stage = Usd.Stage.Open(output_usd)
+    jaw1_mesh = stage.GetPrimAtPath(
+        "/mk5/root_joint/gripper_jaw1_link/collisions/gripper_jaw1_link/node_STL_BINARY_/mesh"
+    )
+    jaw2_mesh = stage.GetPrimAtPath(
+        "/mk5/root_joint/gripper_jaw2_link/collisions/gripper_jaw2_link/node_STL_BINARY_/mesh"
+    )
+    if not jaw1_mesh.IsValid() or not jaw2_mesh.IsValid():
+        print("[jaw2-collision-fix] WARNING: expected jaw collision mesh prims not found - skipping fix")
+        return
+
+    xf_cache = UsdGeom.XformCache()
+    jaw1_world = xf_cache.GetLocalToWorldTransform(jaw1_mesh)
+    jaw2_world = xf_cache.GetLocalToWorldTransform(jaw2_mesh)
+    jaw2_world_inv = jaw2_world.GetInverse()
+
+    jaw1_mesh_api = UsdGeom.Mesh(jaw1_mesh)
+    jaw1_pts = jaw1_mesh_api.GetPointsAttr().Get()
+    if not jaw1_pts:
+        print("[jaw2-collision-fix] WARNING: gripper_jaw1_link collision mesh has no points - skipping fix")
+        return
+
+    # jaw1_local -> world -> jaw2_local, per-point.
+    new_pts_jaw2_local = [jaw2_world_inv.Transform(jaw1_world.Transform(p)) for p in jaw1_pts]
+
+    jaw2_mesh_api = UsdGeom.Mesh(jaw2_mesh)
+    old_n_pts = len(jaw2_mesh_api.GetPointsAttr().Get() or [])
+    old_n_faces = len(jaw2_mesh_api.GetFaceVertexCountsAttr().Get() or [])
+
+    jaw2_mesh_api.CreatePointsAttr(Gf.Vec3fArray([Gf.Vec3f(p) for p in new_pts_jaw2_local]))
+    jaw2_mesh_api.CreateFaceVertexCountsAttr(jaw1_mesh_api.GetFaceVertexCountsAttr().Get())
+    jaw2_mesh_api.CreateFaceVertexIndicesAttr(jaw1_mesh_api.GetFaceVertexIndicesAttr().Get())
+    stage.GetRootLayer().Save()
+
+    print(
+        f"[jaw2-collision-fix] gripper_jaw2_link collision mesh replaced with a transformed copy of "
+        f"gripper_jaw1_link's own ({old_n_pts} points/{old_n_faces} faces -> {len(new_pts_jaw2_local)} points/"
+        f"{len(jaw1_mesh_api.GetFaceVertexCountsAttr().Get())} faces) - the two jaws' collision geometry is "
+        "now exactly symmetric by construction."
+    )
+
+
 def _add_substitute_link_collision(output_usd: str, link_name: str) -> None:
     """Add a simple box collider to a link that has no collision geometry
     at all in the current upstream mesh checkout.
@@ -605,6 +689,7 @@ def main() -> None:
         # findings each is grounded in.
         _remove_gripper_jaw2_mimic_constraint(output_usd)
         _add_gripper_jaw2_drive(output_usd)
+        _fix_jaw2_collision_mesh_asymmetry(output_usd)
         _add_substitute_link_collision(output_usd, "link_5")
         _add_substitute_link_collision(output_usd, "link_6")
 

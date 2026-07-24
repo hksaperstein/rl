@@ -494,7 +494,7 @@ def _fix_jaw2_collision_mesh_asymmetry(output_usd: str) -> None:
     exactly geometrically symmetric by construction, the same standard this
     project already holds the jaw2 joint-limit/drive/command fixes to.
     """
-    from pxr import Gf, Usd, UsdGeom
+    from pxr import Gf, Usd, UsdGeom, Vt
 
     stage = Usd.Stage.Open(output_usd)
     jaw1_mesh = stage.GetPrimAtPath(
@@ -525,7 +525,7 @@ def _fix_jaw2_collision_mesh_asymmetry(output_usd: str) -> None:
     old_n_pts = len(jaw2_mesh_api.GetPointsAttr().Get() or [])
     old_n_faces = len(jaw2_mesh_api.GetFaceVertexCountsAttr().Get() or [])
 
-    jaw2_mesh_api.CreatePointsAttr(Gf.Vec3fArray([Gf.Vec3f(p) for p in new_pts_jaw2_local]))
+    jaw2_mesh_api.CreatePointsAttr(Vt.Vec3fArray([Gf.Vec3f(p) for p in new_pts_jaw2_local]))
     jaw2_mesh_api.CreateFaceVertexCountsAttr(jaw1_mesh_api.GetFaceVertexCountsAttr().Get())
     jaw2_mesh_api.CreateFaceVertexIndicesAttr(jaw1_mesh_api.GetFaceVertexIndicesAttr().Get())
     stage.GetRootLayer().Save()

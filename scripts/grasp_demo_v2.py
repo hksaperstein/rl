@@ -275,6 +275,38 @@ parser.add_argument(
     "--fixed-posture-move", action="store_true",
     help="With --deployable-seed: before resolving, make one real PD-driven move (no teleport) to the fixed KNOWN_GOOD_PREGRASP_Q reference posture, then resolve/wiggle from there instead of from raw HOME_Q.",
 )
+# 2026-07-24 (ar4-grasp-ik-convergence-tightening task): the best-known
+# configuration to date (65deg tilt, reach 0.30-0.36m) converges to a
+# genuine ~9.5mm/~4.2deg residual via the existing incremental descent
+# (DESCENT_SUBSTEP_MAX_STEPS=400/DESCENT_SUBSTEP_STAGNATION_STEPS=150 per
+# sub-step, 30 sub-steps by default) - a real question left open by every
+# prior session: is that residual a genuine local-optimum floor, or does it
+# reflect the descent's own comparatively small per-sub-step iteration
+# budget rather than the solver's true convergence limit? This flag adds
+# ONE extra polish_from_seed call, at the GRASP waypoint's full-precision
+# target (not a sub-height interpolation), immediately after the existing
+# descent (or one-shot) GRASP resolution finishes - continuing from
+# whatever the robot's live converged state already is (matches
+# polish_from_seed's own no-teleport-on-seed design, so this genuinely
+# extends the same solve rather than restarting it). Disabled by default
+# (0 steps) so it never changes any existing sweep/behavior unless
+# explicitly requested.
+parser.add_argument(
+    "--grasp-deep-polish-steps", type=int, default=0,
+    help="If > 0, run one additional polish_from_seed pass at the GRASP waypoint's full target (continuing live from wherever the descent/one-shot resolve left off, no teleport) with this many MAX physics steps, to test whether more solver effort shrinks the ~9.5mm/4.2deg residual found at the 65deg-tilt/reach=0.30-0.36m configuration, or whether it's already a genuine plateau. 0 (default) disables this pass entirely.",
+)
+parser.add_argument(
+    "--grasp-deep-polish-stagnation-steps", type=int, default=None,
+    help="Stagnation-break threshold (consecutive no-improvement steps) for --grasp-deep-polish-steps' extra pass. Defaults to 20%% of --grasp-deep-polish-steps (min 500) if not given - deliberately generous relative to the existing DESCENT_SUBSTEP_STAGNATION_STEPS=150 so this pass can distinguish 'still slowly improving' from 'genuinely plateaued' rather than breaking early on the same tight budget already used per descent sub-step.",
+)
+parser.add_argument(
+    "--grasp-pos-threshold", type=float, default=None,
+    help="Override CONVERGENCE_THRESHOLD (position, meters) for --grasp-deep-polish-steps' extra pass only - lets this pass demand a tighter position convergence bound than the module default (0.003m) without affecting PREGRASP or the descent sub-steps.",
+)
+parser.add_argument(
+    "--grasp-rot-threshold", type=float, default=None,
+    help="Override ROT_CONVERGENCE_THRESHOLD (radians) for --grasp-deep-polish-steps' extra pass only - lets this pass demand a tighter rotation convergence bound than the module default (0.05rad) without affecting PREGRASP or the descent sub-steps.",
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 args_cli.enable_cameras = True
@@ -846,7 +878,7 @@ def _wiggle_and_resolve(
 
 def polish_from_seed(
     env, ik_controller, robot_entity_cfg, ik_jacobi_idx, target_pos_b, target_quat_b, seed_q, num_arm_joints, joint_pos_limits,
-    max_steps=None, stagnation_break_steps=None,
+    max_steps=None, stagnation_break_steps=None, pos_threshold=None, rot_threshold=None,
 ):
     """Bounded-step DLS polish from an already-settled seed. Same overall
     structure as the previous grid_search_then_polish's polish phase (bounded
@@ -914,10 +946,21 @@ def polish_from_seed(
     this function repeatedly back-to-back, with no ``_settle_at``/teleport
     in between, behave as a genuine continuous resolve from one call's
     converged end-state to the next call's starting state - the mechanism
-    the incremental descent below relies on."""
+    the incremental descent below relies on.
+
+    2026-07-24 (ar4-grasp-ik-convergence-tightening task): added optional
+    ``pos_threshold``/``rot_threshold`` overrides (defaulting to the
+    module-level ``CONVERGENCE_THRESHOLD``/``ROT_CONVERGENCE_THRESHOLD``
+    constants when not given), so a caller wanting a tighter early-exit
+    convergence bound for one specific waypoint/pass (see ``main()``'s
+    ``--grasp-deep-polish-steps`` handling) can do so without touching the
+    module constants used everywhere else (PREGRASP, the descent
+    sub-steps)."""
     robot = env.scene["robot"]
     max_steps = POLISH_MAX_STEPS if max_steps is None else max_steps
     stagnation_break_steps = STAGNATION_BREAK_STEPS if stagnation_break_steps is None else stagnation_break_steps
+    pos_threshold = CONVERGENCE_THRESHOLD if pos_threshold is None else pos_threshold
+    rot_threshold = ROT_CONVERGENCE_THRESHOLD if rot_threshold is None else rot_threshold
 
     def _combined_score(pos_err: float, rot_err: float) -> float:
         return pos_err + ORIENTATION_SCORE_WEIGHT * rot_err
@@ -995,7 +1038,7 @@ def polish_from_seed(
             steps_since_improvement = 0
         else:
             steps_since_improvement += 1
-        if final_pos_residual < CONVERGENCE_THRESHOLD and final_rot_residual < ROT_CONVERGENCE_THRESHOLD:
+        if final_pos_residual < pos_threshold and final_rot_residual < rot_threshold:
             break
         if steps_since_improvement >= stagnation_break_steps:
             print(
@@ -1666,6 +1709,40 @@ def main() -> None:
                     f"  [DESCENT {sub_idx:2d}/{args_cli.num_descent_steps}] z_target={sub_z:.5f}m "
                     f"pos_err={grasp_residual:.5f}m rot_err={grasp_rot_residual:.4f}rad"
                 )
+
+        # 2026-07-24 (ar4-grasp-ik-convergence-tightening task): optional
+        # extra deep-polish pass AT GRASP's own true full-precision target
+        # (grasp_pos_b, not a sub-height interpolation), continuing live
+        # from whatever the descent/one-shot resolve above already converged
+        # to (polish_from_seed never teleports to its seed_q argument - see
+        # its own docstring - so this genuinely extends the same solve,
+        # exactly like chaining descent sub-steps does). Tests directly
+        # whether the ~9.5mm/4.2deg residual found at the 65deg-tilt/
+        # reach=0.30-0.36m configuration shrinks further with more solver
+        # effort/a tighter convergence bound, or is already a genuine
+        # plateau - see this flag's own --grasp-deep-polish-steps docstring.
+        if args_cli.grasp_deep_polish_steps > 0:
+            deep_stagnation = args_cli.grasp_deep_polish_stagnation_steps
+            if deep_stagnation is None:
+                deep_stagnation = max(500, int(0.2 * args_cli.grasp_deep_polish_steps))
+            pre_deep_pos, pre_deep_rot = grasp_residual, grasp_rot_residual
+            print(
+                f"\n[DEEP-POLISH] starting extra GRASP polish pass: max_steps={args_cli.grasp_deep_polish_steps} "
+                f"stagnation_break_steps={deep_stagnation} pos_threshold={args_cli.grasp_pos_threshold} "
+                f"rot_threshold={args_cli.grasp_rot_threshold} (pre-pass residual: "
+                f"pos={pre_deep_pos:.5f}m rot={pre_deep_rot:.4f}rad)"
+            )
+            grasp_q, grasp_residual, grasp_rot_residual = polish_from_seed(
+                env, ik_controller, robot_entity_cfg, ik_jacobi_idx, grasp_pos_b, target_quat_b, grasp_q,
+                num_arm_joints, joint_pos_limits,
+                max_steps=args_cli.grasp_deep_polish_steps, stagnation_break_steps=deep_stagnation,
+                pos_threshold=args_cli.grasp_pos_threshold, rot_threshold=args_cli.grasp_rot_threshold,
+            )
+            print(
+                f"[DEEP-POLISH] done: pos={grasp_residual:.5f}m rot={grasp_rot_residual:.4f}rad "
+                f"(was pos={pre_deep_pos:.5f}m rot={pre_deep_rot:.4f}rad before this pass - "
+                f"delta pos={grasp_residual - pre_deep_pos:.5f}m rot={grasp_rot_residual - pre_deep_rot:.4f}rad)"
+            )
 
         print(
             f"\n[SUMMARY] grasp_residual={grasp_residual:.5f}m/{grasp_rot_residual:.4f}rad "

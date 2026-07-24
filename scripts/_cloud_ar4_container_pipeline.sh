@@ -175,6 +175,10 @@ PYEOF
 # earlier version of this line produced a "build succeeded" (misleadingly
 # fast, ~3s) timing number while build_asset.py had never actually
 # executed. Use /isaac-sim/python.sh -m pip explicitly instead.
+# Same root cause bites `xacro` itself (build_asset.py subprocess.run()s
+# it by bare name): pip installs its console-script entry point to
+# /isaac-sim/kit/python/bin/xacro (confirmed live), which also isn't on
+# this shell's PATH -- prepend it explicitly before invoking isaaclab.sh.
 sudo docker run --rm --gpus all --network host --entrypoint bash \
   -e ACCEPT_EULA=Y -e OMNI_KIT_ACCEPT_EULA=YES -e PRIVACY_CONSENT=Y \
   -v "$HOME/rl:/workspace/rl" \
@@ -184,7 +188,7 @@ sudo docker run --rm --gpus all --network host --entrypoint bash \
   -e PYTHONPATH=/opt/ament_shim \
   -w /workspace/rl \
   "$IMAGE" \
-  -c "/isaac-sim/python.sh -m pip install --quiet xacro==2.1.1 && yes | /workspace/isaaclab/isaaclab.sh -p scripts/build_asset.py" \
+  -c "/isaac-sim/python.sh -m pip install --quiet xacro==2.1.1 && export PATH=/isaac-sim/kit/python/bin:\$PATH && yes | /workspace/isaaclab/isaaclab.sh -p scripts/build_asset.py" \
   2>&1 | tee "$HOME/build_asset_container.log"
 BUILD_EXIT="${PIPESTATUS[0]}"
 check "$BUILD_EXIT" "build_asset.py inside container"

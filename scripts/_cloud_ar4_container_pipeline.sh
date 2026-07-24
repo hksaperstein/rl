@@ -177,8 +177,23 @@ PYEOF
 # executed. Use /isaac-sim/python.sh -m pip explicitly instead.
 # Same root cause bites `xacro` itself (build_asset.py subprocess.run()s
 # it by bare name): pip installs its console-script entry point to
-# /isaac-sim/kit/python/bin/xacro (confirmed live), which also isn't on
-# this shell's PATH -- prepend it explicitly before invoking isaaclab.sh.
+# /isaac-sim/kit/python/bin/xacro (confirmed live) whose OWN shebang
+# (#!/isaac-sim/kit/python/bin/python3) launches the raw python3 BINARY
+# directly, bypassing /isaac-sim/python.sh's own env setup entirely. That
+# matters because PyYAML (a real xacro dependency) is NOT actually present
+# in that raw binary's own site-packages -- `pip install PyYAML` (invoked
+# via python.sh) sees Omniverse's own prebundled yaml copy already on
+# python.sh's PYTHONPATH (/isaac-sim/exts/omni.pip.compute/pip_prebundle)
+# and reports "already satisfied" WITHOUT installing a real copy into the
+# raw binary's own site-packages -- confirmed live via a direct `pip show
+# PyYAML` (Location: .../pip_prebundle) vs. the raw binary's own `sys.path`
+# (does not include that prebundle dir at all). Fix: install a tiny
+# wrapper at /usr/local/bin/xacro (ahead of the real one on PATH) that
+# invokes the downloaded xacro script THROUGH /isaac-sim/python.sh instead
+# of via its own shebang, so it inherits python.sh's full PYTHONPATH
+# (including the prebundled yaml) -- confirmed live to work (`xacro` runs
+# and reaches its own usage/argument-parsing code instead of crashing on
+# `ModuleNotFoundError: No module named 'yaml'`).
 sudo docker run --rm --gpus all --network host --entrypoint bash \
   -e ACCEPT_EULA=Y -e OMNI_KIT_ACCEPT_EULA=YES -e PRIVACY_CONSENT=Y \
   -v "$HOME/rl:/workspace/rl" \
@@ -188,7 +203,7 @@ sudo docker run --rm --gpus all --network host --entrypoint bash \
   -e PYTHONPATH=/opt/ament_shim \
   -w /workspace/rl \
   "$IMAGE" \
-  -c "/isaac-sim/python.sh -m pip install --quiet xacro==2.1.1 && export PATH=/isaac-sim/kit/python/bin:\$PATH && yes | /workspace/isaaclab/isaaclab.sh -p scripts/build_asset.py" \
+  -c "/isaac-sim/python.sh -m pip install --quiet xacro==2.1.1 && printf '#!/bin/bash\nexec /isaac-sim/python.sh /isaac-sim/kit/python/bin/xacro \"\$@\"\n' > /usr/local/bin/xacro && chmod +x /usr/local/bin/xacro && yes | /workspace/isaaclab/isaaclab.sh -p scripts/build_asset.py" \
   2>&1 | tee "$HOME/build_asset_container.log"
 BUILD_EXIT="${PIPESTATUS[0]}"
 check "$BUILD_EXIT" "build_asset.py inside container"

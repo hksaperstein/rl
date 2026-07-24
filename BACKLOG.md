@@ -81,6 +81,28 @@ one-line pointer, not the reasoning inline.
   per-shape envs; keep in mind before designing another multi-teacher/
   multi-env pipeline the same way.
   `kb/wiki/experiments/unified-multi-die-specialist-distillation.md`.
+- **`scripts/run_on_cloud_gpu.sh`'s blocking-mode SPOT-preemption-retry path
+  has a real, reproduced, unfixed bug** (found 2026-07-24,
+  ar4-jaw-contact-sensor-hypothesis task): on a genuine preemption, it logs
+  "Instance status is 'STOPPING' ... checking for SPOT preemption..." and
+  then dies completely silently (no further log line, no error, no exit
+  code reported to the caller) — `set -Eeuo pipefail`'s own EXIT trap fires
+  and tears the instance down correctly (confirmed no cost/resource leak),
+  but gives zero diagnostic signal about which command actually failed. A
+  static re-read of every command between the two observed log lines
+  (`stop_tail`, the retry-budget check, the `PREEMPTION_RESTARTS`
+  increment) found nothing that should trip `-e` under the script's own
+  logic — the actual failing command was not isolated live (would need a
+  second real preemption to bisect against, more budget than that task
+  had). This is exactly the scenario `docs/cloud/dispatch-checklist.md`
+  already flagged as "not yet independently live-fire tested against a
+  real preemption" — now confirmed broken, not just untested. Workaround
+  used: `--detach` mode (skips this retry loop entirely) + polling the
+  instance directly via repeated `gcloud compute ssh` calls. Worth a
+  proper fix (e.g. `set +e` around just this retry block with explicit
+  per-command exit-code checks, mirroring the AR4 cloud-build scripts' own
+  `check()` pattern) before the next dispatch that might hit a real
+  preemption in blocking mode.
 
 ## AR4 arm actuator gains (2026-07-22 finding, not yet fixed)
 

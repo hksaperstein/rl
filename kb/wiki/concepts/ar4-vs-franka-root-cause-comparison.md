@@ -2495,3 +2495,187 @@ this session — no run hit a hard limit at this configuration), and this
 article's own 2026-07-23 (ar4-capstone-grasp) and 2026-07-24 (earlier,
 ar4-jaw-bisector-hypothesis) UPDATEs for the prior baseline this session's
 own numbers are compared against.
+
+## UPDATE 2026-07-24 (later, ar4-jaw-contact-sensor-hypothesis task): Hypothesis A (jaw collision-mesh geometry) CONFIRMED and FIXED — a real 2.8mm truncation on jaw2's own collision mesh vs jaw1's; Hypothesis B (contact-sensor bug) REFUTED — the sensor is real and working, both jaws independently proven able to read nonzero contact; fixing the geometry did NOT produce a working grasp
+
+Dispatched with fresh skepticism to directly check two hypotheses this
+article's own 2026-07-21 section flagged as "confirmed present as a schema,
+never quantified as data" (jaw collision-mesh symmetry) and never
+previously checked at all (contact-sensor correctness) against the
+standing jaw1-brief-contact/jaw2-exactly-0.0N signature.
+
+**Hypothesis A — CONFIRMED, a real defect, found and fixed.** Direct
+instance-proxy USD traversal (`scripts/_inspect_jaw_convex_hull.py`, new
+this task) of both jaws' actual `UsdPhysics.CollisionAPI`-tagged mesh
+geometry (not the render/visual mesh — confirmed via
+`scripts/_debug_jaw_prim_dump.py` that the API is applied to a wrapper
+Xform one level up from the Mesh prim, a real bug in this task's own first
+draft that returned zero matches until fixed) found:
+
+| | jaw1 | jaw2 |
+|---|---|---|
+| raw points | 1866 | 1782 |
+| raw faces | 622 | 594 |
+| local-frame bbox z-range | [-0.01847, +0.01582] | [-0.01568, +0.01582] |
+| hull vertices/faces | 24/44 | 21/38 |
+| hull volume | 0.00001559 m³ | 0.00001496 m³ (4.1% smaller) |
+
+Both jaws' bboxes match EXACTLY on x/y (identical to ~1e-16) but jaw2 is
+missing exactly the bottom 2.8mm of its own z-range — the SAME upper
+bound, a truncated lower bound. Not a mirror-geometry difference (a true
+mirror flips a sign, doesn't truncate one bound); confirmed via the vendor
+URDF (`ar_gripper_macro.xacro`) that jaw1/jaw2 reference wholly separate
+STL files (`gripper_jaw1_link.stl`/`gripper_jaw2_link.stl`, not a
+shared/mirrored mesh), consistent with jaw2's STL being an incomplete
+export of the same fingertip shape jaw1 has.
+
+**Fix**: new `_fix_jaw2_collision_mesh_asymmetry()` in `scripts/build_asset.py`
+(wired into `main()`), copying jaw1's own mesh points/topology, transformed
+into jaw2's local frame via each mesh prim's live local-to-world transform,
+onto jaw2's mesh prim — with a standalone apply-without-rebuild script
+(`scripts/_apply_jaw2_collision_fix_standalone.py`) for applying it to an
+already-built asset. Two real bugs surfaced and fixed getting this to
+actually persist: (1) `Gf.Vec3fArray` doesn't exist in `pxr` — USD point
+arrays are `Vt.Vec3fArray`; (2) authoring directly onto the mesh prim threw
+`Cannot ... authoring to an instance proxy is not allowed` — the URDF
+importer marks every mesh's ancestor `instanceable=True`, so the edit had
+to walk up to the actual instance-root ancestor
+(`prim.IsInstance()==True`) and disable instancing there FIRST. A first
+attempt restored `instanceable=True` afterward "to not change the asset's
+performance characteristics" and this silently undid the entire fix — a
+fresh stage reopen still read jaw2's OLD (truncated) points, confirmed via
+`UsdAttribute.GetPropertyStack()` showing the winning opinion still came
+from `configuration/ar4_mk5_base.usd`, none from the edited root layer.
+Once instancing is restored, USD composes the whole subtree through the
+shared prototype again and ignores any per-instance opinion below it — the
+exact mechanism the "authoring to an instance proxy is forbidden" error
+exists to prevent. Fix: leave `instanceable=False` permanently on this one
+link's own collision-mesh subtree (no real cost — `gripper_jaw1/2_link.stl`
+are each referenced exactly once in this asset, so there was never any
+sharing to lose). **Re-verified after the fix**: raw point/face counts now
+MATCH exactly (1866/622 both jaws), hull volume/surface-area diff is
+0.000%, bbox size differs only by ~1e-7 to 1e-10 (float32 rounding noise).
+The diagnostic's own coarse verdict banner still printed "ASYMMETRIC"
+because hull vertex/face simplex counts differ (24/44 vs 35/66) — this is
+a qhull triangulation artifact of an equivalent shape (volume/area
+identical), not a real remaining difference; flagged as a known flaw in
+the diagnostic script's own verdict logic, not glossed over.
+
+**Hypothesis B — REFUTED. The sensor is real, correctly configured, and
+working; jaw2's own historical 0.0000N readings reflect genuine physical
+non-contact, not a sensor bug.** Static comparison of both
+`ContactSensorCfg` definitions
+(`tasks/ar4/pickplace_graspgoal_env_cfg.py`) found them structurally
+identical apart from `prim_path` (same `update_period`, `history_length`,
+`filter_prim_paths_expr=["{ENV_REGEX_NS}/Cube"]`) — no config-level
+asymmetry. Live confirmation, post-fix, at reach=0.36m/tilt=65°: jaw2
+registered a REAL, SUSTAINED (not transient) `~0.027N` contact force for
+all 60 steps of Phase 3 (CLOSE), while jaw1 read EXACTLY `0.0000N` at
+every single one of those same 60 steps — i.e. this task independently
+reproduced the asymmetric-contact signature, just with the roles flipped
+from the pre-fix historical pattern (previously jaw1 got contact, jaw2
+got zero; now jaw2 gets contact, jaw1 gets zero). This is itself strong,
+direct evidence the sensor mechanism is NOT broken: both jaws'
+identically-configured sensors have each independently demonstrated the
+ability to read a real, plausible, sustained nonzero force at different
+times (jaw1=0.34N pre-fix, jaw2=0.027N post-fix) — a broken/misconfigured
+sensor would not sporadically produce sensible, run-appropriate nonzero
+readings like this. **Visual confirmation gap, honestly flagged**: the
+task asked for a close-up video frame at the exact instant of asymmetric
+contact. Neither of `grasp_demo_v2.py`'s existing cameras (the wide
+external "demo" view, the wrist-angle "perception" view) resolves the
+12mm cube or jaw-cube contact clearly enough at their render distance/FOV
+to make a clean visual call, even cropped and upscaled 3-5x — this needs a
+dedicated close-up camera setup (like the one built specifically for
+`scripts/_record_jaw_fix_open_close_cycle.py`), which would be a further,
+separate cost/scope this task did not spend budget on. The numeric
+contact-force evidence above is treated as sufficient and more reliable
+per this project's own standing verification standard (Experiment 16:
+contact-force ground truth over eyeballed video), not treated as equally
+strong to a real visual confirmation that was never actually obtained.
+
+**Does the geometry fix produce a working grasp? No — two independent
+post-fix attempts, same negative signature as every prior session.** At
+reach=0.30m/tilt=65° (post-fix): BOTH jaws read exactly `0.0000N`
+throughout every logged step of CLOSE/hold (worse than the pre-fix
+capstone run's own brief one-sided `0.34N`, though consistent with the
+2026-07-24 convergence-tightening session's own finding that this exact
+signature is already known to be marginal/noisy at this precision level).
+At reach=0.36m/tilt=65° (post-fix): jaw2 sustained `~0.027N`, jaw1 exactly
+`0.0000N`, cube z flat at `0.0060m` throughout (no lift), cube xy shifted
+only `~3mm` (nudged, not lifted) — grasp_residual `9.65mm/5.01deg`,
+essentially identical to every pre-fix measurement at this same
+configuration (`9.38-9.43mm/5.6-6.7deg`). **This means the fix, while real
+and worth keeping, is NOT the dominant remaining blocker** — the ~9-10mm
+position / ~4-7deg rotation residual (this article's own already-documented
+2026-07-24 local-optimum-floor finding) remains large enough to swamp a
+2.8mm geometry correction; which single jaw (if either) happens to clip
+the cube at this residual appears to be decided by the fine details of the
+converged pose's residual rotation error, not by jaw geometry — directly
+consistent with, and now independently reinforcing, this article's own
+already-recorded "the residual ROTATION error is the more likely
+mechanism" explanation from the earlier same-day jaw-bisector session,
+rather than the jaw-geometry-asymmetry hypothesis this task set out to
+test.
+
+**A real, reproduced infrastructure bug, not fixed (out of this task's
+scope, flagged for whoever picks up cloud dispatch work next)**:
+`scripts/run_on_cloud_gpu.sh`'s blocking-mode SPOT-preemption-retry path
+(the exact code path `docs/cloud/dispatch-checklist.md` already flagged as
+"not yet independently live-fire tested against a real preemption") died
+completely silently on a real preemption this session — no error message,
+no exit output, `set -Eeuo pipefail`'s own EXIT trap fired (correctly
+tearing the instance down, confirmed via `scripts/check_cloud_state.sh` —
+no cost/resource leak) but gave zero diagnostic signal about which command
+actually failed. Root cause not isolated (a static re-read of every
+command between the two observed log lines found nothing that should trip
+`-e`, and reproducing it live again would cost more budget than this task
+had left) — worked around by using `--detach` mode instead (skips this
+whole retry loop) and polling/managing the instance directly via repeated
+`gcloud compute ssh` calls, which is now this task's own recommended
+pattern for future dispatches per `START_HERE.md`'s already-similar
+guidance. Also hit, and fixed live: the documented "fresh GCP DLVM boots
+with a broken NVIDIA driver, PhysX/CUDA falls back to software" gap
+(`docs/cloud/dispatch-checklist.md`'s known infra gaps) — `nvidia-smi`
+reported `Driver/library version mismatch` after the driver package
+upgraded during `apt-get install` but before a reboot loaded the matching
+kernel module; a plain `sudo reboot` (no `dpkg --configure -a` needed this
+time — `dpkg -l` showed no broken/`iF` package state, unlike the
+originally-documented incident) resolved it cleanly, confirmed via
+`nvidia-smi` and a subsequent grasp run with no more software-fallback
+warnings in the log.
+
+**Verdict on the task's own decision tree**: Hypothesis A found a real,
+fixed defect; Hypothesis B is refuted (sensor genuinely working, zero
+readings are real). Neither, once actually corrected/verified, resolves
+the underlying grasp-discoverability problem — reinforcing (not
+newly discovering) this article's own standing conclusion that AR4's
+remaining blocker is the classical-IK residual-orientation-error/
+local-optimum-floor problem this article's 2026-07-24 (earlier) sections
+already characterize, not an asset-geometry or sensor defect. Whether to
+invest further in a genuinely different IK/orientation-search methodology,
+or treat this as AR4's practical classical-IK ceiling and continue
+prioritizing Franka per the North Star, remains the controller-level call
+flagged at the end of this article's own prior UPDATE.
+
+**Cost**: ≈$0.6 against the $2 cap (three provisioning attempts — one lost
+to an SSH-readiness timeout, ≈$0.07; one lost to the
+`run_on_cloud_gpu.sh` preemption-retry bug above, ≈$0.08; one successful
+`--detach`-dispatched instance carrying the actual work, ≈$0.44 across
+~1.1hr uptime including the mid-session reboot). Full teardown confirmed
+(`scripts/check_cloud_state.sh`: zero instances/disks/snapshots). Two
+close-up still frames (pre-crop and cropped/upscaled) saved to this
+session's own scratchpad, not the repo — the source `.mp4` videos were not
+synced off the instance before teardown (an oversight; the ad hoc direct-
+SSH diagnostic runs this task added mid-session, unlike the original
+`scripts/_cloud_ar4_jaw_hull_and_contact_check.sh` dispatch, had no GCS
+sync step) and are unrecoverable now — flagged honestly rather than
+omitted.
+
+**Sources**: this session's own live cloud runs (`~/jaw_hull_check_v3.log`,
+`~/jaw2_collision_fix_v4.log`, `~/edit_target_debug.log`/`~/edit_target_debug2.log`,
+`~/grasp_jawfix_run.log`, `~/grasp_jawfix_run2.log` on the now-deleted
+instance — key lines quoted above), `ar_gripper_macro.xacro` (vendor URDF,
+confirmed via the public GitHub mirror), this article's own 2026-07-23/
+2026-07-24 UPDATEs for the pre-fix baseline this session's numbers are
+compared against.

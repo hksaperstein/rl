@@ -375,6 +375,43 @@ Roughly in the order they'd likely be picked up:
    classical-IK ceiling and prioritize the already-working Franka
    platform per the North Star.
 
+   **Jaw collision-mesh asymmetry FOUND AND FIXED (2026-07-24 later,
+   ar4-jaw-contact-sensor-hypothesis task) — a real, quantified geometric
+   defect, but fixing it did NOT resolve the grasp problem; contact-sensor
+   hypothesis REFUTED (sensor genuinely working).** Direct extraction of
+   both jaws' actual collision-mesh points found jaw2's mesh is missing
+   exactly the bottom 2.8mm of its own z-range vs jaw1's (1782 vs 1866
+   points, 4.1% smaller hull volume) — a real vendor-STL truncation
+   (`gripper_jaw2_link.stl` is its own separate file from
+   `gripper_jaw1_link.stl`, not a mirrored reference), not previously
+   quantified. Fixed: new `_fix_jaw2_collision_mesh_asymmetry()` in
+   `scripts/build_asset.py`, copying jaw1's mesh onto jaw2's, transformed
+   into jaw2's local frame (two real USD bugs hit and fixed getting this to
+   actually persist: `Gf.Vec3fArray` doesn't exist, and authoring onto an
+   instance proxy required permanently disabling `instanceable` on the
+   instance-root ancestor — a first attempt that restored it afterward
+   silently undid the whole fix). Post-fix, raw point/face counts and hull
+   volume/area now match to floating-point noise. Contact-sensor config
+   confirmed structurally identical between jaw1/jaw2, and a live post-fix
+   run independently reproduced a REAL sustained (60/60 steps) nonzero
+   contact force (jaw2=0.027N, jaw1=exactly 0.0000N at reach=0.36m/tilt=65°)
+   — proving the sensor mechanism itself works correctly (a broken sensor
+   wouldn't sporadically produce sensible, run-appropriate readings). **But
+   the fix did not produce a working grasp**: same configuration's own
+   grasp_residual (9.65mm/5.01°) is essentially unchanged from every
+   pre-fix measurement, and the cube still isn't lifted (nudged ~3mm only)
+   — reinforcing, not overturning, the already-established conclusion that
+   the ~9-10mm/~4-7° local-optimum-floor residual (immediately above) is
+   the actual dominant blocker, with the residual rotation error (not jaw
+   geometry) deciding which single jaw happens to register contact. Full
+   detail: `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s
+   2026-07-24 (later, ar4-jaw-contact-sensor-hypothesis) UPDATE — includes
+   a reproduced, unresolved `run_on_cloud_gpu.sh` blocking-preemption-retry
+   bug (worked around via `--detach`, not fixed) and a visual-confirmation
+   gap (existing cameras don't resolve the 12mm cube clearly enough;
+   numeric contact-force evidence used instead, per this project's own
+   Experiment-16 verification standard). Cost ≈$0.6 against the $2 cap.
+
 See `BACKLOG.md` for further-out candidates not yet on this list.
 
 ## Recently landed

@@ -412,6 +412,43 @@ Roughly in the order they'd likely be picked up:
    numeric contact-force evidence used instead, per this project's own
    Experiment-16 verification standard). Cost ≈$0.6 against the $2 cap.
 
+   **Full arm-chain FK check (2026-07-24 later still, ar4-arm-chain-fk-check
+   task): the ARM's own kinematic chain (link_1..link_6, distinct from the
+   already-verified gripper) checks out CLEAN against the vendor URDF —
+   rules out an asset-import defect as the cause of the standing residual,
+   and the canonical antipodal-grasp target definition is independently
+   confirmed mathematically sound too.** Extended the standing FK-
+   verification framework's Layer 1 check
+   (`tasks/ar4/fk_verification.py`, previously only exercised against the
+   gripper jaws) across every arm link at HOME_Q, the actual best-known
+   converged PREGRASP_Q/GRASP_Q (65°/0.36m), and a synthetic all-joints-
+   nontrivial stress config, at a tight 1.0mm tolerance. **Result: PASS at
+   every link/config — largest discrepancy 0.0003mm (four orders of
+   magnitude below the ~9-10mm residual)**, ruling out a wrong joint
+   origin/axis anywhere in the chain as the explanation. Also directly
+   verified `scripts/grasp_demo_v2.py`'s canonical target-orientation math
+   is a geometrically sound antipodal-grasp target (jaw-slide axis fixed at
+   world +Y regardless of tilt, passing exactly through the cube's own
+   live-read center; cube spawns world-axis-aligned with no orientation
+   randomization in this env cfg) — no defect found there either. **With
+   the gripper geometry, contact-sensing pipeline, arm kinematic chain, and
+   grasp-target definition all now independently verified correct, this
+   investigation has exhausted every asset/target-definition hypothesis it
+   has generated** — the ~9-10mm/~4-7° residual is a genuine classical-
+   scripted-IK precision/local-optimum limit at this arm's own
+   joint_3-constrained low-grasp-height reachability envelope, not a
+   findable bug. New `scripts/_verify_arm_chain_fk_integration.py`
+   (kept, standing check). Two cloud-infra snags hit and worked around
+   (an uncommitted-files shipping gap, a camera-enabled scene hanging on
+   RTX warmup — fixed by dropping the unneeded cameras from the check's
+   scene). Cost ≈$0.38 against the $2 cap. Full detail:
+   `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s 2026-07-24
+   (later still) UPDATE. **Next step flagged to Principal, unchanged**:
+   invest in a genuinely different orientation/grasp-planning methodology
+   (Tier 1 territory) or treat this as AR4's practical classical-IK
+   ceiling and prioritize the already-working Franka platform per the
+   North Star.
+
 See `BACKLOG.md` for further-out candidates not yet on this list.
 
 ## Recently landed

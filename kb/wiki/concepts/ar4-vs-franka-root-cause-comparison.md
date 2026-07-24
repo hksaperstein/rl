@@ -2679,3 +2679,166 @@ instance — key lines quoted above), `ar_gripper_macro.xacro` (vendor URDF,
 confirmed via the public GitHub mirror), this article's own 2026-07-23/
 2026-07-24 UPDATEs for the pre-fix baseline this session's numbers are
 compared against.
+
+## UPDATE 2026-07-24 (later still, ar4-arm-chain-fk-check task): the ARM's own kinematic chain (link_1..link_6, as distinct from the already-verified gripper) checks out CLEAN against the vendor URDF — the standing ~9-10mm/~4-7deg residual is NOT an asset-import defect
+
+Dispatched with the standing framework's own Layer 1 check
+(`tasks/ar4/fk_verification.py`'s `assert_link_pose_matches_vendor_fk`,
+built 2026-07-23 but never previously exercised against anything but the
+gripper jaws) extended across every arm link, to directly test the one
+thing this whole investigation had assumed rather than verified: that the
+built USD asset's own joint origins/axes for joints 1-6 actually match the
+vendor's raw URDF/xacro. Motivation: with the gripper geometry and
+contact-sensing pipeline both independently confirmed correct in the
+immediately-prior sessions, a wrong joint origin at an early joint
+(joint_2/joint_3) compounding through 3-4 downstream links to link_6 was
+the one remaining candidate that could explain a residual no amount of
+IK-solver tuning (this article's own 2026-07-24 ar4-grasp-ik-convergence-
+tightening UPDATE above) could ever fix — the solver would be correctly
+solving for the WRONG kinematic model.
+
+**New `scripts/_verify_arm_chain_fk_integration.py`** (live Isaac Sim
+integration check, mirrors the existing `scripts/_verify_gripper_fk_integration.py`
+pattern) settles the real articulation at four joint configurations —
+`HOME_Q` (all-zero), the best-known converged `PREGRASP_Q`/`GRASP_Q` (taken
+directly from the 2026-07-24 convergence-tightening task's own `[SUMMARY]`
+log line, reach=0.36m/tilt=65deg, not a hand-picked value), and a synthetic
+`STRESS_Q` with a non-trivial value on every joint (to avoid a near-zero
+joint value on any one config masking a defect on that joint's own
+downstream link) — and for each, reads every arm link's (`link_1`..`link_6`)
+live world-frame pose, converts it into the robot's own `base_link` frame,
+and compares against `fk_verification.py`'s independent vendor-URDF FK
+prediction for the identical joint values, at a tight 1.0mm tolerance (vs.
+the existing gripper check's looser 5.0mm — this task specifically wanted
+to catch a "few mm at an early joint" defect).
+
+**Result: PASS at every link, every configuration — largest discrepancy
+observed across all 24 (4 configs x 6 links) checks was 0.0003mm**, at
+link_5/link_6 in the GRASP_Q and PREGRASP_Q configurations — four orders of
+magnitude below the ~9-10mm residual this investigation has been trying to
+explain, and consistent with pure floating-point noise, not a real
+defect. Full table (pos_discrepancy_mm / rot_discrepancy_rad, all PASS):
+
+| Config | link_1 | link_2 | link_3 | link_4 | link_5 | link_6 |
+|---|---|---|---|---|---|---|
+| HOME_Q | 0.0000/0.00000 | 0.0001/0.00094 | 0.0000/0.00085 | 0.0000/0.00021 | 0.0001/0.00000 | 0.0001/0.00055 |
+| PREGRASP_Q | 0.0000/0.00029 | 0.0001/0.00000 | 0.0001/0.00014 | 0.0001/0.00000 | 0.0003/0.00000 | 0.0003/0.00054 |
+| GRASP_Q (65deg/0.36m) | 0.0000/0.00000 | 0.0000/0.00000 | 0.0002/0.00000 | 0.0002/0.00038 | 0.0003/0.00000 | 0.0003/0.00077 |
+| STRESS_Q | 0.0000/0.00000 | 0.0000/0.00067 | 0.0001/0.00083 | 0.0001/0.00000 | 0.0001/0.00045 | 0.0001/0.00054 |
+
+**This directly, conclusively rules out an arm-chain asset-import defect
+as the explanation for the standing residual.** The built USD asset's arm
+kinematic chain matches the vendor's own raw URDF/xacro to floating-point
+precision at the actual configuration (`GRASP_Q`) underlying the real
+residual, not just at an idealized or simplified test config — including
+`GRASP_Q`'s own live-settled joint values, which differ meaningfully from
+the seed values due to the arm's real (boosted, test-local-only) actuator
+dynamics, confirming this is a genuine live-Isaac-Sim check, not a
+tautological self-comparison.
+
+**Infrastructure notes, two real bugs found and fixed getting a clean run:**
+
+1. **The first cloud dispatch shipped an EMPTY version of both new files**
+   — `git archive HEAD` (the shipping mechanism `scripts/run_on_cloud_gpu.sh`
+   uses) only ships committed content; both new scripts had been written
+   but not yet `git add`/`git commit`ed before the first dispatch, so the
+   remote instance's `~/rl/scripts/` simply didn't have them
+   (`bash: scripts/_cloud_ar4_arm_chain_fk_check.sh: No such file or
+   directory`, exit 127). Fixed by committing before dispatching — a
+   process-discipline gap (commit-before-dispatch), not a bug in the
+   dispatch tooling itself.
+2. **The integration script itself first crashed with `RuntimeError: A
+   camera was spawned without the --enable_cameras flag`** —
+   `Ar4GraspVerifyEnvCfg`'s scene (shared with `grasp_demo_v2.py`, which
+   *does* pass `--enable_cameras` for its own video recording) includes two
+   cameras this check never needed. Passing `--enable_cameras` to fix the
+   crash instead made `env.reset()` hang for 10+ minutes on a fresh cloud
+   instance (confirmed genuinely stalled, not crashed, via `nvidia-smi`/`ps`
+   showing real but stuck CPU activity and near-zero GPU utilization — a
+   real RTX render-pipeline/shader-compile warmup cost, not a bug in this
+   task's own logic). Fixed by dropping both cameras from the scene
+   entirely before env creation (`env_cfg.scene.perception_camera = None`;
+   `env_cfg.scene.demo_camera = None` — the same pattern already used by
+   `scripts/plot_arm_skeleton.py` for an analogous camera-free diagnostic)
+   rather than paying the camera-warmup cost for a check that never needed
+   camera output. Also hit, mid-session, the already-documented "fresh GCP
+   DLVM boots with a broken NVIDIA driver, PhysX/CUDA falls back to
+   software" gap (`docs/cloud/dispatch-checklist.md`'s known infra gaps)
+   and a genuine SPOT preemption on a separate provisioning attempt
+   (confirmed via `gcloud compute operations list` showing a real
+   `compute.instances.preempted` event) that could not be resumed in the
+   same zone (a subsequent `gcloud compute instances start` hit a
+   `configuration_availability` stockout in that same zone) — worked around
+   by deleting and re-provisioning fresh in a different zone rather than
+   waiting on that zone's capacity to return.
+
+**What this means for the standing investigation.** With the gripper
+geometry (jaw-mimic limits, jaw2 drive, jaw2 collision-mesh asymmetry), the
+contact-sensing pipeline, AND now the entire arm kinematic chain all
+independently verified correct against ground truth (vendor URDF or direct
+measurement), this investigation has exhausted every asset-geometry
+hypothesis it has generated. The final remaining candidate this task's own
+instructions named — whether the canonical target orientation itself
+(`_build_canonical_target_quat_w`/`_build_canonical_target_quat_b` in
+`scripts/grasp_demo_v2.py`) is even a mathematically sound antipodal-grasp
+target, independent of whether the solver reaches it — was checked directly
+(no further Isaac Sim/cloud cost needed, pure geometric reasoning against
+already-committed code and scene configuration) and found sound: the
+jaw-slide axis (local +X) is held at a FIXED world heading (`(0,1,0)`)
+regardless of `tilt_deg`, so the two jaws always close along world +Y
+exactly through the cube's own live-read center
+(`grasp_pos_b = cube_pos_b.clone(); grasp_pos_b[:, 2] = GRASP_AT_HEIGHT` —
+`tasks/ar4/objects_cfg.py`'s `CUBE_CFG` has no `rot` override, i.e. spawns
+perfectly world-axis-aligned, and `Ar4GraspVerifyEnvCfg` has no `events`
+field to randomize it away from that — confirmed by direct code read) —
+world +Y is guaranteed perpendicular to a genuine flat pair of the cube's
+own opposing faces, well within the ~28mm gripper aperture for a 12mm cube.
+`GRASP_AT_HEIGHT=0.009` sits 3mm above the cube's resting center (0.006)
+and 3mm below its top face (0.012), a physically sensible mid-height pinch
+point. The frame-construction code also self-checks orthonormality/
+right-handedness at every call (assertions that have never fired in any
+prior session). **No defect found in the target definition either** — the
+intended antipodal-grasp target is mathematically well-posed; the
+already-established ~9-10mm/~4-7deg residual really is the solver failing
+to REACH a genuinely correctly-specified target, not evidence the target
+itself is wrong.
+
+**Honest final state, as instructed if the chain checked out clean**: the
+arm's own geometry is now provably correct (to floating-point precision, at
+the exact real-use configuration), the gripper geometry and contact-sensing
+pipeline were already independently verified correct in prior sessions, and
+the antipodal-grasp target definition is independently confirmed
+geometrically sound. Every asset-level and target-definition hypothesis
+this investigation has generated has now been checked and found NOT to be
+the cause. The remaining ~9-10mm position / ~4-7deg rotation residual at
+this arm's best-reachable configuration for this specific low grasp height
+is, on the full weight of evidence gathered across this investigation's
+many sessions (solver-iteration-budget test, neighborhood search, jaw
+bisector check, contact-sensor check, jaw-geometry check, and now this
+full-chain FK check), a genuine kinematic-reachability/local-optimum
+precision limit of AR4's own classical-scripted-IK approach at this
+specific low grasp height and this specific arm's joint_3 range — not a
+findable bug. Whether to invest in a genuinely different orientation/
+grasp-planning methodology (Tier 1 territory) or treat this as AR4's
+practical classical-IK ceiling and prioritize the already-working Franka
+platform per the North Star remains the controller-level call this
+article has flagged at the end of several prior sections.
+
+**Cost**: ≈$0.38 against the $2 cap (three provisioning attempts — one lost
+to the uncommitted-files process gap above, ≈$0.03; one lost to a genuine
+SPOT preemption plus a same-zone restart stockout, ≈$0.10; one successful
+run carrying the actual asset build + full-chain check, ≈$0.25, including a
+mid-session `gcloud compute instances reset` to clear the driver-mismatch
+gap). Full teardown confirmed (`scripts/check_cloud_state.sh`: zero
+instances/disks/snapshots). Raw log
+(`gs://rl-manipulation-hks-runs/ar4-arm-chain-fk-check/`) synced before
+teardown.
+
+**Sources**: this session's own live cloud run (full log synced to GCS,
+key lines quoted above), `tasks/ar4/fk_verification.py`'s own existing,
+already-verified vendor-URDF joint table (no changes needed), direct reads
+of `scripts/grasp_demo_v2.py`'s `_build_canonical_target_quat_w`/`_build_canonical_target_quat_b`/
+`_CANONICAL_*_AXIS_W` and `tasks/ar4/objects_cfg.py`'s `CUBE_CFG` for the
+target-orientation-correctness check, this article's own 2026-07-24
+(earlier) UPDATEs for the residual baseline this session's clean result is
+checked against.

@@ -160,7 +160,9 @@ class Ar4PickPlaceGraspGoalSceneCfg(InteractiveSceneCfg):
     )
     robot: ArticulationCfg = AR4_MK5_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
     cube: RigidObjectCfg = CUBE_CFG.replace(
-        init_state=RigidObjectCfg.InitialStateCfg(pos=(0.20, 0.28, 0.006)),
+        # 20mm cube (bumped from 12mm 2026-07-24, see CUBE_CFG's own
+        # docstring in objects_cfg.py) - resting z = half the new size.
+        init_state=RigidObjectCfg.InitialStateCfg(pos=(0.20, 0.28, 0.010)),
         spawn=CUBE_CFG.spawn.replace(
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
                 disable_gravity=False,
@@ -198,7 +200,8 @@ class Ar4PickPlaceGraspGoalSceneCfg(InteractiveSceneCfg):
     # Upper-arm-only ground/self collision safety sensor - deliberately
     # excludes gripper_jaw1_link/gripper_jaw2_link and link_6 (the wrist),
     # which legitimately approach the ground plane (cube rests at
-    # z=0.006) to reach the cube. Body names confirmed via direct
+    # z=0.010, 20mm cube as of 2026-07-24) to reach the cube. Body names
+    # confirmed via direct
     # robot.data.body_names introspection (this project's own convention -
     # see scripts/smoke_test_graspgoal_ground_penalty.py, which printed
     # the live body list: ['world', 'base_link', 'link_1'..'link_5',

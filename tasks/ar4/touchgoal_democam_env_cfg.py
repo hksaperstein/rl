@@ -24,7 +24,8 @@ from isaaclab.utils.configclass import configclass
 from .pickplace_touchgoal_env_cfg import Ar4PickPlaceTouchGoalEnvCfg, Ar4PickPlaceTouchGoalSceneCfg
 
 # Eye (0.30, 0.95, 0.75) looking at (0.0, 0.28, 0.078) in world frame - the
-# midpoint between the cube's touch point (0.20, 0.28, 0.006+~0) and the fixed
+# midpoint between the cube's touch point (0.20, 0.28, 0.010+~0, 20mm cube
+# as of 2026-07-24) and the fixed
 # goal point (-0.20, 0.28, 0.15), ~0.995m away (vs. the original ~0.606m) -
 # higher and further back than the first attempt, which was low and close
 # enough to catch an overexposed horizon/sky and a neighboring env's arm in

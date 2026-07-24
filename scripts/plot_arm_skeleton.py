@@ -204,8 +204,9 @@ def main() -> None:
         ax.scatter([ee_target_pos[0]], [ee_target_pos[1]], [ee_target_pos[2]], c="red", s=100, marker="*", label="EE target (pinch point)")
         ax.text(ee_target_pos[0], ee_target_pos[1], ee_target_pos[2], "  EE_target", fontsize=8, color="red")
 
-        # Plot cube position with size indicator (~12mm = 0.006m half-size)
-        cube_half_size = 0.006  # meters
+        # Plot cube position with size indicator (~20mm = 0.010m half-size,
+        # bumped from 12mm 2026-07-24, tasks/ar4/objects_cfg.py)
+        cube_half_size = 0.010  # meters
         ax.scatter([cube_pos[0]], [cube_pos[1]], [cube_pos[2]], c="orange", s=150, marker="^", label="Cube (center)")
         ax.text(cube_pos[0], cube_pos[1], cube_pos[2], "  cube", fontsize=8, color="orange")
 

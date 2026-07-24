@@ -121,16 +121,18 @@ class Ar4GraspVerifySceneCfg(Ar4PickPlaceMirrorSceneCfg):
     # 2026-07-24 (ar4-closeup-grasp-video task): a THIRD camera, distinct
     # from both perception_camera (tuned for object detection, tight but
     # fixed to the resting/vertical pose) and demo_camera (wide 3/4 view,
-    # never resolves the 12mm cube clearly per this project's own standing
-    # finding - kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md's
-    # 2026-07-24 ar4-jaw-contact-sensor-hypothesis UPDATE). Always present
+    # never resolves the (then-)12mm cube clearly per this project's own
+    # standing finding - kb/wiki/concepts/ar4-vs-franka-root-cause-
+    # comparison.md's 2026-07-24 ar4-jaw-contact-sensor-hypothesis UPDATE
+    # (cube bumped to 20mm 2026-07-24, ar4-cube-size-increase task, partly
+    # to address this same visibility gap). Always present
     # in the scene (harmless/unused when not recorded) so
     # scripts/grasp_demo_v2.py's --closeup-camera flag can reposition and
     # record it without a scene-cfg-level conditional. Narrower aperture
     # (20.955mm, the PinholeCameraCfg default - left unset here, same as
     # _record_jaw_fix_open_close_cycle.py's own close-up camera) combined
     # with a longer focal_length than demo_camera's wide-view 18mm gives a
-    # tighter FOV appropriate for resolving a 12mm cube's contact with the
+    # tighter FOV appropriate for resolving the cube's contact with the
     # jaw fingertips at close range.
     closeup_camera: CameraCfg = CameraCfg(
         prim_path="{ENV_REGEX_NS}/CloseupCamera",

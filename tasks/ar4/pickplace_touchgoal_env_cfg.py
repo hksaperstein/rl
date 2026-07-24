@@ -47,12 +47,18 @@ from .robot_cfg import ARM_JOINT_NAMES, AR4_MK5_CFG
 
 # Fixed goal point, expressed as an offset from the cube's own (also
 # fixed) spawn position so per-env world placement stays correct without
-# a separate randomization buffer: cube world (0.20, 0.28, 0.006) + this
+# a separate randomization buffer: cube world (0.20, 0.28, 0.010) + this
 # offset = world (-0.20, 0.28, 0.15) - mirrored across the cube in X,
 # elevated clear of the ground plane.
+# NOTE (2026-07-24): this task is part of the CLOSED AR4 grasp-
+# discoverability research arc (Experiments 1-26, see ROADMAP.md's
+# "Recently landed"), not the active classical-IK grasp-demo path - but
+# CUBE_CFG is a shared constant (objects_cfg.py) so this file's own
+# derived CUBE_HALF_SIZE/init_state z were updated too for consistency
+# with the 12mm->20mm cube-size change, per direct user decision.
 GOAL_OFFSET = (-0.40, 0.0, 0.144)
 
-CUBE_HALF_SIZE = 0.006  # meters (12mm cube, tasks/ar4/objects_cfg.py)
+CUBE_HALF_SIZE = 0.010  # meters (20mm cube as of 2026-07-24, tasks/ar4/objects_cfg.py)
 TOUCH_STD = 0.05
 TOUCH_TOLERANCE = 0.02
 TOUCH_TO_GOAL_DIST = math.sqrt(GOAL_OFFSET[0] ** 2 + GOAL_OFFSET[1] ** 2 + (GOAL_OFFSET[2] - CUBE_HALF_SIZE) ** 2)
@@ -80,7 +86,7 @@ class Ar4PickPlaceTouchGoalSceneCfg(InteractiveSceneCfg):
     )
     robot: ArticulationCfg = AR4_MK5_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
     cube: RigidObjectCfg = CUBE_CFG.replace(
-        init_state=RigidObjectCfg.InitialStateCfg(pos=(0.20, 0.28, 0.006)),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=(0.20, 0.28, 0.010)),
     )
 
     ee_frame: FrameTransformerCfg = FrameTransformerCfg(

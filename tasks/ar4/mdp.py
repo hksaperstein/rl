@@ -369,7 +369,7 @@ def _raw_touch_goal_progress(
     env: ManagerBasedRLEnv,
     object_cfg: SceneEntityCfg,
     ee_frame_cfg: SceneEntityCfg,
-    cube_half_size: float = 0.006,
+    cube_half_size: float = 0.010,
     touch_std: float = 0.05,
     touch_tolerance: float = 0.02,
     touch_to_goal_dist: float = 0.4231,
@@ -412,7 +412,7 @@ def touch_goal_milestone_bonus(
     env: ManagerBasedRLEnv,
     object_cfg: SceneEntityCfg,
     ee_frame_cfg: SceneEntityCfg,
-    cube_half_size: float = 0.006,
+    cube_half_size: float = 0.010,
     touch_std: float = 0.05,
     touch_tolerance: float = 0.02,
     touch_to_goal_dist: float = 0.4231,
@@ -448,7 +448,7 @@ def touch_then_goal_reached(
     threshold: float,
     object_cfg: SceneEntityCfg,
     ee_frame_cfg: SceneEntityCfg,
-    cube_half_size: float = 0.006,
+    cube_half_size: float = 0.010,
     touch_tolerance: float = 0.02,
 ) -> torch.Tensor:
     """Termination: end-effector within threshold of env._touch_goal_pos_w
@@ -526,7 +526,7 @@ def _grasp_lift_state(
         env._grasped = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
     env._grasped |= antipodal_now
 
-    cube_height_above_ground = object.data.root_pos_w[:, 2] - 0.006  # cube half-size, resting height
+    cube_height_above_ground = object.data.root_pos_w[:, 2] - 0.010  # cube half-size, resting height (20mm cube as of 2026-07-24)
     if not hasattr(env, "_lifted"):
         env._lifted = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
     env._lifted |= env._grasped & (cube_height_above_ground > lift_minimal_height)
@@ -561,7 +561,7 @@ def grasp_goal_milestone_bonus(
     )
 
     reach_dist = torch.norm(ee_pos_w - object.data.root_pos_w, dim=-1)
-    cube_height_above_ground = object.data.root_pos_w[:, 2] - 0.006
+    cube_height_above_ground = object.data.root_pos_w[:, 2] - 0.010  # 20mm cube as of 2026-07-24
 
     if not hasattr(env, "_cube_goal_pos_w"):
         env._cube_goal_pos_w = torch.zeros(env.num_envs, 3, device=env.device)
@@ -1382,7 +1382,7 @@ def grasp_lift_goal_milestone_bonus(
         force_threshold, antipodal_cos_threshold, lift_minimal_height,
     )
 
-    cube_height_above_ground = object.data.root_pos_w[:, 2] - 0.006
+    cube_height_above_ground = object.data.root_pos_w[:, 2] - 0.010  # 20mm cube as of 2026-07-24
 
     if not hasattr(env, "_cube_goal_pos_w"):
         env._cube_goal_pos_w = torch.zeros(env.num_envs, 3, device=env.device)

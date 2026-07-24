@@ -400,7 +400,7 @@ VIDEO_PATH = os.path.join(LOG_DIR, "videos", f"ar4_grasp_demo_v2{_video_suffix}.
 # EE-offset bugs documented in this module's docstring above - this one
 # alone was sufficient by itself to guarantee the gripper never got near the
 # cube, regardless of how precise the IK solve was). Height kept at 3mm above
-# the cube's true resting z=0.006 (matching the pre-existing GRASP_AT_HEIGHT
+# the cube's true resting z (matching the pre-existing GRASP_AT_HEIGHT
 # convention, not touched here).
 #
 # NOTE (2026-07-22, orientation-fix task): no longer read directly by
@@ -409,7 +409,12 @@ VIDEO_PATH = os.path.join(LOG_DIR, "videos", f"ar4_grasp_demo_v2{_video_suffix}.
 # documentation of the scene's own default spawn point now, kept because
 # its value still matches that default and its docstring above is useful
 # history.
-CUBE_POS_W = (0.0, 0.275, 0.009)
+#
+# NOTE (2026-07-24, ar4-cube-size-increase task): cube bumped 12mm->20mm
+# (tasks/ar4/objects_cfg.py's CUBE_CFG), so the scene's own resting z moved
+# 0.006->0.010; updated here to match (still +3mm convention, purely
+# informational per the above).
+CUBE_POS_W = (0.0, 0.275, 0.013)
 PREGRASP_HOVER = 0.05
 # NOTE (2026-07-22): tried lowering this to -0.001 to compensate for the
 # verified best GRASP_Q basin's ~10mm Z-height shortfall (its fingertip
@@ -431,7 +436,13 @@ PREGRASP_HOVER = 0.05
 # there, unlike the default 27.5cm/closer 20cm positions - where
 # compensating is worth an independent retry rather than assuming the
 # earlier position-only finding still applies).
-GRASP_AT_HEIGHT = args_cli.grasp_height if args_cli.grasp_height is not None else 0.009
+#
+# NOTE (2026-07-24, ar4-cube-size-increase task): default bumped 0.009->
+# 0.013 to track the cube's own resting-height change (0.006->0.010, 12mm
+# ->20mm cube) - same +3mm-above-resting convention as before, not a new
+# empirical finding for the bigger cube. Still overridable via
+# --grasp-height.
+GRASP_AT_HEIGHT = args_cli.grasp_height if args_cli.grasp_height is not None else 0.013
 GRIPPER_OPEN = 1.0
 GRIPPER_CLOSE = -1.0
 HOME_Q = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
@@ -1127,7 +1138,8 @@ def _compute_closeup_camera(jaw1_pos, jaw2_pos, cube_pos, standoff=0.15, z_lift=
     """2026-07-24 (ar4-closeup-grasp-video task): given LIVE-MEASURED
     (never guessed) jaw1/jaw2/cube world positions at the settled GRASP_Q
     pose, return (eye, target) for a close-up camera tight enough to
-    resolve the 12mm cube and both jaw fingertips.
+    resolve the cube (20mm as of 2026-07-24, was 12mm) and both jaw
+    fingertips.
 
     target = midpoint between the gripper's own pinch point (jaw1/jaw2
     midpoint) and the cube's center - these should nearly coincide at a

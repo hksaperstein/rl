@@ -66,7 +66,7 @@ REFINE_MAX_ROUNDS = 4
 REFINE_SETTLE_TIME_S = 60 / 120
 REFINE_TOL = 0.0025
 
-CUBE_HALF_SIZE = 0.010  # meters (20mm cube as of 2026-07-24, tasks/ar4/objects_cfg.py)
+CUBE_HALF_SIZE = 0.0075  # meters (15mm cube as of 2026-07-24, tasks/ar4/objects_cfg.py)
 GRASP_CLEARANCE = 0.003
 GRASP_HEIGHT_OFFSET = CUBE_HALF_SIZE + GRASP_CLEARANCE
 

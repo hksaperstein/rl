@@ -101,9 +101,10 @@ class Ar4PickPlaceMirrorSceneCfg(InteractiveSceneCfg):
     # reset_cube_position's pose_range in EventCfg below can cover the
     # full _WORKSPACE_X/_WORKSPACE_Y range symmetrically - CUBE_CFG
     # itself (objects_cfg.py) is unchanged; .replace() returns a new cfg.
-    # Using the 20mm cuboid size (bumped from 12mm 2026-07-24, see
-    # CUBE_CFG's own docstring in objects_cfg.py for rationale).
-    # Resting height (pos z) set to 0.010 to match the 20mm cube size
+    # Using the 15mm cuboid size (bumped 12mm->20mm->15mm, both changes
+    # 2026-07-24, see CUBE_CFG's own docstring in objects_cfg.py for
+    # rationale).
+    # Resting height (pos z) set to 0.0075 to match the 15mm cube size
     # so it sits properly on the ground plane.
     # Solver iteration counts boosted to match Isaac Lab's own Franka
     # lift-task cube recipe (solver_position_iteration_count=16,
@@ -112,7 +113,7 @@ class Ar4PickPlaceMirrorSceneCfg(InteractiveSceneCfg):
     # rigid-body properties (disable_gravity, mass, collision) come from
     # CUBE_CFG's own spawn config, unchanged.
     cube: RigidObjectCfg = CUBE_CFG.replace(
-        init_state=RigidObjectCfg.InitialStateCfg(pos=(0.0, 0.275, 0.010)),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=(0.0, 0.275, 0.0075)),
         spawn=CUBE_CFG.spawn.replace(
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
                 disable_gravity=False,

@@ -12,14 +12,15 @@ from tasks.ar4.touch_goal_reward import touch_goal_progress
 TOUCH_STD = 0.05
 # Derived the same way pickplace_touchgoal_env_cfg.py computes
 # TOUCH_TO_GOAL_DIST (from GOAL_OFFSET=(-0.40, 0.0, 0.144) and
-# CUBE_HALF_SIZE=0.010, 20mm cube as of 2026-07-24, was 0.006/12mm)
-# rather than a hardcoded literal, so this can't silently drift apart
-# from the production value if either constant changes. NOTE: this is a
-# manually-duplicated literal, not an import - it must be kept in sync
-# by hand whenever tasks/ar4/pickplace_touchgoal_env_cfg.py's own
-# CUBE_HALF_SIZE changes (as it just did).
+# CUBE_HALF_SIZE=0.0075, 15mm cube as of 2026-07-24, was 0.010/20mm before
+# that and 0.006/12mm originally) rather than a hardcoded literal, so this
+# can't silently drift apart from the production value if either constant
+# changes. NOTE: this is a manually-duplicated literal, not an import - it
+# must be kept in sync by hand whenever
+# tasks/ar4/pickplace_touchgoal_env_cfg.py's own CUBE_HALF_SIZE changes (as
+# it just did).
 _GOAL_OFFSET = (-0.40, 0.0, 0.144)
-_CUBE_HALF_SIZE = 0.010
+_CUBE_HALF_SIZE = 0.0075
 TOUCH_TO_GOAL_DIST = math.sqrt(_GOAL_OFFSET[0] ** 2 + _GOAL_OFFSET[1] ** 2 + (_GOAL_OFFSET[2] - _CUBE_HALF_SIZE) ** 2)
 
 

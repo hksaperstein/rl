@@ -38,20 +38,23 @@ def _check_wedge_usd_exists() -> str:
 CUBE_CFG = RigidObjectCfg(
     prim_path="{ENV_REGEX_NS}/Cube",
     # 2026-07-24 (ar4-cube-size-increase task, direct user decision): bumped
-    # from 12mm to 20mm. Rationale: the ~9-10mm classical-IK positioning
-    # residual (see kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md)
-    # means only one gripper jaw reliably reaches the cube; a bigger cube
-    # gives both jaws more surface area to reach despite the same residual.
-    # Also directly addresses a separate, standing visual-confirmation gap
+    # from 12mm to 20mm, then to 15mm (also 2026-07-24, mirrors the same
+    # decision process). Rationale for the original 12mm->20mm bump: the
+    # ~9-10mm classical-IK positioning residual (see
+    # kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md) means only
+    # one gripper jaw reliably reaches the cube; a bigger cube gives both
+    # jaws more surface area to reach despite the same residual. Also
+    # directly addressed a separate, standing visual-confirmation gap
     # (existing cameras don't resolve the 12mm cube clearly at render
     # distance - ROADMAP.md's 2026-07-24 ar4-jaw-contact-sensor-hypothesis
-    # entry). Gripper max aperture is ~28mm (see module docstring), so 20mm
-    # still fits with 4mm clearance per side (tighter than the old 12mm
-    # cube's 8mm clearance, but physically valid). init_state pos z is half
-    # the new size (0.010) so the cube still rests exactly on the table.
-    init_state=RigidObjectCfg.InitialStateCfg(pos=(0.20, 0.28, 0.010)),
+    # entry). Gripper max aperture is ~28mm (see module docstring), so 15mm
+    # still fits with 6.5mm clearance per side (looser than 20mm's 4mm,
+    # tighter than the original 12mm's 8mm, but physically valid).
+    # init_state pos z is half the new size (0.0075) so the cube still
+    # rests exactly on the table.
+    init_state=RigidObjectCfg.InitialStateCfg(pos=(0.20, 0.28, 0.0075)),
     spawn=sim_utils.CuboidCfg(
-        size=(0.020, 0.020, 0.020),
+        size=(0.015, 0.015, 0.015),
         rigid_props=_RIGID_PROPS,
         mass_props=_MASS,
         collision_props=_COLLISION_PROPS,

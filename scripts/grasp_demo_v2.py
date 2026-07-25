@@ -410,11 +410,12 @@ VIDEO_PATH = os.path.join(LOG_DIR, "videos", f"ar4_grasp_demo_v2{_video_suffix}.
 # its value still matches that default and its docstring above is useful
 # history.
 #
-# NOTE (2026-07-24, ar4-cube-size-increase task): cube bumped 12mm->20mm
-# (tasks/ar4/objects_cfg.py's CUBE_CFG), so the scene's own resting z moved
-# 0.006->0.010; updated here to match (still +3mm convention, purely
-# informational per the above).
-CUBE_POS_W = (0.0, 0.275, 0.013)
+# NOTE (2026-07-24, ar4-cube-size-increase task): cube bumped 12mm->20mm,
+# then 20mm->15mm (both changes 2026-07-24, tasks/ar4/objects_cfg.py's
+# CUBE_CFG), so the scene's own resting z moved 0.006->0.010->0.0075;
+# updated here to match (still +3mm convention, purely informational per
+# the above).
+CUBE_POS_W = (0.0, 0.275, 0.0105)
 PREGRASP_HOVER = 0.05
 # NOTE (2026-07-22): tried lowering this to -0.001 to compensate for the
 # verified best GRASP_Q basin's ~10mm Z-height shortfall (its fingertip
@@ -438,11 +439,12 @@ PREGRASP_HOVER = 0.05
 # earlier position-only finding still applies).
 #
 # NOTE (2026-07-24, ar4-cube-size-increase task): default bumped 0.009->
-# 0.013 to track the cube's own resting-height change (0.006->0.010, 12mm
-# ->20mm cube) - same +3mm-above-resting convention as before, not a new
-# empirical finding for the bigger cube. Still overridable via
+# 0.013->0.0105 to track the cube's own resting-height changes
+# (0.006->0.010->0.0075, 12mm->20mm->15mm cube, both size changes
+# 2026-07-24) - same +3mm-above-resting convention as before, not a new
+# empirical finding for the cube-size changes. Still overridable via
 # --grasp-height.
-GRASP_AT_HEIGHT = args_cli.grasp_height if args_cli.grasp_height is not None else 0.013
+GRASP_AT_HEIGHT = args_cli.grasp_height if args_cli.grasp_height is not None else 0.0105
 GRIPPER_OPEN = 1.0
 GRIPPER_CLOSE = -1.0
 HOME_Q = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]

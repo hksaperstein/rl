@@ -124,8 +124,9 @@ class Ar4GraspVerifySceneCfg(Ar4PickPlaceMirrorSceneCfg):
     # never resolves the (then-)12mm cube clearly per this project's own
     # standing finding - kb/wiki/concepts/ar4-vs-franka-root-cause-
     # comparison.md's 2026-07-24 ar4-jaw-contact-sensor-hypothesis UPDATE
-    # (cube bumped to 20mm 2026-07-24, ar4-cube-size-increase task, partly
-    # to address this same visibility gap). Always present
+    # (cube bumped 12mm->20mm->15mm, both changes 2026-07-24,
+    # ar4-cube-size-increase task, partly to address this same visibility
+    # gap). Always present
     # in the scene (harmless/unused when not recorded) so
     # scripts/grasp_demo_v2.py's --closeup-camera flag can reposition and
     # record it without a scene-cfg-level conditional. Narrower aperture

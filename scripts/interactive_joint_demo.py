@@ -83,18 +83,18 @@ LIFT_STEPS = 8  # straight-line waypoints for the lift/lower, same settle budget
 
 # The 25-step approach alone plateaus around 5-6cm residual at this cube's
 # low, extended pose (gravity droop the open-loop closed-form solve can't
-# see) - more than 3x the cube's 20mm size (tasks/ar4/objects_cfg.py, bumped
-# from 12mm 2026-07-24), so on its own it's not tight enough to actually
-# grasp, only to arrive near the cube. A few closed-loop refinement rounds
-# close that last gap.
+# see) - more than 3x the cube's 15mm size (tasks/ar4/objects_cfg.py, bumped
+# 12mm->20mm->15mm, both changes 2026-07-24), so on its own it's not tight
+# enough to actually grasp, only to arrive near the cube. A few closed-loop
+# refinement rounds close that last gap.
 REFINE_MAX_ROUNDS = 4
 REFINE_SETTLE_TIME_S = 60 / 120
-REFINE_TOL = 0.0025  # meters - comfortably under the cube's 10mm half-size
+REFINE_TOL = 0.0025  # meters - comfortably under the cube's 7.5mm half-size
 
 # Grasp a bit above the cube's center rather than driving straight at it -
 # extra clearance margin on top of the L3 fix above, so a few mm of residual
 # doesn't turn back into a ground/cube collision.
-CUBE_HALF_SIZE = 0.010  # meters (20mm cube as of 2026-07-24, tasks/ar4/objects_cfg.py)
+CUBE_HALF_SIZE = 0.0075  # meters (15mm cube as of 2026-07-24, tasks/ar4/objects_cfg.py)
 GRASP_CLEARANCE = 0.003
 GRASP_HEIGHT_OFFSET = CUBE_HALF_SIZE + GRASP_CLEARANCE
 

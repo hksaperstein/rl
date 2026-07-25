@@ -89,6 +89,25 @@ live-measure-then-reposition pattern already established by
 scripts/_record_jaw_fix_open_close_cycle.py's own camera-tuning history
 (see that script's own comments for what worked/produced black frames)."""
 
+_ELBOW_CONTEXT_CAMERA_POS = (0.15, 0.36, 0.10)
+_ELBOW_CONTEXT_CAMERA_QUAT_OPENGL = (1.0, 0.0, 0.0, 0.0)
+"""Placeholder only - overwritten at runtime, same pattern as
+_CLOSEUP_CAMERA_POS/_CLOSEUP_CAMERA_QUAT_OPENGL above. A FOURTH camera
+(2026-07-24, ar4-axis-align-ik task, coordinator-directed mid-task
+correction), distinct from closeup_camera's tight gripper/cube-only
+framing: this one is deliberately WIDE enough to keep the elbow
+(``link_3``, the joint whose own hard limit this whole investigation's
+current focus - see kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md
+- is centered on), forearm, wrist, and gripper/cube ALL visible together in
+one frame, so the elbow's own live behavior during a grasp attempt is
+directly watchable, not just its downstream effect on the gripper. Repositioned
+via ``elbow_context_camera.set_world_poses()`` from a LIVE measurement of
+link_3's and the gripper/cube's real world positions at the settled GRASP_Q
+pose - see ``scripts/grasp_demo_v2.py``'s ``--elbow-camera``/
+``_compute_elbow_context_camera`` and the ``isaac-sim-video-capture``
+skill's "Deriving a new camera position" section (live-measure-the-subject,
+never guess coordinates)."""
+
 
 @configclass
 class Ar4GraspVerifySceneCfg(Ar4PickPlaceMirrorSceneCfg):
@@ -143,6 +162,28 @@ class Ar4GraspVerifySceneCfg(Ar4PickPlaceMirrorSceneCfg):
         data_types=["rgb"],
         spawn=sim_utils.PinholeCameraCfg(focal_length=40.0, focus_distance=400.0, clipping_range=(0.02, 1.0)),
         offset=CameraCfg.OffsetCfg(pos=_CLOSEUP_CAMERA_POS, rot=_CLOSEUP_CAMERA_QUAT_OPENGL, convention="opengl"),
+    )
+
+    # 2026-07-24 (ar4-axis-align-ik task, coordinator-directed mid-task
+    # correction): a FOURTH camera, wide enough to keep link_3 (elbow),
+    # forearm, wrist, and gripper/cube all visible together - see
+    # _ELBOW_CONTEXT_CAMERA_POS's own docstring above for why this is
+    # distinct from closeup_camera's tight gripper-only framing. Always
+    # present in the scene (harmless/unused when not recorded), same
+    # convention as closeup_camera. Wider clipping-range far bound than
+    # closeup_camera (0.02-1.0) since this camera sits further back to fit
+    # the whole elbow-to-gripper span in frame, not just the fingertip
+    # region.
+    elbow_context_camera: CameraCfg = CameraCfg(
+        prim_path="{ENV_REGEX_NS}/ElbowContextCamera",
+        update_period=0.0,
+        height=480,
+        width=640,
+        data_types=["rgb"],
+        spawn=sim_utils.PinholeCameraCfg(focal_length=24.0, focus_distance=400.0, clipping_range=(0.02, 2.0)),
+        offset=CameraCfg.OffsetCfg(
+            pos=_ELBOW_CONTEXT_CAMERA_POS, rot=_ELBOW_CONTEXT_CAMERA_QUAT_OPENGL, convention="opengl"
+        ),
     )
 
 

@@ -504,6 +504,104 @@ Roughly in the order they'd likely be picked up:
    no lift. Not treated as a failed grasp re-investigation; the task's
    own corrected priority was visual confirmation, not grasp precision.
 
+   **Locked-achieved-orientation synthesis test (2026-07-24 later still,
+   ar4-locked-achieved-orientation-grasp task, direct instruction): the
+   combination the prior two findings above called for — still no
+   lift, but the result sharpens the diagnosis rather than reopening it.**
+   Built `scripts/_verify_locked_achieved_orientation_grasp.py`: reach the
+   true grasp height + real contact via position-only IK exactly as the
+   vertical-recheck task above did, then AT THE MOMENT real bilateral
+   contact is detected (watched every physics step, not sampled), read the
+   arm's LIVE wrist orientation and lock that (not a re-derived canonical
+   target) via a genuine closed-loop `command_type="pose"` DLS controller
+   (ported from `grasp_demo_v2.py`'s own proven `polish_from_seed`) for
+   the rest of CLOSE, retreat, and hold. Run twice, at two different
+   retreat speeds, to separate "orientation drifted" from "orientation
+   was fine but the grasp was never good." **Fast retreat (0.03m/step, the
+   same bound used for reaching a static target elsewhere in this
+   codebase)**: orientation held to <0.003rad the whole time (proving the
+   lock mechanism itself works), gripper cleanly reached the hover pose to
+   2.6mm — but contact still dropped to exactly `0.0000N` on both jaws at
+   the very first retreat step and the cube was never moved at all,
+   `height_gain=0.0000m`. **Slow retreat (0.001m/step, added specifically
+   to rule out "too fast a yank" as the cause)**: contact never dropped to
+   zero, but the arm made ZERO net progress toward the hover position for
+   the entire 270-step retreat+hold+release window (frozen at the exact
+   same 29.5mm residual throughout) while jaw2's force grew to 1.5-1.8N —
+   3-4x any single-jaw force ever recorded in this investigation, and
+   markedly asymmetric against jaw1's 0.4-0.5N — i.e. the arm got
+   mechanically stuck fighting the table rather than lifting. **Diagnosis:
+   locking the achieved orientation is necessary but not sufficient** —
+   rotation genuinely does not drift under this lock (confirmed
+   numerically in both runs), so the failure isn't drift; it's that
+   position-only IK's null-space-selected contact orientation produces
+   real bilateral NORMAL force (enough to register as "contact") without
+   being a force-balanced antipodal pinch, so it has no shear/lift
+   resistance regardless of retreat speed. Full detail, both runs' full
+   numbers: `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s
+   2026-07-24 (later still, ar4-locked-achieved-orientation-grasp)
+   UPDATE. **Next step unchanged, now on firmer evidence**: a mechanism
+   that scores/selects the contact orientation itself for force-balance
+   (not just position) is Tier 1 methodology work, flagged to Principal;
+   otherwise this is AR4's practical classical-IK ceiling and the
+   already-working Franka platform remains the North-Star priority.
+
+   **Pinch-point geometry at the contact moment (2026-07-25,
+   ar4-pinch-point-geometry-at-contact task, dispatched off a user visual
+   read of the video above): confirms and sharpens the diagnosis further
+   - the true fingertip midpoint is measurably OUTSIDE the cube's own
+   volume at the achieved orientation, not an offset-math bug.** Two
+   questions kept separate per the coordinator's explicit framing: (Q1)
+   is `_EE_OFFSET` still accurate at this specific achieved orientation -
+   yes, to ~1mm (a real but small, secondary, orientation-dependent effect,
+   vs. 0.0001-0.0002mm at two previously-tested orientations - not a
+   frame-transform bug, the code already rotates by the live orientation
+   every step); (Q2) is the achieved orientation itself sane, using the
+   TRUE bisector as the pinch point - no: the true bisector sits 14.2mm
+   outside the cube's own face along one axis (cube local-frame coords
+   `[10.8, 24.2, 9.2]mm`, half-size 10mm), traced to the same
+   already-documented `joint_3` height-shortfall (achieved height 21.9mm
+   vs. 9mm intended). The user's literal "gripper base resting on the
+   cube" hypothesis was directly checked and refuted by measurement (base
+   is 63.2mm from the cube, over 2x FARTHER than the 28.0mm fingertip
+   bisector) but the qualitative visual read was right in substance - a
+   corner/edge catch, confirmed via direct frame extraction (cube nearly
+   fully occluded behind one jaw block 1s into CLOSE, not centered between
+   two). No fix applied (no offset bug exists to fix); the Tier-1
+   recommendation is unchanged and now on firmer, more direct evidence:
+   `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s 2026-07-25
+   UPDATE for full numbers.
+
+   **Axis-alignment reduced-DOF IK (2026-07-24/25, ar4-axis-align-ik task):
+   a genuinely new IK formulation (position(3) + approach-axis-DIRECTION(2)
+   = 5 constraints, 1 redundant DOF, vs `position` mode's 0 orientation
+   constraints or `pose` mode's 3/0-redundant-DOF) — orientation control
+   CONFIRMED FIXED (genuinely vertical, 0-1° off, at both tested positions,
+   vs `position` mode's uncontrolled 18-72°+ tilt), but reachability is
+   NOT: position residual still ~15mm at the true grasp height at both
+   tested positions (0.275m/0.32m reach), via TWO DIFFERENT mechanisms
+   (a real `joint_3` hard-limit wall at 0.275m; a joint-limit-free DLS
+   local-optimum plateau at 0.32m) - the extra redundant DOF did not
+   reliably deliver the hoped-for routing-around-the-elbow-limit benefit.
+   The resulting phased CLOSE+RETREAT produced the STRONGEST, most
+   sustained bilateral contact this whole investigation has ever recorded
+   (7-40N, vs typically <1N) with a real, stable, 100+-step height-gain
+   hold (21.5-21.6mm) - but direct video inspection plus a decisive
+   cross-position tell (near-identical final held height, 31.5mm vs
+   31.6mm, despite two DIFFERENT targeted reach positions) shows this is a
+   NEW wedge-against-the-gripper's-own-base-housing artifact, not a
+   genuine antipodal pinch - the gripper's base, not its fingertips, is
+   catching the cube because of the still-unresolved ~15mm shortfall. Real
+   Jacobian math verified correct first (finite-difference check, 2-5e-5
+   error after fixing a dynamics-settle-noise confound in the verification
+   method itself), a real side-finding of a small pre-existing (not
+   introduced here) ~0.007-0.009 bias in the unrelated base position
+   Jacobian flagged but not fixed (out of scope). **Does not close the
+   investigation** - orientation-control is a genuine, real fix; the
+   reachability half of the hypothesis is falsified as tested. Full
+   detail: `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s
+   2026-07-24 (later still, ar4-axis-align-ik task) UPDATE.
+
 See `BACKLOG.md` for further-out candidates not yet on this list.
 
 ## Recently landed

@@ -3256,3 +3256,172 @@ ports, this article's own 2026-07-24 `ar4-vertical-fixed-gripper-recheck`
 UPDATE for the un-locked baseline (drag-and-drop, 13.5mm/2.4mm) this
 session's two results are each compared against.
 and the 12mm-cube residual baseline compared against.
+
+## UPDATE 2026-07-25 (ar4-pinch-point-geometry-at-contact task): the user's own visual read was right in substance — the true fingertip midpoint sits 24mm outside the cube's own volume at the achieved contact orientation, but the `_EE_OFFSET` math itself is not the cause (only a small, secondary, orientation-dependent ~1mm effect) and the gripper BASE is not literally closer to the cube than the fingertips either
+
+Dispatched directly off a user visual observation watching the prior
+session's own locked-achieved-orientation video: "it looks like the
+gripper's BASE is resting on top of the cube, not the fingertips
+straddling it." Mid-task, the coordinator explicitly reframed this into
+two separate questions that must not be conflated: **Q1**, is the
+`_EE_OFFSET`-derived target point (link_6 world position plus the local
+`(0,0,0.036)` offset rotated by link_6's OWN LIVE quaternion - a genuine
+per-step frame transform, not a fixed world-frame assumption) still an
+accurate stand-in for the true jaw-fingertip midpoint AT THIS SPECIFIC,
+unusual, null-space-selected achieved orientation (previously verified
+accurate to 0.0001-0.0002mm, but only at a near-vertical HOME pose and a
+65-degree-tilt pose from a *different* IK mechanism - never at the free
+position-only IK's own contact-moment orientation)? **Q2**, independent of
+Q1, is the ACHIEVED orientation itself even a sane one to be locking onto
+at all, using the TRUE measured bisector (not the possibly-buggy offset
+point) as the candidate pinch point - do the fingertips actually flank the
+cube from opposite sides, or is the geometry wrong regardless of exactly
+which point is called "the target"?
+
+**Method**: `scripts/_verify_locked_achieved_orientation_grasp.py` (the
+exact script from the immediately-prior synthesis-test session) reused
+directly, unmodified through Phases 0-2 (HOME -> PREGRASP_APPROACH ->
+GRASP_APPROACH), with a new `_measure_pinch_geometry()` diagnostic
+(commit `6356912`) added and called at two points: right before Phase 3
+CLOSE starts (baseline, gripper still open) and - the critical
+measurement - at the EXACT physics step real bilateral contact is first
+detected (not derived/assumed after the fact). At each point it directly
+reads `robot.data.body_pos_w` for `gripper_jaw1_link`/`gripper_jaw2_link`/
+`gripper_base_link` (the real built asset, same method
+`_measure_jaw_bisector_vs_ee_offset` in `grasp_demo_v2.py` already
+validated) and the cube's own live world pose, then computes: the true
+jaw-fingertip midpoint vs. the `_EE_OFFSET`-derived assumed point (Q1);
+whether the true midpoint falls inside the cube's own 20mm-cube volume in
+the cube's own local frame (Q2a); whether the jaw-opening axis aligns with
+one of the cube's own local axes, i.e. closes along a face-normal
+direction rather than tangent to a face (Q2b); and each of jaw1/jaw2/
+true-bisector/assumed-pinch/gripper-base's own straight-line distance to
+the cube (the user's specific base-proximity hypothesis). Run once on the
+desktop (fresh clone `~/projects/rl-pinch-geom-diag`, symlinked to the
+existing clone's built `assets/` rather than rebuilding, non-headless,
+under the standing `flock`) since the prior session's own two runs already
+established the mechanism itself (the closed-loop orientation lock) is not
+what's broken - this task only needed one more contact-moment measurement
+pass, not a repeat of that mechanism validation.
+
+**Q1 verdict: a real but small, secondary discrepancy - NOT the root
+cause.** `_EE_OFFSET` vs. the true measured jaw-fingertip midpoint:
+
+| Check point | Discrepancy |
+|---|---|
+| PRE-CLOSE (grasp_q reached, gripper OPEN, static/settled, no contact forces) | 0.8855mm |
+| CONTACT MOMENT (first bilateral-contact step, real forces present) | 1.0021mm |
+| (for reference) prior session's HOME_Q / 65deg-tilt-`pose`-IK checks | 0.0001-0.0002mm |
+
+The discrepancy is real and reproducible (nearly identical at both a
+static pre-contact measurement and the dynamic contact moment, ruling out
+"contact-force-induced rigid-body jitter" as the explanation) and roughly
+4,000-5,000x larger than the two previously-tested orientations - a
+genuine, if modest, orientation-dependent effect worth flagging (plausibly
+a small mismatch between the FK model's assumed `link_6` origin and the
+articulation's own physx-tracked body frame, which would only show up
+significantly at a large/unusual orientation like this task's - not
+chased further since it's two orders of magnitude below the actual
+failure's own scale, below). **This is not "a simplified vector assumed
+valid at all orientations"** - the code already applies a genuine
+per-step frame transform using the arm's actual live orientation
+(`_ee_point_pos_and_jacobian`/`_measure_dist`, unchanged) - so there is no
+frame-transform bug to fix here, and no fix was applied.
+
+**Q2 verdict: YES, the achieved orientation/position combination is
+genuinely a bad one to grasp from - this is the real, dominant finding.**
+Using the TRUE measured bisector (not the offset point) as the candidate
+pinch point, at the contact moment its position in the cube's own local
+frame was `[10.8mm, 24.2mm, 9.2mm]` relative to the cube center - with the
+cube's own half-size at 10mm (20mm cube), the true bisector is **14.2mm
+outside the cube's own face along its local Y axis** - not merely
+imprecise, but genuinely outside the cube's volume entirely along that
+axis. The jaw-opening axis (jaw1->jaw2) itself is also not cleanly
+face-parallel to the cube: `|dot|` with the closest cube local axis is
+only `0.875` (~29 degrees off from a clean face-on closing direction, vs.
+1.0 for ideal). This traces back to the already-well-characterized
+`joint_3`/reachability-height shortfall this investigation has documented
+repeatedly (not a new defect): the achieved assumed-pinch-point height was
+`21.9mm` vs. an intended target of `9mm` (this script's own
+`GRASP_AT_HEIGHT` constant, itself ~1mm below the cube's true 10mm-center
+resting height per the 20mm-cube bump - a small, separate staleness noted
+below but not the driver of this finding), i.e. **the position-only IK
+solve landed the gripper roughly 12-13mm too high and laterally offset**
+- `grasp_residual=12.86mm`, consistent with this investigation's own
+documented residual ceiling - and it is THIS shortfall, not an
+independently "bad" orientation choice by the null space, that leaves the
+achieved position+orientation combination unable to straddle the cube at
+all. Contact force at capture was correspondingly weak and asymmetric
+(jaw1=0.0908N, jaw2=0.0272N, both below the 0.11-0.17N range this
+investigation's own successful un-locked baseline recorded) - a glancing
+catch, not a firm two-sided pinch, and the grasp again produced zero
+height gain through retreat/hold/release (`height_gain_vs_resting
+=-0.0000m` throughout), reproducing the prior session's own null.
+
+**Direct visual confirmation via frame extraction** (`ffmpeg -ss ...
+-frames:v 1` on the `perception_camera` stream, matching this
+investigation's own established frame-extraction practice) at the contact
+moment and 1 second into CLOSE shows the cube (small red sliver) caught
+between one jaw block and an adjacent gripper structure, not symmetrically
+centered between two jaw faces - by 1 second into CLOSE the cube is nearly
+fully occluded behind a single jaw block rather than visible between two.
+Consistent with, not contradicting, the numeric finding: an off-axis/
+corner-style catch, not a face-on pinch.
+
+**Base-proximity check (the user's literal hypothesis): REFUTED by direct
+measurement, though the qualitative visual impression is otherwise
+well-explained.** `gripper_base_link` is position-COINCIDENT with `link_6`
+(the `ee_joint`/`gripper_base_joint` fixed-joint chain is zero-translation,
+only a -90-degree roll differs - `tasks/ar4/fk_verification.py`'s own
+joint table) - so this check is equivalently "is link_6 itself closer to
+the cube than the fingertips." At the contact moment: `gripper_base_link`
+was **63.21mm** from the cube center, vs. `28.02mm` for the true
+fingertip bisector, `27.94mm` for the assumed-offset point, `30.27mm` for
+jaw1, and `33.06mm` for jaw2 - the base is over 2x FARTHER from the cube
+than any of the fingertip-region points, not closer. The user's literal
+"base resting on the cube" is not what's numerically happening; what IS
+happening or the visual read is well-explained by the corner/edge-catch
+above (a real object appearing to touch/overlap gripper structure in a
+close-up, distorted-lens camera view because the true pinch point is
+genuinely off the object's center, not because the base link itself is
+near the object).
+
+**Fix applied**: none to `_EE_OFFSET` or its frame transform (Q1 confirmed
+not the cause). **No fix attempted for Q2 either** - per this task's own
+scope (a bug-fix/measurement task, not a new-mechanism task) and this
+repo's own Tier-1 gate, "stop locking whatever orientation position-only
+IK's null space happens to land on and instead select/verify a
+genuinely good one before committing" is a new grasp-orientation-selection
+mechanism, not a bug fix, and is flagged back to Principal rather than
+designed and shipped here. This closes out the specific offset-vs-
+true-bisector question this task was dispatched to answer, with the same
+conclusion the immediately-prior session's own diagnosis already pointed
+at from a different angle (non-antipodal contact from an unselected null-
+space orientation) - now confirmed via direct fingertip-vs-cube-volume
+geometry rather than inferred from force asymmetry alone.
+
+**Minor secondary finding, not fixed (low priority, flagged for whoever
+next touches this script)**: `CUBE_POS_W`/`GRASP_AT_HEIGHT` in both this
+script and `_verify_vertical_position_ik_fixed_gripper.py` hardcode
+`z=0.009`, matching the cube's OLD (pre-2026-07-24) 18mm size's
+half-height, not the current 20mm cube's true `0.010` center height
+(`tasks/ar4/pickplace_mirror_env_cfg.py`'s own cube `init_state`). A 1mm
+constant staleness - two full orders of magnitude below this task's own
+14.2mm off-cube finding above, so almost certainly not material to any
+conclusion in this article - deliberately NOT changed here since both
+scripts use it as a shared, deliberately-fixed cross-session comparison
+anchor and changing it would break exact reproducibility against every
+prior documented result without a dedicated re-validation pass, which was
+out of this task's own scope.
+
+**Sources**: this session's own live desktop run
+(`~/projects/rl-pinch-geom-diag` on the desktop, fresh clone symlinked to
+the existing clone's built assets, full log with all numbers quoted above
+verbatim), direct `ffmpeg` frame extraction from
+`logs/videos/ar4_grasp_locked_achieved_orientation_pinchgeom_diag.mp4`
+(desktop-local, `logs/` gitignored per convention), `tasks/ar4/
+fk_verification.py`'s own joint table for the `gripper_base_link`
+zero-translation confirmation, this article's own 2026-07-24
+`ar4-jaw-bisector-hypothesis` UPDATE for the two previously-tested
+orientations' own near-zero `_EE_OFFSET` discrepancy this task's own
+1mm finding is compared against.

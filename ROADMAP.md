@@ -546,6 +546,32 @@ Roughly in the order they'd likely be picked up:
    otherwise this is AR4's practical classical-IK ceiling and the
    already-working Franka platform remains the North-Star priority.
 
+   **Pinch-point geometry at the contact moment (2026-07-25,
+   ar4-pinch-point-geometry-at-contact task, dispatched off a user visual
+   read of the video above): confirms and sharpens the diagnosis further
+   - the true fingertip midpoint is measurably OUTSIDE the cube's own
+   volume at the achieved orientation, not an offset-math bug.** Two
+   questions kept separate per the coordinator's explicit framing: (Q1)
+   is `_EE_OFFSET` still accurate at this specific achieved orientation -
+   yes, to ~1mm (a real but small, secondary, orientation-dependent effect,
+   vs. 0.0001-0.0002mm at two previously-tested orientations - not a
+   frame-transform bug, the code already rotates by the live orientation
+   every step); (Q2) is the achieved orientation itself sane, using the
+   TRUE bisector as the pinch point - no: the true bisector sits 14.2mm
+   outside the cube's own face along one axis (cube local-frame coords
+   `[10.8, 24.2, 9.2]mm`, half-size 10mm), traced to the same
+   already-documented `joint_3` height-shortfall (achieved height 21.9mm
+   vs. 9mm intended). The user's literal "gripper base resting on the
+   cube" hypothesis was directly checked and refuted by measurement (base
+   is 63.2mm from the cube, over 2x FARTHER than the 28.0mm fingertip
+   bisector) but the qualitative visual read was right in substance - a
+   corner/edge catch, confirmed via direct frame extraction (cube nearly
+   fully occluded behind one jaw block 1s into CLOSE, not centered between
+   two). No fix applied (no offset bug exists to fix); the Tier-1
+   recommendation is unchanged and now on firmer, more direct evidence:
+   `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s 2026-07-25
+   UPDATE for full numbers.
+
 See `BACKLOG.md` for further-out candidates not yet on this list.
 
 ## Recently landed

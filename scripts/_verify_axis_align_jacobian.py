@@ -248,7 +248,20 @@ def _measure_quantities(env, robot, robot_entity_cfg, ik_jacobi_idx, n_des_b, u_
     jac_ang = jacobian_b[:, 3:6, :]
     axis_error_2d, axis_jac_2d, true_axis_angle = _axis_align_error_and_jacobian(ee_quat_b, jac_ang, n_des_b, u_b, v_b)
     axis_quantity_2d = -axis_error_2d  # = [u.n_cur, v.n_cur], the tracked quantity axis_jac_2d is the Jacobian OF
-    return point_pos_b[0].clone(), axis_quantity_2d[0].clone(), point_jac_pos[0].clone(), axis_jac_2d[0].clone(), true_axis_angle[0].item()
+    # 2026-07-24 (diagnostic addition, isolating a pre-existing discrepancy
+    # found on the first clean (dynamics-free) run - see EPS's own docstring
+    # history): also return ee_pos_b (link_6's own ORIGIN, no _EE_OFFSET
+    # correction) and the RAW jacobian_b[:,0:3,:] (no offset-skew
+    # correction either), so the caller can FD-check the offset-correction
+    # term and the base translational Jacobian SEPARATELY - narrows down
+    # whether a discrepancy belongs to _ee_point_pos_and_jacobian's own
+    # offset math (added this task) or to the pre-existing, unmodified base
+    # jacobian_b[:,0:3,:] (already used successfully in real grasp attempts
+    # by prior sessions, not touched by this task).
+    return (
+        point_pos_b[0].clone(), axis_quantity_2d[0].clone(), point_jac_pos[0].clone(), axis_jac_2d[0].clone(),
+        true_axis_angle[0].item(), ee_pos_b[0].clone(), jacobian_b[0, 0:3, :].clone(),
+    )
 
 
 def main() -> None:
@@ -296,30 +309,34 @@ def main() -> None:
 
             for config_name, q0 in TEST_CONFIGS.items():
                 _settle_at(env, robot, robot_entity_cfg, num_arm_joints, q0, SETTLE_STEPS)
-                pos0, axis0, analytic_pos_jac, analytic_axis_jac, axis_angle0 = _measure_quantities(
+                pos0, axis0, analytic_pos_jac, analytic_axis_jac, axis_angle0, origin0, analytic_raw_jac = _measure_quantities(
                     env, robot, robot_entity_cfg, ik_jacobi_idx, n_des_b, u_b, v_b
                 )
 
                 num_pos_jac = torch.zeros(3, num_arm_joints)
                 num_axis_jac = torch.zeros(2, num_arm_joints)
+                num_raw_jac = torch.zeros(3, num_arm_joints)
                 for j in range(num_arm_joints):
                     q_plus = list(q0)
                     q_plus[j] += EPS
                     _settle_at(env, robot, robot_entity_cfg, num_arm_joints, q_plus, SETTLE_STEPS)
-                    pos_plus, axis_plus, _, _, _ = _measure_quantities(env, robot, robot_entity_cfg, ik_jacobi_idx, n_des_b, u_b, v_b)
+                    pos_plus, axis_plus, _, _, _, origin_plus, _ = _measure_quantities(env, robot, robot_entity_cfg, ik_jacobi_idx, n_des_b, u_b, v_b)
 
                     q_minus = list(q0)
                     q_minus[j] -= EPS
                     _settle_at(env, robot, robot_entity_cfg, num_arm_joints, q_minus, SETTLE_STEPS)
-                    pos_minus, axis_minus, _, _, _ = _measure_quantities(env, robot, robot_entity_cfg, ik_jacobi_idx, n_des_b, u_b, v_b)
+                    pos_minus, axis_minus, _, _, _, origin_minus, _ = _measure_quantities(env, robot, robot_entity_cfg, ik_jacobi_idx, n_des_b, u_b, v_b)
 
                     num_pos_jac[:, j] = (pos_plus - pos_minus) / (2 * EPS)
                     num_axis_jac[:, j] = (axis_plus - axis_minus) / (2 * EPS)
+                    num_raw_jac[:, j] = (origin_plus - origin_minus) / (2 * EPS)
 
                 pos_err = (analytic_pos_jac.cpu() - num_pos_jac).abs()
                 axis_err = (analytic_axis_jac.cpu() - num_axis_jac).abs()
+                raw_err = (analytic_raw_jac.cpu() - num_raw_jac).abs()
                 pos_max_err = pos_err.max().item()
                 axis_max_err = axis_err.max().item()
+                raw_max_err = raw_err.max().item()
                 config_pass = pos_max_err < TOL_ABS and axis_max_err < TOL_ABS
                 overall_pass = overall_pass and config_pass
 
@@ -327,6 +344,11 @@ def main() -> None:
                 print(f"  POSITION Jacobian (3x{num_arm_joints}): max|analytic-numeric| = {pos_max_err:.6f}  {'PASS' if pos_max_err < TOL_ABS else 'FAIL'}")
                 print(f"    analytic:\n{analytic_pos_jac.cpu().numpy()}")
                 print(f"    numeric (FD):\n{num_pos_jac.numpy()}")
+                print(
+                    f"  [DIAGNOSTIC, not scored] RAW base translational Jacobian (link_6 ORIGIN, no _EE_OFFSET "
+                    f"correction - isolates whether a POSITION discrepancy above belongs to the offset-correction "
+                    f"term or the pre-existing base jacobian_b[:,0:3,:]): max|analytic-numeric| = {raw_max_err:.6f}"
+                )
                 print(f"  AXIS-ALIGNMENT Jacobian (2x{num_arm_joints}): max|analytic-numeric| = {axis_max_err:.6f}  {'PASS' if axis_max_err < TOL_ABS else 'FAIL'}")
                 print(f"    analytic:\n{analytic_axis_jac.cpu().numpy()}")
                 print(f"    numeric (FD):\n{num_axis_jac.numpy()}")

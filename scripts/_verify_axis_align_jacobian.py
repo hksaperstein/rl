@@ -50,7 +50,7 @@ import sys
 
 from isaaclab.app import AppLauncher
 
-app_launcher = AppLauncher(headless=False)
+app_launcher = AppLauncher(headless=False, enable_cameras=True)
 simulation_app = app_launcher.app
 
 """Rest everything follows."""

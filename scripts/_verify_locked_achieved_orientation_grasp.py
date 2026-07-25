@@ -161,6 +161,12 @@ CALIBRATION_C = -1.5677  # empirically measured joint_1 -> EE-azimuth offset
 # robot.data.body_pos_w for gripper_jaw1_link/gripper_jaw2_link).
 _EE_OFFSET = (0.0, 0.0, 0.036)
 
+# 20mm cube (tasks/ar4/objects_cfg.py CUBE_CFG, bumped from 12mm 2026-07-24)
+# - half-extent along each of the cube's own local axes. Used only by the
+# PINCH-GEOM diagnostic below to test whether a candidate pinch point is
+# actually inside the cube's own volume.
+CUBE_HALF_SIZE = 0.010
+
 CANDIDATE_SEEDS = [
     (1.0, -0.5, -0.8),
     (1.2, 0.0, -1.2),
@@ -436,6 +442,110 @@ def _jaw_forces(env) -> tuple[float, float]:
     return jaw1_force, jaw2_force
 
 
+def _measure_pinch_geometry(label, robot, robot_entity_cfg, gripper_jaw_body_ids, gripper_base_body_id, cube):
+    """Direct, LIVE measurement (robot.data.body_pos_w/body_pose_w on the
+    real built asset - not this script's own root-frame IK-target
+    bookkeeping) of the true fingertip geometry, dispatched to answer TWO
+    SEPARATE questions the coordinator explicitly asked not to conflate
+    (2026-07-24, this task):
+
+      Q1 (offset-math correctness): does the _EE_OFFSET-derived "assumed
+      pinch point" (link_6 world pos + the live-orientation-rotated local
+      offset - exactly what _measure_dist/_ee_point_pos_and_jacobian above
+      use as the IK target) match the TRUE geometric midpoint between the
+      two real jaw fingertip links, AT THIS SPECIFIC achieved orientation?
+      This is a pure math/frame-transform check, independent of whether
+      the orientation itself is any good.
+
+      Q2 (orientation sanity, independent of Q1): using the TRUE measured
+      bisector (not the possibly-buggy offset point) as the candidate pinch
+      point, is the ACHIEVED orientation even a geometrically sensible
+      antipodal approach on the cube? Checked two ways: (a) is the true
+      bisector actually inside the cube's own volume (cube-local-frame
+      coordinates within +/-CUBE_HALF_SIZE on all 3 axes) - a pinch point
+      outside the cube's own volume cannot be a sensible grasp point
+      regardless of any offset bug; (b) is the jaw-opening axis (the
+      direction from jaw1 to jaw2) reasonably aligned with one of the
+      cube's own local axes (jaws closing along a face-normal direction,
+      i.e. straddling two opposite faces - dot product near 1.0) rather
+      than roughly tangent to a face (dot product near 0.0, a
+      geometrically nonsensical pinch no matter where exactly the "target
+      point" is), and whether the approach axis (link_6's local +Z, the
+      _EE_OFFSET direction) comes in roughly PARALLEL to that same cube
+      axis (face-on) rather than at a skewed/edge-on angle.
+
+    Also reports the gripper BASE link's own distance to the cube (the
+    user's specific visual hypothesis: does the base appear to rest on the
+    cube rather than the fingertips straddling it?). gripper_base_link is
+    coincident in POSITION with link_6 (both `ee_joint`/`gripper_base_joint`
+    are zero-translation fixed joints per tasks/ar4/fk_verification.py -
+    only the ROTATION differs, a -90deg roll) - so this is equivalently a
+    check of link_6's own proximity to the cube vs. the fingertips'.
+    """
+    jaw_pos_w = robot.data.body_pos_w[0, gripper_jaw_body_ids].clone()
+    jaw1_pos_w, jaw2_pos_w = jaw_pos_w[0], jaw_pos_w[1]
+    true_bisector_w = (jaw1_pos_w + jaw2_pos_w) / 2.0
+    jaw_sep_mm = torch.norm(jaw1_pos_w - jaw2_pos_w).item() * 1000.0
+
+    base_pos_w = robot.data.body_pos_w[0, gripper_base_body_id[0]].clone()
+
+    ee_pose_w = robot.data.body_pose_w[0, robot_entity_cfg.body_ids[0]]
+    ee_pos_w, ee_quat_w = ee_pose_w[0:3], ee_pose_w[3:7]
+    rot_w = matrix_from_quat(ee_quat_w.unsqueeze(0))[0]
+    offset_local = torch.tensor(_EE_OFFSET, device=ee_pos_w.device)
+    assumed_pinch_w = ee_pos_w + rot_w @ offset_local
+    approach_axis_w = rot_w @ torch.tensor([0.0, 0.0, 1.0], device=ee_pos_w.device)
+
+    offset_disc_mm = torch.norm(true_bisector_w - assumed_pinch_w).item() * 1000.0
+
+    cube_pos_w = cube.data.root_pos_w[0].clone()
+    cube_quat_w = cube.data.root_quat_w[0].clone()
+    cube_rot_w = matrix_from_quat(cube_quat_w.unsqueeze(0))[0]  # columns = cube's own local axes, in world frame
+
+    bisector_to_cube_mm = torch.norm(true_bisector_w - cube_pos_w).item() * 1000.0
+    assumed_to_cube_mm = torch.norm(assumed_pinch_w - cube_pos_w).item() * 1000.0
+    base_to_cube_mm = torch.norm(base_pos_w - cube_pos_w).item() * 1000.0
+    jaw1_to_cube_mm = torch.norm(jaw1_pos_w - cube_pos_w).item() * 1000.0
+    jaw2_to_cube_mm = torch.norm(jaw2_pos_w - cube_pos_w).item() * 1000.0
+
+    bisector_local = cube_rot_w.T @ (true_bisector_w - cube_pos_w)
+    inside_cube = bool((bisector_local.abs() <= CUBE_HALF_SIZE).all().item())
+
+    jaw_axis_w = jaw2_pos_w - jaw1_pos_w
+    jaw_axis_w = jaw_axis_w / (torch.norm(jaw_axis_w) + 1e-8)
+    cube_axis_alignment = [abs(torch.dot(jaw_axis_w, cube_rot_w[:, k]).item()) for k in range(3)]
+    best_axis = max(range(3), key=lambda k: cube_axis_alignment[k])
+    approach_axis_alignment = abs(torch.dot(approach_axis_w, cube_rot_w[:, best_axis]).item())
+
+    print(f"[PINCH-GEOM] {label}: jaw1_w={jaw1_pos_w.tolist()} jaw2_w={jaw2_pos_w.tolist()} sep={jaw_sep_mm:.4f}mm")
+    print(f"[PINCH-GEOM] {label}: true_bisector_w={true_bisector_w.tolist()} assumed_pinch_w(_EE_OFFSET)={assumed_pinch_w.tolist()}")
+    print(f"[PINCH-GEOM] {label}: Q1 offset-vs-true-bisector DISCREPANCY = {offset_disc_mm:.4f}mm")
+    print(f"[PINCH-GEOM] {label}: gripper_base_link_w={base_pos_w.tolist()} cube_w={cube_pos_w.tolist()}")
+    print(
+        f"[PINCH-GEOM] {label}: dist-to-cube: true_bisector={bisector_to_cube_mm:.4f}mm "
+        f"assumed_pinch={assumed_to_cube_mm:.4f}mm gripper_base={base_to_cube_mm:.4f}mm "
+        f"jaw1={jaw1_to_cube_mm:.4f}mm jaw2={jaw2_to_cube_mm:.4f}mm"
+    )
+    print(
+        f"[PINCH-GEOM] {label}: Q2 true_bisector INSIDE cube volume (local-frame half-size={CUBE_HALF_SIZE * 1000:.1f}mm)? "
+        f"{inside_cube} (local coords mm={[round(x * 1000, 3) for x in bisector_local.tolist()]})"
+    )
+    print(
+        f"[PINCH-GEOM] {label}: Q2 jaw-opening-axis vs cube local axes |dot|={[round(x, 4) for x in cube_axis_alignment]} "
+        f"best_axis={best_axis} approach-axis(link_6 +Z) vs SAME axis |dot|={approach_axis_alignment:.4f} "
+        "(1.0=face-on/antipodal-candidate, 0.0=jaws closing tangent to a face - geometrically wrong regardless of "
+        "any offset bug)"
+    )
+    return {
+        "offset_disc_mm": offset_disc_mm,
+        "base_to_cube_mm": base_to_cube_mm,
+        "bisector_to_cube_mm": bisector_to_cube_mm,
+        "inside_cube": inside_cube,
+        "jaw_axis_alignment": cube_axis_alignment[best_axis],
+        "approach_axis_alignment": approach_axis_alignment,
+    }
+
+
 def main() -> None:
     env_cfg = Ar4GraspVerifyEnvCfg()
     env_cfg.sim.device = args_cli.device
@@ -454,6 +564,17 @@ def main() -> None:
     robot_entity_cfg.resolve(env.scene)
     ik_jacobi_idx = robot_entity_cfg.body_ids[0] - 1 if robot.is_fixed_base else robot_entity_cfg.body_ids[0]
     num_arm_joints = len(ARM_JOINT_NAMES)
+
+    # Resolved once here for the PINCH-GEOM diagnostic (this task,
+    # 2026-07-24) - same robot.find_bodies pattern grasp_demo_v2.py's own
+    # _measure_jaw_bisector_vs_ee_offset uses, real built-asset body ids,
+    # not FK-model bookkeeping.
+    gripper_jaw_body_ids, gripper_jaw_body_names_found = robot.find_bodies(["gripper_jaw1_link", "gripper_jaw2_link"])
+    gripper_base_body_id, gripper_base_body_name_found = robot.find_bodies(["gripper_base_link"])
+    print(
+        f"[INFO] PINCH-GEOM diagnostic body ids resolved: jaws={gripper_jaw_body_names_found}->{gripper_jaw_body_ids} "
+        f"base={gripper_base_body_name_found}->{gripper_base_body_id}"
+    )
 
     joint_pos_limits = robot.data.joint_pos_limits[:, robot_entity_cfg.joint_ids]
 
@@ -567,10 +688,17 @@ def main() -> None:
         # physics step for the first real bilateral-contact moment, at which
         # the LIVE (not pre-assumed) wrist orientation is captured and locked
         # for every phase from here on.
+        print("\n[INFO] PINCH-GEOM baseline (grasp_q reached, gripper still OPEN, before CLOSE)...")
+        _measure_pinch_geometry(
+            "PRE-CLOSE (grasp_q, gripper OPEN)", robot, robot_entity_cfg,
+            gripper_jaw_body_ids, gripper_base_body_id, cube,
+        )
+
         print(f"\n[PHASE 3 CLOSE] duration={CLOSE_STEPS} gripper=CLOSE watching for first bilateral contact...")
         locked_quat_b = None
         contact_step = None
         contact_forces_at_capture = None
+        contact_pinch_geom = None
         for i in range(CLOSE_STEPS):
             action = torch.zeros(env.num_envs, num_arm_joints + 1, device=env.device)
             for j in range(num_arm_joints):
@@ -590,6 +718,13 @@ def main() -> None:
                 print(
                     f"  [CONTACT DETECTED] step {i}: jaw1={jaw1_force:.4f}N jaw2={jaw2_force:.4f}N -> "
                     f"LOCKING orientation quat_b={locked_quat_b[0].tolist()}"
+                )
+                # Critical measurement for this task (2026-07-24,
+                # ar4-pinch-point-geometry-at-contact): AT THIS EXACT
+                # physics step, not derived/assumed after the fact.
+                contact_pinch_geom = _measure_pinch_geometry(
+                    "CONTACT MOMENT (this exact step)", robot, robot_entity_cfg,
+                    gripper_jaw_body_ids, gripper_base_body_id, cube,
                 )
 
             if i % 20 == 0 or i == CLOSE_STEPS - 1:
@@ -613,11 +748,25 @@ def main() -> None:
             locked_quat_b = _current_ee_quat_b(robot, robot_entity_cfg).clone()
             contact_step = -1
             contact_forces_at_capture = (0.0, 0.0)
+            print("[INFO] PINCH-GEOM at fallback (non-contact-verified) orientation, for reference only...")
+            contact_pinch_geom = _measure_pinch_geometry(
+                "FALLBACK (no real contact detected)", robot, robot_entity_cfg,
+                gripper_jaw_body_ids, gripper_base_body_id, cube,
+            )
 
         print(
             f"[SUMMARY] locked_quat_b={locked_quat_b[0].tolist()} captured_at_step={contact_step} "
             f"forces_at_capture={contact_forces_at_capture}"
         )
+        if contact_pinch_geom is not None:
+            print(
+                f"[SUMMARY] PINCH-GEOM at capture: Q1 offset_disc_mm={contact_pinch_geom['offset_disc_mm']:.4f}mm  "
+                f"Q2 base_to_cube_mm={contact_pinch_geom['base_to_cube_mm']:.4f}mm  "
+                f"bisector_to_cube_mm={contact_pinch_geom['bisector_to_cube_mm']:.4f}mm  "
+                f"true_bisector_inside_cube={contact_pinch_geom['inside_cube']}  "
+                f"jaw_axis_alignment={contact_pinch_geom['jaw_axis_alignment']:.4f}  "
+                f"approach_axis_alignment={contact_pinch_geom['approach_axis_alignment']:.4f}"
+            )
 
         def _run_pose_locked_phase(phase_name, duration, gripper_cmd, log_every=20):
             print(

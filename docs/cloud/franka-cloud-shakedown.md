@@ -26,29 +26,66 @@ FALLBACK, not the preferred path.** The preferred path (2026-07-24,
   hash (not overall repo HEAD), with a `LATEST` pointer and an automatic
   staleness check against the current checkout.
 
-**Real timing, measured live (2026-07-24)** against a real GCP
-`g2-standard-4` + 1x `nvidia-l4` SPOT instance (same machine type/image as
-this doc's own proven recipe below) — see
+**Real timing, measured live (2026-07-24/25)** against real GCP
+`g2-standard-4` + 1x `nvidia-l4` SPOT/on-demand instances (same machine
+type/image as this doc's own proven recipe below) — see
 `docs/cloud/dispatch-checklist.md`'s "AR4 work specifically" section for
-the full mechanism:
+the full mechanism. Numbers below are from a genuinely fresh instance's
+first (cold) pass, not a warmed/reused one:
 
-- Docker + NVIDIA Container Toolkit install: **[FILL IN]s**
+- Docker + NVIDIA Container Toolkit install: **23s**.
 - `docker pull nvcr.io/nvidia/isaac-lab:2.3.1` (cold, ~8.4GB compressed):
-  **[FILL IN]s**
+  **223s (~3.7min)**.
 - AR4 asset download from GCS cache (steady-state, real future-dispatch
-  cost — NOT the one-time build+upload also exercised in this same run):
-  **[FILL IN]s**
-- **Real steady-state future-dispatch setup time (docker/toolkit install +
-  cold container pull + GCS asset download, i.e. everything before a task's
-  own command starts running): [FILL IN]s ≈ [FILL IN] minutes**, vs. this
+  cost — NOT the one-time build+upload also exercised in the same run):
+  **4-9s**.
+- **Real steady-state future-dispatch SETUP time (docker/toolkit install +
+  cold container pull + GCS asset download, i.e. everything before a
+  task's own command starts running) ≈ 250-260s ≈ ~4.3 minutes**, vs. this
   doc's own previously-documented ~15-20min pip install + ~10-20min asset
-  rebuild ≈ 25-40 minutes for the equivalent from-scratch setup window —
-  see `.superpowers/sdd/progress.md` or the container-cache-cloud-infra
-  task's own report for the exact comparison.
-- Smoke test (containerized gripper open/close cycle video capture,
-  `scripts/_record_jaw_fix_open_close_cycle.py`, using the GCS-cached
-  asset): **[FILL IN]s**, video synced to
-  `gs://rl-manipulation-hks-runs/container-cache-pipeline-verify/`.
+  rebuild ≈ 25-40 minutes for the equivalent from-scratch setup window.
+  **This part is fully proven and is the real win of this task** — it was
+  reproduced consistently across multiple fresh-instance dispatches
+  (2026-07-24/25).
+- **Known gap, NOT resolved within this task's budget: the first
+  Isaac-Sim-touching `docker run` on a fresh instance pays an additional,
+  separate cost once GPU rendering is actually engaged.** `scripts/
+  build_asset.py` (no camera rendering, just a `SimulationApp({"headless":
+  True})` + URDF import) took as little as ~42-58s in early testing runs
+  where a missing host GL library (see the libnvidia-gl fix below) was
+  silently making the RTX renderer fail and skip real work — but once that
+  bug was fixed and the renderer actually engaged, the SAME step
+  consistently took **~550-560s (~9.2min)** on a genuinely cold GPU/driver/
+  container combination, matching this project's own already-documented
+  general Isaac Sim behavior ("startup can hang non-deterministically for
+  5-8 minutes even when nothing is wrong" — CLAUDE.md/START_HERE.md). The
+  smoke test (`scripts/_record_jaw_fix_open_close_cycle.py`, camera
+  rendering + video encoding) hit this same cost WORSE and did not
+  complete within this task's remaining time budget across two full
+  attempts (~30-40min and ~9min-then-hung, respectively, both showing
+  real, continuously-climbing CPU time — not a classic idle hang — but
+  never reaching completion). Root cause not fully confirmed, but the
+  leading hypothesis: `scripts/_cloud_ar4_container_pipeline.sh` uses
+  `docker run --rm` for every Isaac-Sim-touching step, so Kit's own
+  shader/GL/compute caches never persist across the pipeline's own
+  multiple separate container invocations within the same instance --
+  unlike IsaacLab's own `docker/docker-compose.yaml`, which mounts
+  persistent named volumes for exactly this (`isaac-cache-kit`,
+  `isaac-cache-gl`, `isaac-cache-compute`, `isaac-cache-ov`) specifically
+  to avoid re-paying this cost on every container run. **Recommended
+  follow-up**: add the same persistent named volumes to every `docker run`
+  in `_cloud_ar4_container_pipeline.sh` and re-verify; a repeat container
+  invocation with the same GPU driver *might* also simply be faster the
+  second time regardless (worth testing in isolation). Until this is
+  resolved, budget real wall-clock time (potentially 10+ minutes per
+  Isaac-Sim-touching container invocation) beyond the ~4.3min setup number
+  above for any task command that actually needs GPU rendering.
+- One real GCS-cached asset was produced and verified end-to-end:
+  `gs://rl-manipulation-hks-models/ar4_mk5/e6c3012eb973de228c2c1399ea819720c400ff27/`
+  (git sha of `scripts/build_asset.py` at build time), with a working
+  `LATEST` pointer — confirmed via a real wipe-and-redownload cycle on a
+  separate fresh instance that correctly restored the asset and passed its
+  own staleness check.
 
 EULA compliance: this pipeline pulls `nvcr.io/nvidia/isaac-lab:2.3.1`
 directly from NVIDIA's own NGC registry on each instance under that
@@ -57,6 +94,25 @@ redistribution-compliant pattern `docker/README.md` already documents for
 this repo's own local Dockerfile, just using NVIDIA's pre-built image
 instead of building on `isaac-lab-base` ourselves. Nothing is pushed to any
 registry by this project.
+
+**Real infra gap found and fixed live**: the DLVM image's driver install is
+compute-only (no GL/Vulkan libs) — same root cause already documented
+below for the pip-install path. Installing `libnvidia-gl-<major>-server` on
+the HOST fixes it for the container case too (nvidia-container-toolkit can
+only inject a library into a container if the host actually has it), but
+apt's currently-offered package version can be a newer point release than
+the kernel module the instance actually booted with, breaking `nvidia-smi`
+itself until a `sudo reboot`. `scripts/_cloud_ar4_container_pipeline.sh`
+fails fast with a clear message when this fires rather than attempting a
+fragile mid-script self-reboot — see its own step 1 comments.
+
+**Real SPOT preemption/stockout activity during this task's own live
+verification (2026-07-24/25, for context)**: hit 3 genuine SPOT
+preemptions and multiple full 11-zone stockouts across roughly 2.5 hours
+of dispatch attempts — consistent with, not worse than, this doc's own
+already-documented preemption-clustering and stockout history. Switched to
+`scripts/run_on_cloud_gpu.sh --on-demand` for the final verification
+attempt per the existing documented mitigation.
 
 # Franka cloud training shakedown — recipe (PROVEN end-to-end, 2026-07-13; re-verified 2026-07-14/15)
 

@@ -106,9 +106,16 @@ compatibility gap — e.g. a GPU driver/toolkit mismatch on some future DLVM
 image, or a task needing an Isaac Lab source-level change that isn't
 reflected in the pinned `2.3.1` container tag.
 
-**Real end-to-end timing (2026-07-24 verification)**: see
+**Real end-to-end timing (2026-07-24/25 verification)**: see
 `docs/cloud/franka-cloud-shakedown.md`'s own timing entry for the actual
-before/after numbers measured live against a real GCP instance.
+before/after numbers measured live against a real GCP instance. **The
+env+asset SETUP path (~4.3min) is fully proven; a real, NOT-yet-resolved
+gap remains where the first Isaac-Sim-rendering-touching `docker run` on a
+fresh instance can take 10+ minutes (observed once at ~9.2min, another
+attempt did not complete within this task's time budget) — read that
+doc's "Known gap" note before assuming a task command will start producing
+real GPU-rendered output quickly, and budget accordingly until the
+recommended persistent-Kit-cache-volume follow-up is built and verified.**
 
 ## 1. Blocking instruction (put this first, its own paragraph)
 

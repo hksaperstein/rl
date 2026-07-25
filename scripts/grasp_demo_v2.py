@@ -354,6 +354,91 @@ parser.add_argument(
     help="Override closeup_camera's spawn.focal_length (mm) at runtime, "
     "for iterating on FOV/zoom without editing tasks/ar4/grasp_verify_env_cfg.py.",
 )
+# 2026-07-24 (ar4-axis-align-ik task, coordinator-directed mid-task
+# correction): a FOURTH video, distinct from --closeup-camera's tight
+# gripper/cube-only framing - wide enough to keep the elbow (link_3, the
+# joint whose own hard limit this whole investigation centers on), forearm,
+# wrist, AND gripper/cube all visible together, so the elbow's own live
+# behavior during a real grasp attempt is directly watchable, not just its
+# downstream effect on the gripper. Follows the same live-measurement-based
+# derivation pattern as --closeup-camera (tasks/common/camera_positions.py's
+# registry / the isaac-sim-video-capture skill's "never guess coordinates"
+# rule) and the "reversed view" camera from
+# scripts/_record_jaw_fix_open_close_cycle.py (eye placed OFF the
+# elbow-gripper axis, not looking straight down it, to avoid that script's
+# own documented colinear-axis pitfall).
+parser.add_argument(
+    "--elbow-camera", action="store_true",
+    help="Record a FOURTH video (<video>_elbow_context.mp4) from a dedicated "
+    "wide camera (tasks/ar4/grasp_verify_env_cfg.py's elbow_context_camera), "
+    "repositioned at runtime once GRASP_Q's real link_3 (elbow)/jaw1/jaw2/"
+    "cube world positions are measured (never guessed - see "
+    "_compute_elbow_context_camera below), framed to keep elbow, forearm, "
+    "wrist, and gripper/cube all visible together - unlike --closeup-camera "
+    "(gripper/cube only) or demo_camera (wide 3/4 view, not specifically "
+    "elbow-tracking). Disabled by default.",
+)
+parser.add_argument(
+    "--elbow-camera-standoff-scale", type=float, default=0.9,
+    help="Eye offset (meters, world +X, same perpendicular-to-jaw-slide-axis "
+    "convention as --closeup-standoff) scaled by the LIVE-measured "
+    "elbow-to-gripper distance at GRASP_Q, so the standoff grows/shrinks "
+    "with the actual arm span instead of being a fixed guess (per the "
+    "isaac-sim-video-capture skill's colinear-axis/framing-scale lesson). "
+    "0.9x the elbow-to-gripper distance, by default.",
+)
+parser.add_argument(
+    "--elbow-camera-standoff-min", type=float, default=0.30,
+    help="Floor on --elbow-camera-standoff-scale's computed standoff "
+    "(meters), so a short elbow-to-gripper distance (e.g. a near-vertical, "
+    "close-reach configuration) doesn't produce a standoff too small to "
+    "avoid clipping arm geometry.",
+)
+parser.add_argument(
+    "--elbow-camera-z-lift", type=float, default=0.18,
+    help="Additional eye offset (meters, world +Z) on top of the X standoff "
+    "- larger than --closeup-z-lift's 0.05 since this camera needs to look "
+    "down across the WHOLE arm span (elbow to gripper), not just the "
+    "fingertip region, to avoid a flat edge-on view that foreshortens the "
+    "forearm.",
+)
+parser.add_argument(
+    "--elbow-camera-focal-length", type=float, default=24.0,
+    help="Override elbow_context_camera's spawn.focal_length (mm) at "
+    "runtime - wider than --closeup-focal-length's 40.0 by default since "
+    "this camera frames a much larger span (elbow to gripper) at a similar "
+    "or larger standoff.",
+)
+# 2026-07-24 (ar4-axis-align-ik task, coordinator-directed): a genuinely new
+# IK error formulation, neither "position" (3 DOF constrained, orientation
+# free - reaches the true grasp height but lands in an uncontrolled,
+# non-antipodal orientation, see this module's own recent history) nor
+# "pose" (6 DOF constrained, position + full orientation - produces a
+# controlled orientation but locks out the one remaining redundant DOF this
+# 6-DOF non-redundant arm needs to route around the joint_3/elbow limit at
+# this low a grasp height). A parallel-jaw gripper closing on a flat cube
+# face only needs its APPROACH-AXIS DIRECTION constrained (2 DOF - which way
+# the gripper points, so its closing axis is perpendicular to the face) -
+# the 3rd orientation DOF (roll about the approach axis) is irrelevant for a
+# gripper/flat-face pair and can be left free, giving position(3) +
+# axis-alignment(2) = 5 real constraints on 6 joints, i.e. exactly 1
+# genuine redundant DOF, enough to route around the elbow limit while still
+# guaranteeing a sensible, antipodal-viable approach direction. See
+# _axis_align_error_and_jacobian's own docstring for the Jacobian
+# derivation and scripts/_verify_axis_align_jacobian.py for its
+# finite-difference numerical verification (run BEFORE trusting this flag
+# for any real grasp attempt, per this task's own explicit requirement).
+parser.add_argument(
+    "--axis-aligned", action="store_true",
+    help="Use the reduced-DOF axis-alignment IK error/Jacobian (position + "
+    "2D approach-axis-direction error, NOT full 6D pose) for the PREGRASP "
+    "polish and the GRASP one-shot/incremental-descent/deep-polish solves, "
+    "instead of the existing command_type='pose' full-orientation-locked "
+    "solve. Leaves exactly 1 redundant DOF (roll about the approach axis) "
+    "free, unlike the existing 'pose' mode's 0 redundant DOF at this arm's "
+    "6-DOF/6-constraint limit. Disabled by default (no change to any "
+    "existing behavior unless passed).",
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 args_cli.enable_cameras = True
@@ -542,6 +627,115 @@ def _build_canonical_target_quat_b(root_pos_w: torch.Tensor, root_quat_w: torch.
     target_quat_w = _build_canonical_target_quat_w(str(root_pos_w.device), tilt_deg=tilt_deg)
     _, target_quat_b = subtract_frame_transforms(root_pos_w, root_quat_w, root_pos_w, target_quat_w)
     return target_quat_b
+
+
+def _build_canonical_axes_b(root_pos_w: torch.Tensor, root_quat_w: torch.Tensor, tilt_deg: float = 0.0):
+    """2026-07-24 (ar4-axis-align-ik task): returns ``(n_des_b, u_b, v_b)`` -
+    the desired approach-axis DIRECTION and two orthonormal basis vectors
+    spanning the plane perpendicular to it, all as ROOT-frame unit vectors
+    (N,3) - by extracting the columns of ``_build_canonical_target_quat_b``'s
+    own already orthonormality-asserted rotation matrix (local +Z column =
+    approach axis = ``n_des_b``, local +X/+Y columns = ``u_b``/``v_b``)
+    rather than re-deriving a fresh basis from scratch. This is deliberate
+    reuse, not a coincidence: the SAME geometric frame this module already
+    uses to fully constrain orientation in ``command_type="pose"`` mode is
+    exactly the frame whose X/Y columns give a ready-made orthonormal basis
+    for the 2 DOF this task's reduced constraint set actually cares about
+    (see ``_axis_align_error_and_jacobian``'s own docstring for why only 2,
+    not 3, orientation DOF matter for a gripper closing on a flat cube
+    face)."""
+    target_quat_b = _build_canonical_target_quat_b(root_pos_w, root_quat_w, tilt_deg=tilt_deg)
+    rot = matrix_from_quat(target_quat_b)  # (N,3,3); columns = local axes expressed in root frame
+    u_b = rot[:, :, 0].clone()
+    v_b = rot[:, :, 1].clone()
+    n_des_b = rot[:, :, 2].clone()
+    return n_des_b, u_b, v_b
+
+
+def _skew_batch(v: torch.Tensor) -> torch.Tensor:
+    """Batched 3x3 skew-symmetric ("cross-product") matrix from a batch of
+    3-vectors ``v`` (N,3), such that ``skew(v) @ w == v cross w`` for any
+    ``w``. The same construction is already inlined once in
+    ``_ee_point_pos_and_jacobian`` (for the rigid EE-offset correction);
+    factored out here as a standalone helper because
+    ``_axis_align_error_and_jacobian`` below needs it for a second,
+    independent use (``skew(n_cur)``, not an offset vector)."""
+    skew = torch.zeros(v.shape[0], 3, 3, device=v.device)
+    skew[:, 0, 1], skew[:, 0, 2] = -v[:, 2], v[:, 1]
+    skew[:, 1, 0], skew[:, 1, 2] = v[:, 2], -v[:, 0]
+    skew[:, 2, 0], skew[:, 2, 1] = -v[:, 1], v[:, 0]
+    return skew
+
+
+def _axis_align_error_and_jacobian(
+    ee_quat_b: torch.Tensor, jac_ang: torch.Tensor, n_des_b: torch.Tensor, u_b: torch.Tensor, v_b: torch.Tensor,
+):
+    """2026-07-24 (ar4-axis-align-ik task): the reduced-DOF ORIENTATION
+    constraint at the center of this task - given the gripper's CURRENT
+    approach-axis direction (link_6 local +Z, the same axis convention
+    ``_EE_OFFSET``/``_CANONICAL_Z_AXIS_W`` already use, expressed as a root-
+    frame unit vector derived from ``ee_quat_b``) and a FIXED desired
+    approach-axis direction ``n_des_b`` (perpendicular to the cube's flat
+    top face - straight down for this scene's world-axis-aligned,
+    non-randomized cube), returns:
+
+    - ``axis_error_2d`` (N,2): error IN THE ``(u_b, v_b)`` BASIS (the fixed
+      orthonormal plane exactly perpendicular to ``n_des_b`` - not an
+      approximation, guaranteed by ``_build_canonical_axes_b``'s own
+      orthonormality assertions), following the SAME "target minus current"
+      convention this module's existing ``compute_pose_error``-based
+      ``pos_error``/``rot_error`` already use. The TARGET's own projection
+      onto ``(u_b, v_b)`` is always exactly 0 (``u_b``/``v_b`` are both
+      exactly perpendicular to ``n_des_b`` by construction), so
+      ``axis_error_2d = -[u_b . n_cur_b, v_b . n_cur_b]``.
+    - ``axis_jac_2d`` (N,2,num_joints): the Jacobian of that SAME tracked
+      quantity (``n_cur``'s own projection onto the ``(u_b, v_b)`` plane)
+      with respect to joint velocities - mirroring ``point_jac_pos =
+      d(position)/dq`` used directly against ``pos_error = target -
+      current`` elsewhere in this module (Jacobian-of-the-quantity, not
+      Jacobian-of-the-error - the same convention throughout, not a new one
+      invented for this function).
+    - ``true_axis_angle`` (N,): the EXACT (not small-angle-linearized)
+      geometric angle between ``n_cur_b`` and ``n_des_b``, via
+      ``arccos`` of their dot product - used for convergence/scoring/
+      reporting, kept separate from ``axis_error_2d`` (a first-order/
+      tangent-plane quantity, the same kind of local linearization DLS
+      already relies on for every per-step Jacobian solve in this file) so
+      reported angles are never an optimistic small-angle proxy.
+
+    Derivation: for a unit vector ``n_cur`` rigidly attached to a rotating
+    body, ``dn_cur/dt = omega x n_cur = -skew(n_cur) @ omega`` - standard
+    rigid-body kinematics, EXACT, not an approximation. Since ``omega =
+    jac_ang @ dq_dot`` (the same differential-kinematics relationship this
+    module's existing 3-row rotation Jacobian ``jac_ang = jacobian_b[:,
+    3:6, :]`` already uses directly), ``d(n_cur)/dq_dot = -skew(n_cur) @
+    jac_ang``. Projecting onto the FIXED ``(u_b, v_b)`` basis (fixed because
+    ``n_des_b``/``u_b``/``v_b`` don't change during a solve - only
+    ``n_cur`` does) gives ``axis_jac_2d`` directly, with no further
+    approximation beyond the one differential IK already makes everywhere
+    else in this module (a first-order joint-velocity-to-quantity-rate
+    relationship, used as a per-step linearization inside an iterative
+    DLS loop). Verified numerically via finite-difference against a live
+    Isaac Sim Jacobian in ``scripts/_verify_axis_align_jacobian.py`` BEFORE
+    being trusted for any real grasp attempt, per this task's own explicit
+    requirement - see that script for the verification method and result."""
+    rot_cur = matrix_from_quat(ee_quat_b)  # (N,3,3)
+    n_cur_b = rot_cur[:, :, 2]  # local +Z column = approach axis, root frame
+
+    cos_angle = torch.clamp((n_cur_b * n_des_b).sum(dim=-1), -1.0, 1.0)
+    true_axis_angle = torch.acos(cos_angle)
+
+    u_dot = (u_b * n_cur_b).sum(dim=-1, keepdim=True)  # (N,1)
+    v_dot = (v_b * n_cur_b).sum(dim=-1, keepdim=True)  # (N,1)
+    axis_error_2d = -torch.cat([u_dot, v_dot], dim=-1)  # (N,2): target(0) - current
+
+    d_ncur_dq = -torch.bmm(_skew_batch(n_cur_b), jac_ang)  # (N,3,num_joints)
+    j_u = torch.bmm(u_b.unsqueeze(1), d_ncur_dq)  # (N,1,num_joints)
+    j_v = torch.bmm(v_b.unsqueeze(1), d_ncur_dq)  # (N,1,num_joints)
+    axis_jac_2d = torch.cat([j_u, j_v], dim=1)  # (N,2,num_joints)
+
+    return axis_error_2d, axis_jac_2d, true_axis_angle
+
 
 # Diverse (j2, j3, j5) candidate seeds for _find_best_seed() (j1 comes from the
 # calibration formula, j4/j6 start at 0). The corrected DLS polish (see
@@ -1124,6 +1318,151 @@ def polish_from_seed(
     return robot.data.joint_pos[0, robot_entity_cfg.joint_ids].tolist(), final_pos_residual, final_rot_residual
 
 
+def polish_from_seed_axis_aligned(
+    env, ik_controller, robot_entity_cfg, ik_jacobi_idx, target_pos_b, n_des_b, u_b, v_b, seed_q, num_arm_joints, joint_pos_limits,
+    max_steps=None, stagnation_break_steps=None, pos_threshold=None, rot_threshold=None,
+):
+    """2026-07-24 (ar4-axis-align-ik task): sibling of ``polish_from_seed``
+    implementing a genuinely different IK error formulation - REDUCED-DOF
+    orientation (position (3) + approach-axis-DIRECTION alignment (2) = 5
+    real constraints on this 6-DOF arm, leaving exactly 1 genuine redundant
+    DOF - roll about the approach axis) instead of ``polish_from_seed``'s
+    full 6D pose (position (3) + full orientation (3) = 6 constraints, 0
+    redundant DOF). See ``_axis_align_error_and_jacobian``'s own docstring
+    for the Jacobian derivation and why this is the geometrically correct
+    constraint set for a parallel-jaw gripper closing on a flat cube face
+    (only the approach-axis direction matters for grasp quality; roll about
+    that axis is irrelevant for a gripper/flat-face pair).
+
+    Deliberately a NEW function, not a parameterized branch inside
+    ``polish_from_seed`` itself (this task's own instruction: "don't just
+    tweak the existing position/pose modes") - but otherwise mirrors that
+    function's overall loop structure/bookkeeping EXACTLY (continuous
+    per-physics-step re-solve, bounded per-step Cartesian/rotation
+    correction, "keep best across rounds" regression guard, stagnation-break,
+    joint-limit clamp, same never-teleports-to-seed_q contract that makes
+    chaining calls back-to-back a genuine continuous resolve) so it can be
+    dropped into the exact same call sites (PREGRASP polish, GRASP
+    one-shot/incremental-descent/deep-polish) as a like-for-like swap.
+
+    Does NOT use ``ik_controller.set_command``/``.compute`` (those assume a
+    3-row "position" or 6-row "pose" command, hardcoded via
+    ``DifferentialIKController.action_dim`` - neither fits a genuinely 5-row
+    task). Instead calls ``ik_controller._compute_delta_joint_pos`` directly
+    - the DLS solve itself (``delta_q = J^T (J J^T + lambda^2 I)^-1 @
+    delta_pose``, see ``differential_ik.py``) is ROW-COUNT-AGNOSTIC (the
+    damping identity matrix is sized off ``jacobian.shape[1]`` at call time,
+    not a hardcoded 3/6), so this reuses the exact same already-validated
+    DLS numerics/damping (``LAMBDA_VAL``) this whole module relies on
+    everywhere else, rather than hand-rolling a parallel implementation."""
+    robot = env.scene["robot"]
+    max_steps = POLISH_MAX_STEPS if max_steps is None else max_steps
+    stagnation_break_steps = STAGNATION_BREAK_STEPS if stagnation_break_steps is None else stagnation_break_steps
+    pos_threshold = CONVERGENCE_THRESHOLD if pos_threshold is None else pos_threshold
+    rot_threshold = ROT_CONVERGENCE_THRESHOLD if rot_threshold is None else rot_threshold
+
+    def _combined_score(pos_err: float, axis_err: float) -> float:
+        return pos_err + ORIENTATION_SCORE_WEIGHT * axis_err
+
+    def _measure_axis_angle() -> float:
+        ee_pose_w = robot.data.body_pose_w[:, robot_entity_cfg.body_ids[0]]
+        _, ee_quat_b = subtract_frame_transforms(
+            robot.data.root_pose_w[:, 0:3], robot.data.root_pose_w[:, 3:7], ee_pose_w[:, 0:3], ee_pose_w[:, 3:7]
+        )
+        rot_cur = matrix_from_quat(ee_quat_b)
+        n_cur_b = rot_cur[:, :, 2]
+        cos_angle = torch.clamp((n_cur_b * n_des_b).sum(dim=-1), -1.0, 1.0)
+        return torch.acos(cos_angle)[0].item()
+
+    best_pos_residual = _measure_dist(robot, robot_entity_cfg, target_pos_b)
+    best_axis_residual = _measure_axis_angle()
+    best_score = _combined_score(best_pos_residual, best_axis_residual)
+    best_polish_q = list(seed_q)
+    final_pos_residual = best_pos_residual
+    final_axis_residual = best_axis_residual
+    steps_since_improvement = 0
+
+    for step_num in range(max_steps):
+        current_joint_pos = robot.data.joint_pos[:, robot_entity_cfg.joint_ids].clone()
+        ee_pose_w = robot.data.body_pose_w[:, robot_entity_cfg.body_ids[0]]
+        ee_pos_b, ee_quat_b = subtract_frame_transforms(
+            robot.data.root_pose_w[:, 0:3], robot.data.root_pose_w[:, 3:7], ee_pose_w[:, 0:3], ee_pose_w[:, 3:7]
+        )
+
+        jacobian_w = robot.root_physx_view.get_jacobians()[:, ik_jacobi_idx, :, robot_entity_cfg.joint_ids]
+        jacobian_b = _world_jacobian_to_root_frame(jacobian_w, robot.data.root_quat_w)
+
+        point_pos_b, point_jac_pos = _ee_point_pos_and_jacobian(ee_pos_b, ee_quat_b, jacobian_b)
+        jac_ang = jacobian_b[:, 3:6, :]
+        axis_error_2d, axis_jac_2d, true_axis_angle = _axis_align_error_and_jacobian(ee_quat_b, jac_ang, n_des_b, u_b, v_b)
+        full_jac = torch.cat([point_jac_pos, axis_jac_2d], dim=1)  # (N,5,num_joints)
+
+        pos_error = target_pos_b - point_pos_b
+        pos_norm = torch.norm(pos_error, dim=-1, keepdim=True)
+        pos_step = pos_error / (pos_norm + 1e-8) * torch.clamp(pos_norm, max=POLISH_STEP_MAX)
+        axis_norm = torch.norm(axis_error_2d, dim=-1, keepdim=True)
+        axis_step = axis_error_2d / (axis_norm + 1e-8) * torch.clamp(axis_norm, max=POLISH_ROT_STEP_MAX)
+        delta_pose = torch.cat([pos_step, axis_step], dim=-1)  # (N,5)
+
+        delta_joint_pos = ik_controller._compute_delta_joint_pos(delta_pose=delta_pose, jacobian=full_jac)
+        joint_pos_des = current_joint_pos + delta_joint_pos
+
+        lo = joint_pos_limits[:, :, 0]
+        hi = joint_pos_limits[:, :, 1]
+        joint_pos_des = torch.clamp(joint_pos_des, min=lo, max=hi)
+
+        action = torch.zeros(env.num_envs, num_arm_joints + 1, device=env.device)
+        action[:, :num_arm_joints] = joint_pos_des
+        action[:, num_arm_joints] = GRIPPER_OPEN
+        env.step(action)
+
+        final_pos_residual = _measure_dist(robot, robot_entity_cfg, target_pos_b)
+        final_axis_residual = _measure_axis_angle()
+        final_score = _combined_score(final_pos_residual, final_axis_residual)
+        if step_num % 100 == 0 or step_num == max_steps - 1:
+            live_q = robot.data.joint_pos[0, robot_entity_cfg.joint_ids].tolist()
+            lo_list = joint_pos_limits[0, :, 0].tolist()
+            hi_list = joint_pos_limits[0, :, 1].tolist()
+            margins = [min(q - l, h - q) for q, l, h in zip(live_q, lo_list, hi_list)]
+            print(
+                f"  [AXIS-POLISH step {step_num:4d}] pos_err={final_pos_residual:.5f}m axis_angle_err={final_axis_residual:.4f}rad "
+                f"q={['%.4f' % v for v in live_q]} limit_margin={['%.4f' % v for v in margins]}"
+            )
+        if final_score < best_score:
+            best_score = final_score
+            best_pos_residual = final_pos_residual
+            best_axis_residual = final_axis_residual
+            best_polish_q = robot.data.joint_pos[0, robot_entity_cfg.joint_ids].tolist()
+            steps_since_improvement = 0
+        else:
+            steps_since_improvement += 1
+        if final_pos_residual < pos_threshold and final_axis_residual < rot_threshold:
+            break
+        if steps_since_improvement >= stagnation_break_steps:
+            print(
+                f"  [AXIS-POLISH] no improvement for {stagnation_break_steps} consecutive steps - stopping early "
+                f"at step {step_num} instead of running the full {max_steps}-step budget"
+            )
+            break
+
+    if best_score < _combined_score(final_pos_residual, final_axis_residual):
+        print(
+            f"  [AXIS-POLISH] last round (pos={final_pos_residual:.5f}m axis_angle={final_axis_residual:.4f}rad) was "
+            f"worse than the best round found (pos={best_pos_residual:.5f}m axis_angle={best_axis_residual:.4f}rad) - "
+            "restoring the best config instead of the last one"
+        )
+        _settle_at(env, robot, robot_entity_cfg, num_arm_joints, best_polish_q, POLISH_SETTLE_STEPS * 2)
+        final_pos_residual = best_pos_residual
+        final_axis_residual = best_axis_residual
+
+    residual_vec = _measure_dist_vec(robot, robot_entity_cfg, target_pos_b)
+    print(
+        f"  [AXIS-POLISH] final residual: pos={final_pos_residual:.5f}m axis_angle={final_axis_residual:.4f}rad "
+        f"(target-achieved per-axis xyz: {['%.5f' % v for v in residual_vec]})"
+    )
+    return robot.data.joint_pos[0, robot_entity_cfg.joint_ids].tolist(), final_pos_residual, final_axis_residual
+
+
 def _lookat_quat_opengl(eye, target):
     """OpenGL look-at convention (forward=-Z, up=+Y), same helper pattern
     already established by scripts/_record_jaw_fix_open_close_cycle.py's
@@ -1170,6 +1509,53 @@ def _compute_closeup_camera(jaw1_pos, jaw2_pos, cube_pos, standoff=0.15, z_lift=
     return tuple(eye.tolist()), tuple(target.tolist())
 
 
+def _compute_elbow_context_camera(elbow_pos, jaw1_pos, jaw2_pos, cube_pos, standoff_scale=0.9, standoff_min=0.30, z_lift=0.18):
+    """2026-07-24 (ar4-axis-align-ik task, coordinator-directed mid-task
+    correction): given LIVE-MEASURED (never guessed) link_3 (elbow)/jaw1/
+    jaw2/cube world positions at the settled GRASP_Q pose, return (eye,
+    target) for a WIDE camera that keeps the elbow, forearm, wrist, and
+    gripper/cube all visible together - distinct from
+    ``_compute_closeup_camera``'s tight gripper/cube-only framing, built
+    specifically so the elbow's (``link_3``, ``joint_3``) own live behavior
+    is directly watchable during a real grasp attempt, given this whole
+    investigation centers on that joint's hard limit.
+
+    target = midpoint between the elbow and the gripper/cube contact region
+    (jaw1/jaw2/cube average) - centers the frame on the whole arm span, not
+    just one end.
+
+    eye = target, offset by a standoff along world +X (same perpendicular-
+    to-jaw-slide-axis convention as ``_compute_closeup_camera`` - avoids
+    both the black-frame risk of a level/close eye and the "reversed view"
+    pitfall of placing eye/target ON the elbow-gripper axis itself, per the
+    isaac-sim-video-capture skill's documented failure signatures) and
+    world +Z. The X standoff is SCALED by the live elbow-to-gripper
+    distance (floored at ``standoff_min``) rather than a fixed constant -
+    per the skill's own "framing scale needs to be re-validated against
+    subject size, not assumed to carry over" lesson from this project's
+    reversed-view camera tuning history - so a short-reach configuration
+    doesn't get an oversized standoff (elbow/gripper rendered tiny) and a
+    long-reach configuration doesn't get an undersized one (elbow or
+    gripper cropped out of frame)."""
+    import numpy as np
+
+    elbow = np.asarray(elbow_pos, dtype=float)
+    jaw1 = np.asarray(jaw1_pos, dtype=float)
+    jaw2 = np.asarray(jaw2_pos, dtype=float)
+    cube = np.asarray(cube_pos, dtype=float)
+    jaw_mid = (jaw1 + jaw2) / 2.0
+    gripper_point = (jaw_mid + cube) / 2.0
+    target = (elbow + gripper_point) / 2.0
+
+    span = float(np.linalg.norm(gripper_point - elbow))
+    standoff = max(standoff_min, standoff_scale * span)
+
+    eye = target.copy()
+    eye[0] += standoff
+    eye[2] += z_lift
+    return tuple(eye.tolist()), tuple(target.tolist()), span, standoff
+
+
 def main() -> None:
     env_cfg = Ar4GraspVerifyEnvCfg()
     env_cfg.sim.device = args_cli.device
@@ -1193,6 +1579,10 @@ def main() -> None:
         # GRASP_Q's real jaw/cube world positions are measured - only the
         # lens itself needs to be set before env creation.
         env_cfg.scene.closeup_camera.spawn.focal_length = args_cli.closeup_focal_length
+    if args_cli.elbow_camera:
+        # Same pattern as --closeup-camera above - only the lens needs to
+        # be set before env creation, pos/rot are overwritten at runtime.
+        env_cfg.scene.elbow_context_camera.spawn.focal_length = args_cli.elbow_camera_focal_length
 
     env = ManagerBasedEnv(cfg=env_cfg)
 
@@ -1251,6 +1641,15 @@ def main() -> None:
     # asset here rather than trusting the offline calculation alone.
     gripper_jaw_body_ids, gripper_jaw_body_names_found = robot.find_bodies(["gripper_jaw1_link", "gripper_jaw2_link"])
     print(f"[INFO] Gripper jaw body ids resolved: {gripper_jaw_body_names_found} -> {gripper_jaw_body_ids}")
+
+    # 2026-07-24 (ar4-axis-align-ik task, coordinator-directed): elbow
+    # (link_3, per tasks/ar4/fk_verification.py's vendor-URDF joint table -
+    # joint_2=shoulder, joint_3=elbow, joint_4/5/6=wrist) body id, resolved
+    # here alongside the gripper jaw bodies for the same reason - needed
+    # for --elbow-camera's live-measurement-based framing (never guessed
+    # coordinates, per the isaac-sim-video-capture skill).
+    elbow_body_ids, elbow_body_names_found = robot.find_bodies(["link_3"])
+    print(f"[INFO] Elbow (link_3) body id resolved: {elbow_body_names_found} -> {elbow_body_ids}")
 
     def _measure_jaw_bisector_vs_ee_offset(label: str, cube_pos_w=None):
         """Live-measure both jaw fingertips' world positions, the true
@@ -1333,6 +1732,19 @@ def main() -> None:
         closeup_video_writer = imageio.get_writer(closeup_video_path, fps=int(1.0 / env.step_dt), codec="libx264")
         closeup_camera = env.scene["closeup_camera"]
 
+    # 2026-07-24 (ar4-axis-align-ik task, coordinator-directed): FOURTH
+    # camera/video, only opened when --elbow-camera is set - same pattern
+    # as closeup_video_writer/closeup_camera above. elbow_context_camera
+    # itself is repositioned later, once GRASP_Q's real elbow/jaw/cube
+    # world positions are measured (see the _compute_elbow_context_camera
+    # call right after grasp_q is solved, alongside the closeup one).
+    elbow_video_path = VIDEO_PATH.replace(".mp4", "_elbow_context.mp4")
+    elbow_video_writer = None
+    elbow_camera = None
+    if args_cli.elbow_camera:
+        elbow_video_writer = imageio.get_writer(elbow_video_path, fps=int(1.0 / env.step_dt), codec="libx264")
+        elbow_camera = env.scene["elbow_context_camera"]
+
     with torch.inference_mode():
         env.reset()
 
@@ -1378,6 +1790,36 @@ def main() -> None:
         # per-waypoint). See _build_canonical_target_quat_b's own docstring.
         target_quat_b = _build_canonical_target_quat_b(root_pos_w, root_quat_w, tilt_deg=args_cli.tilt_deg)
         print(f"[INFO] Canonical target orientation (root frame, w,x,y,z): {target_quat_b[0].tolist()}")
+
+        # 2026-07-24 (ar4-axis-align-ik task): --axis-aligned setup. n_des_b/
+        # u_b/v_b (see _build_canonical_axes_b's own docstring) are the fixed
+        # desired-approach-axis-direction basis the reduced-DOF solve targets
+        # - built here (once, from the SAME canonical frame target_quat_b
+        # above already uses) so it's available to the `_polish` closure
+        # below regardless of which mode is active. `_polish` is a thin
+        # dispatch wrapper so the PREGRASP/GRASP call sites further down
+        # (already used by every other mode/flag in this script) can stay a
+        # single call each, swapping the underlying IK error/Jacobian
+        # formulation via one flag instead of duplicating the whole
+        # seed-search/descent/deep-polish control flow for the new mode.
+        n_des_b, u_b, v_b = _build_canonical_axes_b(root_pos_w, root_quat_w, tilt_deg=args_cli.tilt_deg)
+        if args_cli.axis_aligned:
+            print(
+                f"[INFO] --axis-aligned: using the reduced-DOF axis-alignment IK error/Jacobian "
+                f"(position + 2D approach-axis error, 1 redundant DOF) for PREGRASP/GRASP solves. "
+                f"n_des_b={n_des_b[0].tolist()} u_b={u_b[0].tolist()} v_b={v_b[0].tolist()}"
+            )
+
+        def _polish(target_pos_b, seed_q, **kw):
+            if args_cli.axis_aligned:
+                return polish_from_seed_axis_aligned(
+                    env, ik_controller, robot_entity_cfg, ik_jacobi_idx, target_pos_b, n_des_b, u_b, v_b, seed_q,
+                    num_arm_joints, joint_pos_limits, **kw,
+                )
+            return polish_from_seed(
+                env, ik_controller, robot_entity_cfg, ik_jacobi_idx, target_pos_b, target_quat_b, seed_q,
+                num_arm_joints, joint_pos_limits, **kw,
+            )
 
         # Known-good absolute configs from a prior offline multi-seed search
         # at this exact target (cube (0.0, 0.275, 0.009)) - see
@@ -1463,6 +1905,8 @@ def main() -> None:
             demo_video_writer.close()
             if closeup_video_writer is not None:
                 closeup_video_writer.close()
+            if elbow_video_writer is not None:
+                elbow_video_writer.close()
             env.close()
             return
 
@@ -1524,6 +1968,8 @@ def main() -> None:
             demo_video_writer.close()
             if closeup_video_writer is not None:
                 closeup_video_writer.close()
+            if elbow_video_writer is not None:
+                elbow_video_writer.close()
             env.close()
             return
 
@@ -1601,6 +2047,8 @@ def main() -> None:
             demo_video_writer.close()
             if closeup_video_writer is not None:
                 closeup_video_writer.close()
+            if elbow_video_writer is not None:
+                elbow_video_writer.close()
             env.close()
             return
 
@@ -1700,10 +2148,8 @@ def main() -> None:
         else:
             print("\n[INFO] Finding best seed for PREGRASP waypoint (multi-seed, genuinely settled)...")
             seed_q, _ = _find_best_seed(env, robot, robot_entity_cfg, num_arm_joints, pregrasp_pos_b, target_quat_b, seed_j1, extra_full_seeds=[KNOWN_GOOD_PREGRASP_Q])
-            print("[INFO] Polishing PREGRASP waypoint (fixed-Jacobian, pose-DLS)...")
-            pregrasp_q, pregrasp_residual, pregrasp_rot_residual = polish_from_seed(
-                env, ik_controller, robot_entity_cfg, ik_jacobi_idx, pregrasp_pos_b, target_quat_b, seed_q, num_arm_joints, joint_pos_limits
-            )
+            print(f"[INFO] Polishing PREGRASP waypoint ({'axis-aligned' if args_cli.axis_aligned else 'fixed-Jacobian, pose-DLS'})...")
+            pregrasp_q, pregrasp_residual, pregrasp_rot_residual = _polish(pregrasp_pos_b, seed_q)
 
         # 2026-07-22 (ar4-grasp-z-envelope task): map the reachable Z-height
         # envelope at THIS cube_pos_b (the descent-continuity task's own
@@ -1747,6 +2193,8 @@ def main() -> None:
             demo_video_writer.close()
             if closeup_video_writer is not None:
                 closeup_video_writer.close()
+            if elbow_video_writer is not None:
+                elbow_video_writer.close()
             env.close()
             return
 
@@ -1790,10 +2238,8 @@ def main() -> None:
                 env, robot, robot_entity_cfg, num_arm_joints, grasp_pos_b, target_quat_b, seed_j1,
                 extra_full_seeds=[KNOWN_GOOD_GRASP_Q, pregrasp_q] + wrist_perturbed_seeds,
             )
-            print("[INFO] Polishing GRASP waypoint (fixed-Jacobian, pose-DLS, one-shot independent target)...")
-            grasp_q, grasp_residual, grasp_rot_residual = polish_from_seed(
-                env, ik_controller, robot_entity_cfg, ik_jacobi_idx, grasp_pos_b, target_quat_b, seed_q, num_arm_joints, joint_pos_limits
-            )
+            print(f"[INFO] Polishing GRASP waypoint ({'axis-aligned' if args_cli.axis_aligned else 'fixed-Jacobian, pose-DLS'}, one-shot independent target)...")
+            grasp_q, grasp_residual, grasp_rot_residual = _polish(grasp_pos_b, seed_q)
         else:
             # 2026-07-22 (ar4-grasp-descent-continuity task): disconnected-
             # basin hypothesis test. The prior session found GRASP solved as
@@ -1831,9 +2277,8 @@ def main() -> None:
                 sub_z = z_start + (z_end - z_start) * sub_idx / args_cli.num_descent_steps
                 sub_target_pos_b = cube_pos_b.clone()
                 sub_target_pos_b[:, 2] = sub_z
-                grasp_q, grasp_residual, grasp_rot_residual = polish_from_seed(
-                    env, ik_controller, robot_entity_cfg, ik_jacobi_idx, sub_target_pos_b, target_quat_b, grasp_q,
-                    num_arm_joints, joint_pos_limits,
+                grasp_q, grasp_residual, grasp_rot_residual = _polish(
+                    sub_target_pos_b, grasp_q,
                     max_steps=DESCENT_SUBSTEP_MAX_STEPS, stagnation_break_steps=DESCENT_SUBSTEP_STAGNATION_STEPS,
                 )
                 print(
@@ -1863,9 +2308,8 @@ def main() -> None:
                 f"rot_threshold={args_cli.grasp_rot_threshold} (pre-pass residual: "
                 f"pos={pre_deep_pos:.5f}m rot={pre_deep_rot:.4f}rad)"
             )
-            grasp_q, grasp_residual, grasp_rot_residual = polish_from_seed(
-                env, ik_controller, robot_entity_cfg, ik_jacobi_idx, grasp_pos_b, target_quat_b, grasp_q,
-                num_arm_joints, joint_pos_limits,
+            grasp_q, grasp_residual, grasp_rot_residual = _polish(
+                grasp_pos_b, grasp_q,
                 max_steps=args_cli.grasp_deep_polish_steps, stagnation_break_steps=deep_stagnation,
                 pos_threshold=args_cli.grasp_pos_threshold, rot_threshold=args_cli.grasp_rot_threshold,
             )
@@ -1955,6 +2399,32 @@ def main() -> None:
             closeup_quat_t = torch.tensor([closeup_quat], device=env.device)
             closeup_camera.set_world_poses(positions=closeup_eye_t, orientations=closeup_quat_t, convention="opengl")
 
+        if args_cli.elbow_camera:
+            # Same live-settled-at-grasp_q moment as the closeup-camera
+            # block above (robot is genuinely AT grasp_q right now, per
+            # _check_orientation_at's own settle loop) - measure the REAL
+            # elbow (link_3) world position here too, alongside jaw1/jaw2/
+            # cube, rather than guessing/hardcoding it.
+            elbow_pos_w_for_cam = robot.data.body_pos_w[0, elbow_body_ids].cpu().tolist()[0]
+            jaw_pos_w_for_cam = robot.data.body_pos_w[0, gripper_jaw_body_ids].cpu().tolist()
+            cube_pos_for_cam = cube_init_pos.cpu().tolist()
+            elbow_eye, elbow_target, elbow_span, elbow_standoff = _compute_elbow_context_camera(
+                elbow_pos_w_for_cam, jaw_pos_w_for_cam[0], jaw_pos_w_for_cam[1], cube_pos_for_cam,
+                standoff_scale=args_cli.elbow_camera_standoff_scale, standoff_min=args_cli.elbow_camera_standoff_min,
+                z_lift=args_cli.elbow_camera_z_lift,
+            )
+            print(
+                f"[ELBOW-CONTEXT CAMERA] elbow_world(link_3)={['%.5f' % v for v in elbow_pos_w_for_cam]} "
+                f"jaw1_world={['%.5f' % v for v in jaw_pos_w_for_cam[0]]} "
+                f"jaw2_world={['%.5f' % v for v in jaw_pos_w_for_cam[1]]} "
+                f"cube_world={['%.5f' % v for v in cube_pos_for_cam]} elbow_to_gripper_span={elbow_span:.4f}m "
+                f"standoff={elbow_standoff:.4f}m -> EYE={['%.5f' % v for v in elbow_eye]} TARGET={['%.5f' % v for v in elbow_target]}"
+            )
+            elbow_quat = _lookat_quat_opengl(elbow_eye, elbow_target)
+            elbow_eye_t = torch.tensor([elbow_eye], device=env.device)
+            elbow_quat_t = torch.tensor([elbow_quat], device=env.device)
+            elbow_camera.set_world_poses(positions=elbow_eye_t, orientations=elbow_quat_t, convention="opengl")
+
         _check_orientation_at(pregrasp_q, "PREGRASP_Q")
 
         # Un-park the cube: move it from _CUBE_PARK_POS_W back to its
@@ -2026,6 +2496,9 @@ def main() -> None:
                 if closeup_camera is not None:
                     closeup_rgb = closeup_camera.data.output["rgb"][0].cpu().numpy()
                     closeup_video_writer.append_data(closeup_rgb[:, :, :3].astype("uint8"))
+                if elbow_camera is not None:
+                    elbow_rgb = elbow_camera.data.output["rgb"][0].cpu().numpy()
+                    elbow_video_writer.append_data(elbow_rgb[:, :, :3].astype("uint8"))
 
                 if i == duration // 2:
                     # Numeric readout AND a saved still frame at the exact
@@ -2042,6 +2515,11 @@ def main() -> None:
                         imageio.imwrite(
                             os.path.join(snapshot_dir, f"phase{phase_idx}_mid_closeup.png"),
                             closeup_rgb[:, :, :3].astype("uint8"),
+                        )
+                    if elbow_camera is not None:
+                        imageio.imwrite(
+                            os.path.join(snapshot_dir, f"phase{phase_idx}_mid_elbow_context.png"),
+                            elbow_rgb[:, :, :3].astype("uint8"),
                         )
 
                 if phase_idx in (2, 3, 4, 5, 6) and i % 20 == 0:
@@ -2114,11 +2592,15 @@ def main() -> None:
     demo_video_writer.close()
     if closeup_video_writer is not None:
         closeup_video_writer.close()
+    if elbow_video_writer is not None:
+        elbow_video_writer.close()
     env.close()
     print(f"\nVideo recorded to: {VIDEO_PATH}")
     print(f"Demo-camera video recorded to: {demo_video_path}")
     if closeup_video_writer is not None:
         print(f"Closeup-camera video recorded to: {closeup_video_path}")
+    if elbow_video_writer is not None:
+        print(f"Elbow-context-camera video recorded to: {elbow_video_path}")
     print(f"Gripper-check snapshots recorded to: {snapshot_dir}")
 
 

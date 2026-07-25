@@ -3102,4 +3102,157 @@ extraction from the recorded closeup/demo/perception videos via
 `ffmpeg -ss ... -frames:v 1`, this article's own 2026-07-24
 `ar4-jaw-contact-sensor-hypothesis`/`ar4-vertical-fixed-gripper-recheck`/
 `ar4-grasp-ik-convergence-tightening` UPDATEs for the visual-gap framing
+
+## UPDATE 2026-07-24 (later, ar4-locked-achieved-orientation-grasp task): the SYNTHESIS test — locking the wrist orientation ACTUALLY MEASURED at the moment of real contact (not a pre-assumed canonical target) still does not survive retreat, under either a fast or a slow withdrawal, and directly sharpens the diagnosis from "orientation drifts" to "the achieved orientation was never a genuinely antipodal grasp to begin with"
+
+Direct instruction: combine this article's own two, previously mutually
+exclusive, prior findings — position-only IK (no orientation lock) reaches
+the true ~9mm grasp height and makes real bilateral contact but cannot hold
+it through retreat (the immediately-prior `ar4-vertical-fixed-gripper-recheck`
+UPDATE above), while orientation-locked IK (`command_type="pose"`) can hold a
+stable orientation but, locked onto a pre-ASSUMED canonical vertical target
+decided before any contact exists, can never reach that height at all (the
+2026-07-22 `joint_3` elbow-limit findings). The specific synthesis asked for:
+reach the true height and real contact via position-only IK exactly as
+before, then at the exact moment real bilateral contact is detected, read
+the arm's ACTUAL live wrist orientation (not a re-derived canonical one) and
+lock THAT for the rest of the sequence.
+
+**Method**: new `scripts/_verify_locked_achieved_orientation_grasp.py`,
+built directly on `_verify_vertical_position_ik_fixed_gripper.py` (Phase
+0-2 — HOME → PREGRASP_APPROACH → GRASP_APPROACH, gripper OPEN — kept
+mechanically identical: the same grid-search-then-DLS-polish position-only
+IK). Phase 3 (CLOSE at `grasp_q`) is watched every physics step (not the
+prior script's every-20-step sampling) for the first step where BOTH
+`gripper_jaw1_contact`/`gripper_jaw2_contact` exceed `CONTACT_FORCE_THRESHOLD
+=0.01N`; the live root-frame `link_6` quaternion at that exact step is
+captured as `locked_quat_b`. Phase 4 (RETREAT to PREGRASP height)/Phase 5
+(HOLD)/Phase 6 (RELEASE) then replace the old scripts' one-shot fixed-joint
+command with `_pose_locked_step`, a genuine continuous per-physics-step
+closed-loop `command_type="pose"` DLS controller (position target =
+`pregrasp_pos_b`, orientation target = `locked_quat_b`) — ported directly
+from `grasp_demo_v2.py`'s own `polish_from_seed`, the only closed-loop
+pose-tracking mechanism already validated stable in this codebase, not a
+new mechanism invented for this task. Run twice on the desktop
+(`~/projects/rl-locked-orientation-grasp`, a fresh clone of `main` at
+`6b9a704`, non-headless, under the standing `flock`), differing only in the
+Phase 4-6 controller's per-physics-step Cartesian/rotation step bound
+(`--retreat-step-max`/`--retreat-rot-step-max`, new CLI overrides added
+between the two runs — see below for why).
+
+**Run 1 (default bound, 0.03m/0.03rad per physics step — the same bound
+`grasp_demo_v2.py`'s `polish_from_seed` uses for converging to a static
+target from a stationary start): real contact confirmed, orientation held
+almost perfectly, but the cube is left behind entirely — a clean, different
+failure from the un-locked baseline's drag-and-drop.** Bilateral contact was
+detected at the very first logged step of CLOSE (jaw1=0.092N, jaw2=0.056N),
+climbing to jaw1=0.32N/jaw2=0.61N by the end of the 60-step CLOSE phase —
+real, sustained, stronger contact than the un-locked baseline's own
+0.11-0.17N. `locked_quat_b = [0.7073, -0.7054, -0.0338, 0.0327]` (root
+frame). Through the full RETREAT/HOLD/RELEASE sequence (90+120+60 steps),
+the achieved orientation error stayed tiny throughout (0.0064rad at the
+first retreat step down to a converged 0.0028-0.0029rad, i.e. under 0.2
+degrees) and the gripper's own pinch point cleanly converged to within
+2.6mm of the intended PREGRASP hover position — the closed-loop controller
+itself worked exactly as designed, no orientation drift anywhere. But
+contact dropped to **exactly `0.0000N` on BOTH jaws at the very first
+logged retreat step** and stayed at exactly `0.0000N`/`0.0000N` through
+every remaining step of RETREAT, HOLD, and RELEASE. The cube's z position
+never moved off its own resting height (`0.0100m`, for the current 20mm
+cube) for the entire sequence — `height_gain_vs_resting = -0.0000m` at the
+end of every one of Phase 4/5/6. Unlike the un-locked baseline (which at
+least dragged the cube ~13.5mm sideways with a 2.4mm z-nudge), this run's
+cube was not disturbed at all once contact broke — a cleaner, more total
+loss of grip.
+
+**Run 2 (much gentler bound, 0.001m/0.01rad per physics step — added
+specifically to test whether Run 1's instant contact loss was an artifact
+of too fast a withdrawal): a materially DIFFERENT and more diagnostic
+failure — the arm doesn't lose contact, it gets stuck.** Same converged
+`grasp_q`/`pregrasp_q`/`locked_quat_b` as Run 1 (deterministic given
+identical seeds and target). Through the entire RETREAT/HOLD/RELEASE
+sequence, contact force stayed real and nonzero the whole time — but
+markedly asymmetric and, on jaw2, considerably stronger than anywhere else
+in this investigation's history: jaw1 settled to ~0.42-0.48N, jaw2 settled
+to ~1.55-1.8N (jaw2 alone is 3-4x any single-jaw force this investigation
+has ever recorded). Despite contact never dropping to zero, the gripper's
+own pinch-point position error stayed **frozen at exactly `0.02954m` for
+every single logged step across the full 270-step RETREAT+HOLD+RELEASE
+window** — i.e. the arm made literally zero net progress toward the
+PREGRASP hover position the entire time, not a slow crawl toward it. Cube z
+again never moved off `0.0100m` — `height_gain_vs_resting = -0.0000m`
+throughout. Read together with the growing, asymmetric jaw2 force, this is
+a mechanical deadlock: the arm is being commanded to move away but is
+pinning the cube (most likely against the table, given z never rises even
+fractionally) rather than lifting it, and the bounded small step keeps
+re-issuing essentially the same small correction against a load it cannot
+overcome — not a controller bug (the controller is doing exactly what it's
+told: track a fixed target pose), but direct evidence the achieved contact
+geometry has no clean path to a lift at all, regardless of retreat speed.
+
+**Diagnosis, sharpened from the prior session's own**: the prior session
+diagnosed the failure as "position-only IK has no incentive to pick a
+sensible pinch geometry" and flagged a genuine orientation-holding
+mechanism as the untested fix. This session built and tested exactly that
+mechanism — a real, achieved-orientation lock, not a re-derived one,
+verified numerically to hold rotation error under 0.01rad throughout both
+runs — and it still does not produce a lift under either a fast or a slow
+withdrawal. That rules out "orientation drift during retreat" as a
+sufficient explanation on its own (orientation provably did NOT drift in
+either run) and points at a deeper problem the prior session's own language
+already gestured at but this session's contact-force data now makes
+concrete: **the wrist orientation position-only IK's free redundant null
+space happens to settle into at the contact moment produces real, nonzero,
+bilateral NORMAL force on both jaws (enough to look like "contact" by this
+project's own binary contact-force convention), but is not a genuinely
+force-balanced antipodal pinch** — the two jaws are not squeezing the cube
+from opposing directions with comparable, complementary force, evidenced
+directly by Run 2's ~4x jaw1-vs-jaw2 force asymmetry once the system is
+given time to reach a real mechanical equilibrium rather than being yanked
+through it in one step. A grasp like that has no shear/lift resistance:
+either a fast motion strips it off entirely (Run 1) or a slow motion just
+holds the arm in a losing static fight against the table it's pinning the
+cube to (Run 2). **Locking the achieved orientation is therefore necessary
+but not sufficient** — it correctly solves the drift problem it was built
+to solve, but the orientation being held rigid still has to be a genuinely
+antipodal one for that to matter, and position-only IK's own null space has
+no term in its objective that selects for that property; it only aims for
+position.
+
+**This does not close the investigation** (per this task's own
+instructions, an honest negative result reported as such, not forced
+positive) but it does close out the SPECIFIC synthesis question asked:
+combining position-only reach with an achieved-orientation lock, exactly as
+specified, does not produce a real grasp+lift under this arm's current
+classical-IK toolkit, at two different retreat speeds. A genuinely
+different mechanism — one that scores/selects the CONTACT orientation
+itself for force-balance/antipodal-ness (not just position) before or
+during the lock, e.g. a small local search or force-feedback nudge at the
+contact moment that explicitly tries to equalize jaw1/jaw2 force before
+committing to retreat, or reward-shaped residual RL on top of this
+classical seed — would be a genuinely new mechanism, Tier 1 territory,
+flagged back to Principal rather than decided here.
+
+**Script**: `scripts/_verify_locked_achieved_orientation_grasp.py` (new,
+kept per this repo's `_verify_*` convention, with the `--retreat-step-max`/
+`--retreat-rot-step-max` CLI overrides used for Run 2 left in place for any
+follow-up). Videos (desktop-only, `logs/` gitignored per convention):
+`~/projects/rl-locked-orientation-grasp/logs/videos/ar4_grasp_locked_achieved_orientation_run1.mp4`
+and `..._run2_slow_retreat.mp4`. Frame extraction was attempted for a
+visual sanity check but was inconclusive at this camera's render distance —
+the same standing visual-confirmation gap this article's own 2026-07-24
+`ar4-vertical-fixed-gripper-recheck` UPDATE already documented and flagged
+as unclosed; the numeric contact-force/position evidence above is treated
+as sufficient per this project's standing verification standard
+(Experiment 16: contact-force ground truth over eyeballed video), not
+treated as equally strong to an actual clean visual confirmation that was
+again not obtained here.
+
+**Sources**: this session's own two live desktop runs (full logs, all
+numbers quoted above verbatim), direct diff/read of
+`_verify_vertical_position_ik_fixed_gripper.py` and `grasp_demo_v2.py`'s
+`polish_from_seed` for the mechanism this session's `_pose_locked_step`
+ports, this article's own 2026-07-24 `ar4-vertical-fixed-gripper-recheck`
+UPDATE for the un-locked baseline (drag-and-drop, 13.5mm/2.4mm) this
+session's two results are each compared against.
 and the 12mm-cube residual baseline compared against.

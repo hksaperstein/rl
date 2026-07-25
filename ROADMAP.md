@@ -504,6 +504,48 @@ Roughly in the order they'd likely be picked up:
    no lift. Not treated as a failed grasp re-investigation; the task's
    own corrected priority was visual confirmation, not grasp precision.
 
+   **Locked-achieved-orientation synthesis test (2026-07-24 later still,
+   ar4-locked-achieved-orientation-grasp task, direct instruction): the
+   combination the prior two findings above called for — still no
+   lift, but the result sharpens the diagnosis rather than reopening it.**
+   Built `scripts/_verify_locked_achieved_orientation_grasp.py`: reach the
+   true grasp height + real contact via position-only IK exactly as the
+   vertical-recheck task above did, then AT THE MOMENT real bilateral
+   contact is detected (watched every physics step, not sampled), read the
+   arm's LIVE wrist orientation and lock that (not a re-derived canonical
+   target) via a genuine closed-loop `command_type="pose"` DLS controller
+   (ported from `grasp_demo_v2.py`'s own proven `polish_from_seed`) for
+   the rest of CLOSE, retreat, and hold. Run twice, at two different
+   retreat speeds, to separate "orientation drifted" from "orientation
+   was fine but the grasp was never good." **Fast retreat (0.03m/step, the
+   same bound used for reaching a static target elsewhere in this
+   codebase)**: orientation held to <0.003rad the whole time (proving the
+   lock mechanism itself works), gripper cleanly reached the hover pose to
+   2.6mm — but contact still dropped to exactly `0.0000N` on both jaws at
+   the very first retreat step and the cube was never moved at all,
+   `height_gain=0.0000m`. **Slow retreat (0.001m/step, added specifically
+   to rule out "too fast a yank" as the cause)**: contact never dropped to
+   zero, but the arm made ZERO net progress toward the hover position for
+   the entire 270-step retreat+hold+release window (frozen at the exact
+   same 29.5mm residual throughout) while jaw2's force grew to 1.5-1.8N —
+   3-4x any single-jaw force ever recorded in this investigation, and
+   markedly asymmetric against jaw1's 0.4-0.5N — i.e. the arm got
+   mechanically stuck fighting the table rather than lifting. **Diagnosis:
+   locking the achieved orientation is necessary but not sufficient** —
+   rotation genuinely does not drift under this lock (confirmed
+   numerically in both runs), so the failure isn't drift; it's that
+   position-only IK's null-space-selected contact orientation produces
+   real bilateral NORMAL force (enough to register as "contact") without
+   being a force-balanced antipodal pinch, so it has no shear/lift
+   resistance regardless of retreat speed. Full detail, both runs' full
+   numbers: `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s
+   2026-07-24 (later still, ar4-locked-achieved-orientation-grasp)
+   UPDATE. **Next step unchanged, now on firmer evidence**: a mechanism
+   that scores/selects the contact orientation itself for force-balance
+   (not just position) is Tier 1 methodology work, flagged to Principal;
+   otherwise this is AR4's practical classical-IK ceiling and the
+   already-working Franka platform remains the North-Star priority.
+
 See `BACKLOG.md` for further-out candidates not yet on this list.
 
 ## Recently landed

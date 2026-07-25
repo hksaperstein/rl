@@ -200,15 +200,38 @@ TEST_CONFIGS = {
 
 
 def _settle_at(env, robot, robot_entity_cfg, num_arm_joints, q_list, steps):
+    """2026-07-24 (second live run, ar4-axis-align-ik task): the ORIGINAL
+    version of this function (teleport + N env.step() calls of PD-driven
+    dynamics, matching grasp_demo_v2.py's own _settle_at) turned out to be
+    the WRONG tool for a pure-kinematics Jacobian check - live evidence:
+    increasing both EPS (1e-4->5e-3) and settle dynamics steps (8->30)
+    did NOT shrink the FD mismatch for the ALREADY-TRUSTED, unmodified
+    position Jacobian (point_jac_pos, previously used successfully in real
+    grasp attempts) at several configs, and made it WORSE at one
+    (MODERATE_B: 0.18 -> stayed ~0.18, axis-align 1.19 -> 1.35) - not the
+    behavior expected from a settle-noise floor (which should shrink
+    monotonically with more settle time), pointing at PD-dynamics
+    transients/gravity coupling as a confound in the verification itself,
+    not the analytic Jacobian.
+
+    Fixed by bypassing dynamics entirely: `write_joint_position_to_sim`
+    writes DIRECTLY into the PhysX view's DOF state (confirmed by reading
+    Isaac Lab's own Articulation.write_joint_position_to_sim source - it
+    calls `root_physx_view.set_dof_positions` synchronously and invalidates
+    Isaac Lab's own cached-data timestamps), and `env.sim.forward()`
+    (`SimulationContext.forward()`, itself calling PhysX's
+    `physics_sim_view.update_articulations_kinematic()` - a PURE forward-
+    kinematics refresh, no dynamics/gravity integration, no PD controller
+    involved at all) is sufficient to make `body_pose_w`/`get_jacobians()`
+    reflect the new joint config immediately. This is exactly the tool for
+    a kinematics-only Jacobian check - it removes the PD/gravity-dynamics
+    confound entirely rather than trying to out-settle it."""
     q = torch.tensor([q_list], device=env.device)
-    robot.write_joint_position_to_sim(q, joint_ids=robot_entity_cfg.joint_ids, env_ids=torch.tensor([0], device=env.device))
+    env_ids = torch.tensor([0], device=env.device)
+    robot.write_joint_position_to_sim(q, joint_ids=robot_entity_cfg.joint_ids, env_ids=env_ids)
     zero_vel = torch.zeros((1, num_arm_joints), device=env.device)
-    robot.write_joint_velocity_to_sim(zero_vel, joint_ids=robot_entity_cfg.joint_ids, env_ids=torch.tensor([0], device=env.device))
-    for _ in range(steps):
-        action = torch.zeros(env.num_envs, num_arm_joints + 1, device=env.device)
-        action[:, :num_arm_joints] = q
-        action[:, num_arm_joints] = 1.0  # gripper open, irrelevant here
-        env.step(action)
+    robot.write_joint_velocity_to_sim(zero_vel, joint_ids=robot_entity_cfg.joint_ids, env_ids=env_ids)
+    env.sim.forward()
 
 
 def _measure_quantities(env, robot, robot_entity_cfg, ik_jacobi_idx, n_des_b, u_b, v_b):

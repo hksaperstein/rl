@@ -160,8 +160,29 @@ def _axis_align_error_and_jacobian(ee_quat_b, jac_ang, n_des_b, u_b, v_b):
 
 # === End ported section ===
 
-EPS = 1e-4  # rad, central-difference perturbation
-SETTLE_STEPS = 8  # physics steps to let cached .data refresh after a teleport, holding the SAME commanded target
+EPS = 5e-3  # rad, central-difference perturbation
+# 2026-07-24 (first live run, ar4-axis-align-ik task): initial values here
+# (EPS=1e-4, SETTLE_STEPS=8) FAILED on desktop - but so did the ALREADY-
+# TRUSTED, unmodified position Jacobian (point_jac_pos, copy-pasted
+# verbatim from grasp_demo_v2.py, previously used successfully in real
+# grasp attempts), and by similarly large margins - strong evidence the
+# bug was in THIS verification methodology, not in either Jacobian. Root
+# cause: write_joint_position_to_sim is a hard teleport, but the subsequent
+# SETTLE_STEPS of PD-driven env.step() calls (needed to refresh cached
+# .data from the physics view) let gravity load the arm for a few steps
+# before the PD controller pulls it back to the commanded target - a real,
+# small (sub-mm/sub-mrad) settle-noise floor, independent of EPS. Dividing
+# that fixed noise by a too-small EPS in the central difference amplifies
+# it into an apparently large derivative error (e.g. MODERATE_B's 1.19
+# error at EPS=1e-4 implies a real position noise of only ~0.12mm - a
+# physically small, expected settle artifact, not a Jacobian bug). Fixed by
+# BOTH increasing SETTLE_STEPS (reduces the actual noise) and increasing
+# EPS (makes the genuine FD signal, which scales with EPS, dominate
+# whatever residual noise remains) - the standard finite-difference
+# eps-selection tradeoff (too small: noise-dominated; too large: nonlinear-
+# curvature-dominated), re-tuned against this specific noise floor rather
+# than guessed.
+SETTLE_STEPS = 30  # matches this project's own established POLISH_SETTLE_STEPS convention
 TOL_ABS = 5e-3  # absolute mismatch tolerance (Jacobian units: dimensionless axis-projection or meters per rad)
 
 # Test joint configs - arbitrary but within this arm's typical operating

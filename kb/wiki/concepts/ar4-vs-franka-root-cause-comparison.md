@@ -2994,3 +2994,112 @@ current `HEAD` to confirm methodology fidelity, this article's own
 2026-07-22 (`ar4-grasp-ik-precision`, `ar4-grasp-orientation-fix`,
 `ar4-tilt-fix`) UPDATEs for the baseline both the reproduced precision
 numbers and the joint_3-limit claim are checked against.
+
+## UPDATE 2026-07-24 (later still, ar4-cube-size-increase task): cube bumped 12mm->20mm, direct user decision — primary goal (clean visual confirmation) ACHIEVED; a bonus grasp-improvement check found a better residual but still no contact/lift
+
+Direct user request: increase `CUBE_CFG`'s size from 12mm to 20mm.
+Original rationale (the ~9-10mm classical-IK residual leaves only one jaw
+reaching the cube; a bigger cube gives both jaws more margin) was
+corrected mid-task by the user to the REAL priority: this project has
+repeatedly flagged, but never closed, a visual-confirmation gap — neither
+`perception_camera` nor `demo_camera` resolves the 12mm cube clearly at
+render distance (this article's 2026-07-24 `ar4-jaw-contact-sensor-
+hypothesis` and `ar4-vertical-fixed-gripper-recheck` UPDATEs above both
+hit this independently). A grasp/contact improvement is a bonus, not the
+deliverable; a quick 1-2 attempt check was explicitly enough, not a full
+re-investigation.
+
+**Every derived 12mm/0.006m constant found via repo-wide grep, updated**
+(`CUBE_CFG` is a shared constant across both the active classical-IK path
+and closed/legacy RL-training env cfgs — proceeding with the shared
+change is itself the direct user decision, per this task's own framing,
+not a Senior's unilateral scope call): `tasks/ar4/objects_cfg.py`'s
+`CUBE_CFG` (size 0.012->0.020, `init_state.pos` z 0.006->0.010, still well
+inside the gripper's ~28mm max aperture at 4mm clearance/side, tighter
+than 12mm's 8mm but physically valid); `pickplace_mirror_env_cfg.py` and
+`pickplace_graspgoal_env_cfg.py`'s own `init_state` overrides (both
+`.replace()` a fresh z, don't inherit `CUBE_CFG`'s own); the CLOSED
+touch-goal task's `pickplace_touchgoal_env_cfg.py` (`CUBE_HALF_SIZE`,
+init override — non-active but shares `CUBE_CFG`, updated for
+consistency, noted here as the "other env cfgs affected" this task asked
+to flag); `mdp.py`'s three `cube_half_size: float = 0.006` reward/
+termination-function defaults and three inline
+`root_pos_w[:, 2] - 0.006` resting-height literals (grasp/lift/touch
+reward math, also part of the closed RL arc); `grasp_demo_v2.py`'s
+`CUBE_POS_W`/`GRASP_AT_HEIGHT` (0.009->0.013, kept the pre-existing
++3mm-above-resting convention rather than inventing a new empirical
+offset for the bigger cube); `interactive_joint_demo.py` and
+`classical_grasp_contact_check.py`'s own `CUBE_HALF_SIZE`;
+`plot_arm_skeleton.py`'s plot-only `cube_half_size`; and
+`tests/test_touch_goal_reward.py`'s manually-duplicated
+`_CUBE_HALF_SIZE` (a sim-independent unit test whose own comment already
+flagged it as needing hand-sync, not an import, if the production
+constant ever changed — it just did). Deliberately did NOT touch
+superseded/dead diagnostic scripts (`_diag_*.py`, `ik_*.py`,
+`grasp_demo.py`, `grasp_demo_3dof.py`, `measure_reach_envelope.py`) or
+`scripts/_verify_vertical_position_ik_fixed_gripper.py` (the
+`ar4-vertical-fixed-gripper-recheck` task's own untracked historical-
+record script for the old 12mm cube, immediately above — not this task's
+file to edit). Commit `2c67cd5`.
+
+**Live spawn verification (not just trusting the config): PASS, exact.**
+A one-off script (`scripts/_verify_cube_20mm_spawn.py` on the desktop
+checkout, not committed - a throwaway coarse check, superseded by the
+better real evidence below) reset the env and read
+`cube.data.root_pos_w` directly after a 30-step settle:
+`[-7.3e-08, 0.27500, 0.0099999...]` — 0.000mm error against the expected
+0.010m (half the new 20mm size), confirming the cube rests exactly on the
+ground plane, neither clipping through it nor floating.
+
+**Visual confirmation: ACHIEVED, cleanly, via the existing
+`--closeup-camera` mechanism (`grasp_demo_v2.py`/
+`tasks/ar4/grasp_verify_env_cfg.py`'s `closeup_camera`, built
+2026-07-24 `ar4-closeup-grasp-video` task but never actually exercised
+end-to-end in this article until now).** A single grasp attempt at the
+best-known configuration from the 2026-07-23 capstone session (reach=
+0.36m, tilt=65deg) with `--closeup-camera` produced
+`logs/videos/ar4_grasp_demo_v2_cube20mm_r036_t65_closeup.mp4`; a frame
+pulled at t=5.5s (mid-CLOSE, the closest approach) shows the cube as a
+large, sharp, unambiguous red square directly beneath both jaw
+fingertips — a completely different visual outcome from every prior
+attempt at resolving the 12mm cube in this investigation. `demo_camera`
+and `perception_camera` frames from the SAME run/moment still do not
+show the cube usefully (arm geometry occludes it at this configuration),
+confirming the gap was about camera framing/distance, not the object's
+own size alone — but the dedicated close-up camera combined with the
+bigger cube now closes it. This is the actual deliverable this task was
+corrected to prioritize.
+
+**Bonus grasp-attempt result (not the priority, one attempt only per the
+user's explicit "don't over-invest" correction): a genuinely BETTER
+position/rotation residual than the 12mm cube's own capstone finding at
+the identical reach/tilt config, but still zero contact force and no
+lift this run.** `grasp_residual=6.12mm/5.30deg`,
+`pregrasp_residual=3.05mm/0.58deg` — both tighter than the 12mm cube's
+own best-ever capstone residual at this exact configuration (~9.4mm/
+5-6deg, this article's 2026-07-24 `ar4-grasp-ik-convergence-tightening`
+UPDATE above), plausibly because `GRASP_AT_HEIGHT` moved up with the
+bigger cube (0.009m->0.013m), giving `joint_3` more margin at a higher
+target height — consistent with, not contradicting, this article's own
+established "shortfall grows smoothly as target height drops" finding.
+Despite the better residual, `jaw1_cube_force`/`jaw2_cube_force` both
+read exactly `0.0000N` at every logged sample across every phase (CLOSE/
+retreat/hold) — no contact registered at all this run, worse in that one
+specific respect than the 12mm cube's own `ar4-vertical-fixed-gripper-
+recheck` result immediately above (which got real two-sided contact,
+just no surviving lift). Cube barely moved: z stayed at 0.0099-0.0104m
+(its own ~0.010m resting height) throughout every phase, xy drifted only
+~1.3cm by the end. **Not treated as a failure of this task** (the visual
+goal, above, is what this task was corrected to prioritize) and not
+investigated further per the explicit "quick 1-2 attempt check, not an
+exhaustive verdict" instruction — flagged here as an honest single-run
+data point, not a claim that 20mm does or doesn't help the grasp problem
+in general.
+
+**Sources**: this session's own live desktop runs (spawn-check script
+output, `grasp_demo_v2.py`'s own log, both quoted above), direct frame
+extraction from the recorded closeup/demo/perception videos via
+`ffmpeg -ss ... -frames:v 1`, this article's own 2026-07-24
+`ar4-jaw-contact-sensor-hypothesis`/`ar4-vertical-fixed-gripper-recheck`/
+`ar4-grasp-ik-convergence-tightening` UPDATEs for the visual-gap framing
+and the 12mm-cube residual baseline compared against.

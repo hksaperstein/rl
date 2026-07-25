@@ -480,6 +480,30 @@ Roughly in the order they'd likely be picked up:
    (later) UPDATE. New `scripts/_verify_vertical_position_ik_fixed_gripper.py`
    kept as a historical record.
 
+   **Cube size bumped 12mm->20mm (2026-07-24 later still,
+   ar4-cube-size-increase task, direct user decision): primary
+   (visual-confirmation) goal ACHIEVED cleanly; bonus grasp check found a
+   better residual but still no contact/lift.** `CUBE_CFG`
+   (`tasks/ar4/objects_cfg.py`) and every derived 12mm/0.006m constant
+   found via repo-wide grep updated across both the active classical-IK
+   path and closed/legacy RL-training env cfgs (full list, live spawn
+   verification, and the grasp-check numbers: kb doc's 2026-07-24 (later
+   still, ar4-cube-size-increase) UPDATE). Live spawn check: cube rests
+   at z=0.010m, 0.000mm error. **Visual goal achieved**: a single grasp
+   attempt (reach=0.36m/tilt=65°) with the existing but never-fully-
+   exercised `--closeup-camera` mechanism produced a video frame showing
+   the cube as a large, sharp, unambiguous square directly under the jaw
+   fingertips — closing the standing "neither camera resolves the 12mm
+   cube clearly" gap flagged repeatedly above. Bonus finding (one
+   attempt only, not investigated further per explicit instruction):
+   `grasp_residual=6.12mm/5.30°` — genuinely tighter than the 12mm cube's
+   own best-ever capstone residual (~9.4mm/5-6°) at the identical config,
+   plausibly because the grasp-height target rose with the cube
+   (0.009m->0.013m, more `joint_3` margin) — but `jaw1_cube_force`/
+   `jaw2_cube_force` both read exactly `0.0000N` throughout every phase,
+   no lift. Not treated as a failed grasp re-investigation; the task's
+   own corrected priority was visual confirmation, not grasp precision.
+
 See `BACKLOG.md` for further-out candidates not yet on this list.
 
 ## Recently landed

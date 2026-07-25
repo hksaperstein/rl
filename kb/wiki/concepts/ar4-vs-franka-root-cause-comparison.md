@@ -3425,3 +3425,197 @@ zero-translation confirmation, this article's own 2026-07-24
 `ar4-jaw-bisector-hypothesis` UPDATE for the two previously-tested
 orientations' own near-zero `_EE_OFFSET` discrepancy this task's own
 1mm finding is compared against.
+
+## UPDATE 2026-07-24 (later still, ar4-axis-align-ik task): a genuinely new reduced-DOF IK formulation — orientation control CONFIRMED FIXED, but reachability is NOT, and the resulting strong contact is a wedge artifact, not a real grasp
+
+Direct instruction, following the same day's `command_type="position"` vs
+`command_type="pose"` finding above: neither extreme correctly models what
+a parallel-jaw grasp of a flat cube face actually needs. Position-only (0
+orientation constraints) reaches the true height but the orientation that
+falls out of the null space is uncontrolled/non-antipodal. Pose (3
+orientation constraints, 6 total on a 6-DOF non-redundant arm) gives a
+controlled orientation but leaves 0 redundant DOF to route around the
+`joint_3` elbow limit at this low a grasp height. The real insight: a
+gripper/flat-face pair only needs its APPROACH-AXIS DIRECTION constrained
+(2 DOF — which way it points), not the 3rd orientation DOF (roll about that
+axis, irrelevant for this geometry) — so position(3) + axis-direction(2) =
+5 constraints on 6 joints, exactly 1 genuine redundant DOF.
+
+**Implementation**: `scripts/grasp_demo_v2.py` gained
+`_build_canonical_axes_b`/`_axis_align_error_and_jacobian`/
+`polish_from_seed_axis_aligned` (new sibling of the existing
+`polish_from_seed`, not a tweak to either existing mode) and a
+`--axis-aligned` flag wiring it into the PREGRASP/GRASP
+one-shot/descent/deep-polish solves. Derivation: for a unit approach-axis
+vector `n_cur` rigidly attached to link_6, `dn_cur/dq = -skew(n_cur) @
+jac_ang` (exact rigid-body kinematics, no approximation beyond the
+first-order per-step linearization DLS already makes everywhere in this
+file), projected onto a FIXED 2D basis `(u_b, v_b)` exactly perpendicular
+to the desired axis `n_des_b` (all three extracted as columns of the
+existing canonical-target rotation matrix — reuses, doesn't reinvent, the
+already-orthonormality-verified frame `command_type="pose"` mode already
+builds). The reduced 5-row Jacobian/error is fed directly to
+`DifferentialIKController._compute_delta_joint_pos` (its DLS formula is
+row-count-agnostic — the damping identity matrix is sized off the
+Jacobian's own row count at call time, not hardcoded to 3 or 6 — confirmed
+by reading `differential_ik.py` directly), not through
+`set_command`/`compute` (hardcoded for exactly 3 or 6 rows).
+
+**Jacobian verification (required before any real attempt, per this task's
+own instruction) — PASSED, after fixing the verification methodology
+itself.** First attempt (`SETTLE_STEPS=8` dynamics steps + `EPS=1e-4`)
+failed by a LARGE margin (0.006–1.19) at every one of 4 joint configs × 2
+tilts — but so did the ALREADY-TRUSTED, completely UNMODIFIED position
+Jacobian (`point_jac_pos`, previously used to reach real bilateral contact
+in prior sessions), by similarly large margins. That ruled out an axis-math
+bug and pointed at the verification method itself: `write_joint_position_to_sim`
+is a hard teleport, but the several dynamics-driven `env.step()` calls used
+to "settle" and refresh cached data let gravity load the arm for a few
+steps before PD control pulled it back — a small, real, per-config-varying
+settle-noise floor that a too-small `EPS` divided into an apparently huge
+derivative error. Increasing both `EPS` (→5e-3) and `SETTLE_STEPS` (→30)
+did NOT fix it (one config got WORSE: 0.18→0.18 stayed, axis error
+1.19→1.35) — ruling out simple noise-floor-vs-eps tuning and confirming the
+dynamics settle itself was the confound. Fix: bypass dynamics entirely —
+`write_joint_position_to_sim` writes directly into PhysX's DOF state and
+invalidates Isaac Lab's cached-data timestamps (confirmed by reading
+`articulation.py`/`articulation_data.py` source directly), and
+`env.sim.forward()` (`SimulationContext.forward()` →
+`physics_sim_view.update_articulations_kinematic()`, a PURE forward-
+kinematics refresh, no dynamics/gravity integration) is sufficient to make
+`body_pose_w`/`get_jacobians()` reflect the new joint config immediately.
+With dynamics removed: the NEW axis-alignment Jacobian passed cleanly at
+**every one of 4 configs × 2 tilts (0°, 65°)** — max
+analytic-vs-finite-difference error **2.1e-5 to 4.7e-5**, essentially
+floating-point-level agreement (`scripts/_verify_axis_align_jacobian.py`,
+`TOL_ABS=5e-3`). A follow-up isolation check (comparing the offset-corrected
+vs raw, no-`_EE_OFFSET` translational Jacobian) found the PRE-EXISTING,
+UNCHANGED base `jacobian_b[:,0:3,:]` (not anything added by this task)
+still carries a small, consistent ~0.0064–0.0092 discrepancy across all
+tested configs — isolated to NOT be in the offset-correction term, not
+investigated further (out of this task's scope, already used successfully
+in real prior contact/grasp attempts, small enough that DLS's iterative
+nature likely already tolerates it) but flagged here as a genuine,
+previously-undiscovered small bias in code this whole investigation has
+relied on throughout, worth a dedicated follow-up if ever revisited.
+
+**Real grasp attempts (2 positions, true `GRASP_AT_HEIGHT` for the current
+20mm cube — `0.013`, the same "3mm above resting" convention every other
+2026-07-24 test in this article uses; the task's own "~9mm" framing is
+2026-07-24-cube-size-bump-stale language, not a different target)**:
+
+- **Orientation control: CONFIRMED FIXED.** At BOTH positions (default
+  0.275m reach, and 0.32m reach), `GRASP_Q`'s converged approach axis
+  landed genuinely, tightly vertical — root-frame local +Z = `[0.000,
+  0.000, -1.000]` (0.32m) / `[-0.000, -0.024, -1.000]` (0.275m, ~1.4°
+  off) — with `axis_angle_err` converging to `0.0000`–`0.0183rad` (0–1°).
+  This is a REAL, controlled, antipodal-viable orientation, categorically
+  unlike position-only IK's uncontrolled 18–72°+ tilt documented
+  throughout this article. The hypothesis's orientation-control claim is
+  directly confirmed.
+- **Reachability: NOT achieved — the redundant DOF did not deliver the
+  hoped-for improvement.** Position residual at the true height target
+  grew back to **15.36mm (0.275m reach) / 15.21mm (0.32m reach)** — no
+  better than, and arguably slightly worse than, the ~9–10mm residual
+  this investigation's plain position-only IK already reaches. Critically,
+  the two positions failed via TWO DIFFERENT mechanisms, directly
+  readable from the live per-step `limit_margin` printout: at 0.275m
+  reach, `joint_3`'s own margin genuinely collapses to ~0 in the last few
+  descent sub-steps (a real hard-limit wall, exactly the mechanism this
+  task hypothesized the extra DOF would route around — it didn't, this
+  time); at 0.32m reach, `joint_3`'s margin stays a completely healthy,
+  UNCHANGED `0.3358rad` (~19°) through the same final descent sub-steps —
+  no joint-limit wall at all — yet the solve still plateaus at a
+  STATIONARY point (joint values frozen to 4 decimal places, `axis_angle_err`
+  already at exactly `0.0000rad`) unable to close the last ~15mm. That
+  second failure is a genuine DLS local-optimum/redundancy-structure
+  plateau, not a joint-limit conflict — a materially different, previously
+  undocumented failure mode for this reduced-DOF formulation specifically.
+- **Phased CLOSE+RETREAT: the strongest, most sustained contact this
+  entire investigation has ever recorded — but visual + cross-position
+  evidence indicates a WEDGE artifact, not a genuine antipodal grasp.**
+  Both attempts show real, non-collapsing, roughly-balanced bilateral
+  force held dead-constant for 100+ physics steps during the hold phase
+  (0.275m: jaw1=7.20N/jaw2=7.56N; 0.32m: jaw1=28.07N/jaw2=28.45N — both
+  1–2 orders of magnitude larger than any prior session's typical
+  sub-1N contact) alongside a real, stable, non-zero cube height gain
+  (21.5mm / 21.6mm) that survives the full RETREAT+HOLD sequence — a
+  categorically different signature from every prior "false positive" in
+  this article (which either showed contact collapsing to exactly
+  `0.0000N` on retreat, or a frozen zero-height-gain table-pinning
+  deadlock). Per this project's own standing verification standard
+  (Experiment 16: check the underlying physical state, don't trust a
+  video/force-persistence signal alone), direct `ffmpeg` frame extraction
+  from the dedicated close-up camera at both positions shows the SAME
+  thing: the cube visually disappears behind/fused with the gripper's own
+  BASE housing from the very start of descent (well before CLOSE is even
+  commanded — Phase 2, gripper still OPEN, already shows 36–40N of
+  contact), not visibly pinched between two separated jaw fingertips at
+  any inspected frame. The decisive quantitative tell: **the two attempts'
+  final held cube heights are nearly IDENTICAL (31.5mm vs 31.6mm above
+  resting) despite targeting two DIFFERENT world reach positions** (0.275m
+  vs 0.32m) — a genuine antipodal pinch held at the arm's own commanded
+  pinch point would track that position difference; a cube caught on a
+  FIXED gripper-geometry feature (independent of arm reach) would not,
+  which is exactly what's observed. This is consistent with the still-
+  unresolved ~15mm position shortfall above: the gripper is descending
+  ~15mm short of/into the cube's true face, close enough for its own BASE
+  structure (not the fingertips) to collide with and catch the cube's top,
+  producing large, real, but non-antipodal contact forces.
+
+**Diagnosis**: this task's specific hypothesis (freeing the roll DOF lets
+the solver route around the `joint_3` limit while keeping orientation
+controlled) is HALF confirmed and HALF falsified by direct evidence, not a
+clean win. Orientation control genuinely works — a real, categorical fix
+over both `position` and `pose` modes' own failure signatures. Reachability
+does not — the extra DOF didn't consistently get used to escape the
+`joint_3` wall (it did at neither tested position, via two different
+failure mechanisms), and the resulting strong, sustained, seemingly-
+promising contact is a new wedge-against-gripper-base artifact, not a
+genuine pinch. **This does not close the investigation.** A candidate
+follow-up the data directly suggests: since orientation control is now
+solid, the remaining ~15mm gap is now a PURE position-tracking problem —
+worth checking whether the pre-existing ~0.007–0.009 base-Jacobian
+discrepancy found above (not fixed here, out of scope) is large enough
+to be materially slowing final-mm convergence, and/or whether a
+tighter-converging position-only sub-pass (mirroring the already-tried
+`--grasp-deep-polish-steps` mechanism) at the now-fixed orientation could
+close the remaining gap without reopening the orientation problem — Tier 1
+territory (a new mechanism/combination), flagged to Principal rather than
+decided here.
+
+**Scripts**: `scripts/grasp_demo_v2.py` (axis-alignment IK, `--axis-aligned`),
+`scripts/_verify_axis_align_jacobian.py` (new, finite-difference Jacobian
+verification, kept per this repo's `_verify_*` convention). Videos
+(desktop-only, `logs/` gitignored):
+`~/projects/rl-axis-align-ik-grasp/logs/videos/ar4_grasp_demo_v2_axis_aligned_default*.mp4`
+and `..._axis_aligned_r32*.mp4` (demo/closeup/elbow-context cameras each).
+Full logs: `/tmp/axis_align_jac_verify4.log` (Jacobian verification),
+`/tmp/axis_aligned_attempt{1,2}.log` (real grasp attempts), desktop-local.
+
+**Fourth camera added (coordinator mid-task request, not part of the
+original hypothesis test)**: `tasks/ar4/grasp_verify_env_cfg.py`'s
+`elbow_context_camera` / `grasp_demo_v2.py`'s `--elbow-camera`, intended to
+keep `link_3` (elbow)/forearm/wrist/gripper all visible together (per the
+`isaac-sim-video-capture` skill's live-measurement-derivation pattern,
+target = midpoint of elbow and gripper/cube, standoff scaled to the live
+elbow-to-gripper span). Live result: correctly framed at the moment it was
+positioned (GRASP_Q), but by Phase 4 (RETREAT) the arm has moved far enough
+from that pose that the fixed frame ends up too close/zoomed into the
+forearm link alone, cropping out the gripper/cube — usable at the
+GRASP_Q-adjacent phases (2–3) but not a substitute for `demo_camera`'s wide
+view during RETREAT/HOLD. Not re-tuned further this task (time-boxed,
+secondary to the core deliverable); a per-phase re-tracked version (camera
+re-derived at each phase's own live elbow position, rather than fixed once)
+would likely fix this if picked up again.
+
+**Sources**: this task's own two live desktop runs (full logs, all numbers
+quoted above verbatim) plus the Jacobian-verification runs' own full logs
+(all four iterations, including the two that correctly failed before the
+methodology fix), direct `ffmpeg` frame extraction from both attempts'
+close-up-camera videos, direct reads of `differential_ik.py`,
+`articulation.py`, `articulation_data.py`, and `simulation_context.py`
+source (`isaaclab` package) for the DLS row-count-agnostic-damping and
+kinematic-only-refresh claims above, this article's own same-day
+`command_type="position"`/`"pose"` UPDATE this task's hypothesis directly
+responds to.

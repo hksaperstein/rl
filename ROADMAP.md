@@ -572,6 +572,36 @@ Roughly in the order they'd likely be picked up:
    `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s 2026-07-25
    UPDATE for full numbers.
 
+   **Axis-alignment reduced-DOF IK (2026-07-24/25, ar4-axis-align-ik task):
+   a genuinely new IK formulation (position(3) + approach-axis-DIRECTION(2)
+   = 5 constraints, 1 redundant DOF, vs `position` mode's 0 orientation
+   constraints or `pose` mode's 3/0-redundant-DOF) — orientation control
+   CONFIRMED FIXED (genuinely vertical, 0-1° off, at both tested positions,
+   vs `position` mode's uncontrolled 18-72°+ tilt), but reachability is
+   NOT: position residual still ~15mm at the true grasp height at both
+   tested positions (0.275m/0.32m reach), via TWO DIFFERENT mechanisms
+   (a real `joint_3` hard-limit wall at 0.275m; a joint-limit-free DLS
+   local-optimum plateau at 0.32m) - the extra redundant DOF did not
+   reliably deliver the hoped-for routing-around-the-elbow-limit benefit.
+   The resulting phased CLOSE+RETREAT produced the STRONGEST, most
+   sustained bilateral contact this whole investigation has ever recorded
+   (7-40N, vs typically <1N) with a real, stable, 100+-step height-gain
+   hold (21.5-21.6mm) - but direct video inspection plus a decisive
+   cross-position tell (near-identical final held height, 31.5mm vs
+   31.6mm, despite two DIFFERENT targeted reach positions) shows this is a
+   NEW wedge-against-the-gripper's-own-base-housing artifact, not a
+   genuine antipodal pinch - the gripper's base, not its fingertips, is
+   catching the cube because of the still-unresolved ~15mm shortfall. Real
+   Jacobian math verified correct first (finite-difference check, 2-5e-5
+   error after fixing a dynamics-settle-noise confound in the verification
+   method itself), a real side-finding of a small pre-existing (not
+   introduced here) ~0.007-0.009 bias in the unrelated base position
+   Jacobian flagged but not fixed (out of scope). **Does not close the
+   investigation** - orientation-control is a genuine, real fix; the
+   reachability half of the hypothesis is falsified as tested. Full
+   detail: `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s
+   2026-07-24 (later still, ar4-axis-align-ik task) UPDATE.
+
 See `BACKLOG.md` for further-out candidates not yet on this list.
 
 ## Recently landed

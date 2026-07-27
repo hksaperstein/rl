@@ -3619,3 +3619,266 @@ source (`isaaclab` package) for the DLS row-count-agnostic-damping and
 kinematic-only-refresh claims above, this article's own same-day
 `command_type="position"`/`"pose"` UPDATE this task's hypothesis directly
 responds to.
+
+## UPDATE 2026-07-27 (ar4-moveit-vs-dls-root-cause task): the premise was wrong — the vendor's own MoveIt config uses plain KDL, not an analytic or TRAC-IK solver — so "wrong solver family" is REFUTED as the explanation; the real gap is almost entirely the physics-vs-pure-kinematics confound this investigation has already been fighting for a week
+
+Dispatched directly off a user hypothesis: since the Annin AR4 vendor repo's
+MoveIt config demonstrably solves AR4 IK reliably where this project's own
+DLS implementation (`scripts/grasp_demo_v2.py`) does not, read the ACTUAL
+vendor MoveIt config to find out why — is it an analytic IKFast solver
+(no local minima, ever), TRAC-IK's parallel-SQP escape mechanism, or
+something structural (pure-kinematics planning vs. physics-coupled
+solving)? This is a read-only research task against the real vendor
+source, not a new implementation.
+
+### Headline finding: `kdl_kinematics_plugin/KDLKinematicsPlugin` — NOT IKFast, NOT TRAC-IK
+
+Confirmed directly from the real, canonical vendor repo,
+`github.com/ycheng517/ar4_ros_driver` (the `Annin-Robotics/ar4_ros_driver`
+org copy mirrors the same project; `ycheng517/ar4_ros_driver` is the one
+Annin Robotics' own forum posts reference and is treated as canonical
+here), MoveIt config package `annin_ar4_moveit_config` v3.0.0. Full
+contents of `annin_ar4_moveit_config/config/kinematics.yaml`
+(raw: `https://raw.githubusercontent.com/ycheng517/ar4_ros_driver/main/annin_ar4_moveit_config/config/kinematics.yaml`):
+
+```yaml
+ar_manipulator:
+  kinematics_solver: kdl_kinematics_plugin/KDLKinematicsPlugin
+  kinematics_solver_search_resolution: 0.005
+  kinematics_solver_timeout: 0.005
+  kinematics_solver_attempts: 3
+```
+
+That is the *entire* file — no `solve_type` (TRAC-IK-only, not applicable),
+no tolerance overrides, no documented redundancy/random-restart parameters
+beyond the bare `attempts: 3`. A repo-wide `grep -ri` (local shallow clone,
+not just the moveit-config subtree) found **zero matches for `ikfast` or
+`trac_ik` anywhere in the repo** — no ikfast plugin package, no TRAC-IK
+build/exec dependency in `annin_ar4_moveit_config`'s `CMakeLists.txt`/
+`package.xml`, and no README anywhere in the repo discusses the IK-solver
+choice or gives a rationale for it. This directly refutes both of this
+task's own leading candidate hypotheses (Question 1/2 in the dispatch):
+**the vendor did not pick an analytic or parallel-optimizer solver at
+all — KDL was almost certainly just MoveIt Setup Assistant's undocumented
+default**, not a deliberate choice justified anywhere in-repo.
+
+Question 5's SRDF check (`annin_ar4_moveit_config/srdf/ar_macro.srdf.xacro`)
+confirms the `ar_manipulator` planning group is exactly the 6 arm joints
+(joint_1..joint_6) plus a fixed `ee_joint` — a standard, **non-redundant**
+6-DOF serial chain, identical DOF count to this project's own AR4 asset. No
+redundancy-resolution/null-space-optimization mechanism is documented or
+possible here beyond what a 6-constraint (full 6D pose), 6-joint,
+exactly-determined IK problem allows — MoveIt is not solving an easier
+problem than our own `command_type="pose"` mode does.
+
+### But KDL's actual implementation is NOT the simple, static classroom algorithm the name suggests — verified against MoveIt2's real source
+
+Reading is not enough — `moveit_kinematics/kdl_kinematics_plugin/src/kdl_kinematics_plugin.cpp`
+(`github.com/moveit/moveit2`, `main` branch) shows this plugin does NOT use
+KDL's stock `ChainIkSolverPos_LMA`/`ChainIkSolverPos_NR_JL` position
+solvers at all. It wraps a hand-written Newton position loop
+(`CartToJnt()`, defined in this same plugin file) around KDL's
+**`ChainIkSolverVelMimicSVD`** — an SVD-based (i.e. damped-least-squares
+family) Jacobian pseudo-inverse velocity solver — which is the *same
+algorithmic family* (iterative Jacobian-based Newton descent) as this
+project's own `DifferentialIKController`/DLS approach, not a
+qualitatively different method. Three mechanically concrete findings from
+the actual `searchPositionIK`/`CartToJnt` source:
+
+1. **`kinematics_solver_attempts` (3, per AR4's config) is a genuine
+   random-restart mechanism, not a fixed-seed retry**: `searchPositionIK`
+   loops `do { ++attempt; ...} while (!timedOut(...))`, and re-seeds via
+   `getRandomConfiguration()` (→ `RobotState::setToRandomPositions`,
+   uniform-random within joint limits) on every attempt after the first —
+   only attempt 1 uses the caller-supplied seed. This is broader than this
+   project's own `_find_best_seed`'s small, hand-curated
+   `(j2, j3, j5)` candidate list (`scripts/grasp_demo_v2.py` line ~740), a
+   real, concrete difference (see ranked recommendation #2 below) — though
+   note the configured `kinematics_solver_timeout` is a mere **0.005
+   seconds**, meaning in practice the loop likely gets very few (possibly
+   just 1-2) attempts before timing out, not a large-scale search either.
+2. **Joint limits are enforced DURING every Newton iteration, not just
+   checked on the final answer** — `CartToJnt`'s loop calls
+   `clipToJointLimits(q_out, delta_q, extra_joint_weights)` before adding
+   each computed `delta_q` to `q_out`, every single iteration. **This
+   project's own polish loops already do the equivalent** — both
+   `polish_from_seed` and `polish_from_seed_axis_aligned`
+   (`scripts/grasp_demo_v2.py` lines 1263 and 1412:
+   `joint_pos_des = torch.clamp(joint_pos_des, min=lo, max=hi)`) clamp the
+   commanded joint target to `joint_pos_limits` every round — so mid-solve
+   joint-limit projection is NOT a point of difference between the two
+   systems; both already do this.
+3. **The underlying numerics (SVD/DLS-style Jacobian pseudo-inverse +
+   Newton iteration) are the same general family this project's own
+   `DifferentialIKController` (`ik_method="dls"`,
+   `ik_params={"lambda_val": LAMBDA_VAL}`) already uses** — confirming
+   this is not a "wrong algorithm class" situation at all. (Verification
+   method note: this sub-finding came from a WebFetch-mediated read of the
+   real source file, cross-checked as internally consistent across two
+   separate fetches and against known MoveIt2 architecture, rather than a
+   raw byte-for-byte terminal `cat` — flagged per this project's own
+   citation-verification discipline, though the specific class names/code
+   snippets quoted were directly present in the fetched content, not
+   invented.)
+
+### Answering the dispatch's five questions directly
+
+**Q1 (which plugin)**: `kdl_kinematics_plugin/KDLKinematicsPlugin`, params
+`search_resolution=0.005`, `timeout=0.005s`, `attempts=3`. See above.
+
+**Q2 (IKFast)**: no IKFast-generated solver exists anywhere in the vendor
+repo for any AR4 model variant (mk1-mk5 config files checked). This
+hypothesis is REFUTED, not just unconfirmed — the vendor's own reference
+implementation never had an analytic solver to begin with.
+
+**Q3 (TRAC-IK)**: also not used — zero occurrences anywhere in the repo.
+The *principle* TRAC-IK would have contributed (parallel SQP escaping
+local minima that plain Jacobian methods get stuck in) is real in the
+literature, but it's not what makes AR4's *own* vendor tooling work, so it
+cannot be the explanation for the specific gap this task was asked to
+close. What KDL's plugin DOES have that's conceptually adjacent —
+bounded random-restart across `attempts` — is real (point 1 above) but
+weak (0.005s timeout) and only a partial parallel to TRAC-IK's own
+mechanism.
+
+**Q4 (physics-vs-pure-kinematics confound)**: **this is the single
+best-supported explanation, and it is not new speculation — this
+project's own multi-week AR4 investigation has already independently
+produced direct, repeated, load-bearing evidence for it, without
+originally framing it as "the MoveIt difference."** MoveIt's KDL plugin
+computes forward kinematics via `fk_solver_->JntToCart` against the pure
+URDF kinematic tree — no PhysX, no gravity, no actuator gains, no contact
+forces enter the IK solve at all; the resulting joint-space plan is only
+THEN handed to a completely separate execution/controller stage. This
+project's own scripts solve IK by stepping (or, in earlier sessions,
+settling through) a live PhysX simulation, and this specific coupling
+independently caused at least three confirmed, previously-diagnosed
+failures with nothing to do with solver choice: (a) the 2026-07-22
+"arm actuator gains too weak to hold pose" finding — a real 1.42rad joint
+tracking error during a live multi-joint move, only fixed by a test-local
+stiffness/damping boost (`kb` 2026-07-22 "later, same day" UPDATE, and the
+gripper-jaw diagnostic the same day); (b) the gripper mimic-joint-vs-
+independent-actuator PhysX-level conflict (`kb` 2026-07-22 UPDATE,
+"Root cause, found via direct USD inspection"); (c) the 2026-07-24
+axis-align-ik task's own Jacobian-verification methodology bug, where
+several `env.step()` dynamics-settle calls injected real gravity-load
+noise into what should have been a clean finite-difference check — fixed
+specifically by *removing* physics from that measurement
+(`write_joint_position_to_sim` + `env.sim.forward()`, a pure
+forward-kinematics refresh with **no dynamics/gravity integration at
+all**, confirmed by reading `simulation_context.py`'s
+`SimulationContext.forward()` directly). That third fix is, in effect,
+this project's own prior independent discovery of exactly the "solve
+kinematically first" pattern MoveIt's architecture uses natively — just
+applied narrowly to one verification script rather than adopted as the
+IK-solving strategy itself.
+
+**Q5 (seeding/joint-limit handling/redundancy)**: covered above — joint
+limits are enforced mid-solve in both systems (not a difference);
+MoveIt's random-restart seeding is broader in principle but time-starved
+in practice (0.005s budget); AR4's `ar_manipulator` group has zero
+kinematic redundancy (same as our own 6-joint, `pose`-mode formulation),
+so "MoveIt has spare DOF to route around joint_3" is not a mechanism
+available to it either — directly consistent with this investigation's
+own 2026-07-24 axis-align-ik finding that even a DELIBERATELY introduced
+extra redundant DOF (relaxing to 5 constraints) did not reliably escape
+the joint_3 conflict.
+
+### What this means for the "17-27mm miss"/local-minima framing, and for the pivot rationale
+
+The original pivot rationale (CLAUDE.md's "Platform pivot" section) and
+this task's own dispatch both implicitly assumed AR4's classical-IK
+problem was a *solver-choice* problem — the wrong numerical tool for the
+job, fixable by switching to whatever "real" MoveIt/AR4 tooling uses. That
+premise is now directly refuted: **the vendor's own tooling uses
+essentially the same algorithm family (iterative Jacobian/DLS-style Newton
+descent) this project already uses**, just cleanly decoupled from physics
+and validated against a codebase with none of this project's own
+asset-specific defects (which this investigation already found and fixed
+piecemeal: a world/root Jacobian frame bug, a wrong EE target point, a
+wrong hardcoded cube position, a gripper mimic/actuator physics conflict,
+weak arm actuator gains). Most of "our IK doesn't work" was never really
+about DLS-vs-something-else at all — it was independently-diagnosable
+bugs and a physics-in-the-loop confound, exactly the "should we blame the
+algorithm or the harness" question this task was dispatched to settle.
+
+### Ranked recommendation (evidenced, not forced to a single answer)
+
+1. **(Highest confidence — directly evidenced by this project's own prior
+   work, not just MoveIt's architecture) Decouple the IK search/polish
+   from live physics: solve kinematically first (teleport via
+   `write_joint_position_to_sim` + `env.sim.forward()`'s pure-FK refresh,
+   already validated bug-free in the 2026-07-24 axis-align-ik Jacobian
+   verification — no dynamics/gravity integration), THEN execute the
+   converged joint trajectory through normal PD-driven `env.step` motion
+   for the real pick/place — mirroring MoveIt's own plan-then-execute
+   separation exactly.** This is the one change with a direct, already-
+   collected evidence trail inside this project's own history (the
+   dynamics-settle-noise bug in Jacobian verification; the weak-actuator
+   1.42rad tracking-error finding), not merely an analogy to how MoveIt
+   happens to be built.
+2. **(Medium confidence, cheap to try) Broaden `_find_best_seed` from a
+   small curated candidate list toward MoveIt-style random-restart**
+   (uniform-random joint configs within limits, sampled many times within
+   a bounded budget, keeping the best). Worth doing since it's a real,
+   confirmed mechanical difference from the vendor's own plugin — but this
+   investigation's own extensive bearing/tilt/reach sweeps (2026-07-23/24
+   UPDATEs above) already found the Z-height shortfall to be remarkably
+   direction- and reach-independent, so a wider random search is unlikely
+   to be the dominant fix on its own.
+3. **(Real, lower-confidence-of-fixability, task-design-level) The
+   `joint_3` -89°/+52° limit is genuine vendor hardware (independently
+   re-confirmed this task from the real `mk1-mk5.yaml`/`ar_macro.xacro`
+   source, matching this investigation's own 2026-07-22 Part-A finding
+   exactly), and MoveIt's own KDL solver would face the identical
+   fully-determined 6-DOF constraint reaching the same low, vertical-wrist
+   target — it is not "smarter" about this specific conflict, it simply
+   isn't usually asked to do this in vendor demos. If a real, vertical,
+   9mm-height grasp of a small object turns out to be at or past this
+   arm's comfortable envelope generally (not just for our own scripts),
+   the fix is a task-level choice (raise the object, or accept a
+   non-vertical approach as this arm's own canonical grasp geometry) —
+   flagged for whoever next picks up AR4 work, not decided here.**
+4. **(Ruled out) Generate/adopt an analytic IKFast solver.** No such
+   solver exists for AR4 anywhere, vendor or otherwise; would be a
+   from-scratch tooling effort (OpenRAVE-based IKFast generation for this
+   6-DOF geometry) with no proof it would even resolve the joint_3
+   conflict (an analytic solver still can't produce a solution outside the
+   arm's real reachable set) — Tier 1 territory, not attempted here.
+5. **(Ruled out) Adopt TRAC-IK's parallel-SQP approach.** Not used by the
+   vendor; the one relevant idea it embodies (broader random-restart) is
+   already covered, more cheaply, by recommendation 2.
+
+**Not attempted this task, explicitly flagged as follow-up rather than
+done here**: a live proof-of-concept of recommendation 1 (solve the same
+GRASP waypoint kinematically via `sim.forward()` teleport-refresh, no
+physics stepping, then check whether the achieved residual/height is
+materially better than the physics-coupled baseline). Not run this
+session because the desktop (`saps@home.local`) was confirmed unreachable
+throughout this task (`ssh`, `avahi-resolve -n home.local`, and the GPU
+status server's own HTTP endpoint all timed out identically — consistent
+with this project's own previously-documented desktop-outage pattern, not
+investigated further since a from-scratch cloud AR4 build was judged
+disproportionate to a still-optional confirmatory test per this task's own
+scope). A full solver-strategy change (adopting the plan-then-execute
+split as the actual production methodology for classical AR4 grasp
+scripts) is Tier 1 methodology work in its own right and is flagged to
+Principal rather than designed/shipped unilaterally here.
+
+**Sources**: `github.com/ycheng517/ar4_ros_driver` (`main` branch) —
+`annin_ar4_moveit_config/config/kinematics.yaml`,
+`config/joint_limits.yaml`, `srdf/ar_macro.srdf.xacro`, `srdf/ar.srdf.xacro`,
+`package.xml`, `CMakeLists.txt`, root `README.md`, plus
+`annin_ar4_description/urdf/ar_macro.xacro` and
+`annin_ar4_description/config/{mk1,mk2,mk3}.yaml` (all fetched directly via
+WebFetch/raw GitHub URLs and cross-checked against a local shallow clone);
+`github.com/moveit/moveit2` (`main` branch)
+`moveit_kinematics/kdl_kinematics_plugin/src/kdl_kinematics_plugin.cpp` for
+the `searchPositionIK`/`CartToJnt`/`clipToJointLimits`/
+`getRandomConfiguration` mechanics; this project's own
+`scripts/grasp_demo_v2.py` (`DifferentialIKControllerCfg` at line ~1704,
+`_find_best_seed` candidate-seed list at line ~740, joint-limit clamps at
+lines 1263/1412); this article's own 2026-07-22 ("later, same day" and
+"later" UPDATEs) and 2026-07-24 (`ar4-axis-align-ik` UPDATE) sections for
+the previously-independently-found physics-confound evidence this task's
+Q4 answer relies on directly.

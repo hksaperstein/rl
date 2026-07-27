@@ -602,6 +602,45 @@ Roughly in the order they'd likely be picked up:
    detail: `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s
    2026-07-24 (later still, ar4-axis-align-ik task) UPDATE.
 
+   **MoveIt-vs-our-DLS root cause (2026-07-27, ar4-moveit-vs-dls-root-cause
+   task): the "wrong solver family" premise is REFUTED — the vendor's own
+   MoveIt config uses plain `kdl_kinematics_plugin/KDLKinematicsPlugin`
+   (confirmed from the real `github.com/ycheng517/ar4_ros_driver` repo's
+   `annin_ar4_moveit_config/config/kinematics.yaml`), not TRAC-IK and not
+   an analytic IKFast solver (zero occurrences of either anywhere in the
+   repo) — and MoveIt2's actual plugin source shows this KDL solver is
+   itself a hand-written Newton loop around an SVD/DLS-style Jacobian
+   pseudo-inverse (`ChainIkSolverVelMimicSVD`), the SAME algorithm family
+   this project's own `DifferentialIKController` already uses, with
+   joint-limit clamping every iteration (our own polish loops already do
+   this too) and a random-restart across `kinematics_solver_attempts: 3`
+   (broader than our own curated seed list, but budgeted at a mere 0.005s
+   timeout). **The best-evidenced real difference is structural, not
+   algorithmic**: MoveIt solves IK against a pure kinematic model (no
+   physics) and only executes the resulting trajectory afterward, cleanly
+   separated from dynamics — and this project's OWN prior sessions already
+   independently hit and fixed physics-coupling confounds with nothing to
+   do with solver choice (the weak-arm-actuator 1.42rad tracking error,
+   the gripper mimic-vs-actuator PhysX conflict, the axis-align-ik task's
+   own dynamics-settle-noise bug in Jacobian verification, fixed by
+   switching to a pure-FK `env.sim.forward()` refresh — in effect this
+   project's own prior discovery of MoveIt's own plan-then-execute
+   pattern, just not previously framed that way). Ranked recommendation:
+   (1, highest confidence) decouple IK search from live physics using the
+   already-validated `sim.forward()` pure-FK pattern, execute only after
+   converging; (2, medium) broaden the seed search toward true
+   random-restart (cheap, but this investigation's own bearing/reach/tilt
+   sweeps suggest it's not the dominant fix); (3) accept the vendor-real
+   `joint_3` -89/+52° limit may simply make a fully-vertical 9mm-height
+   grasp impractical for this arm regardless of solver, a task-design
+   question not a solver bug; (4/5, ruled out) IKFast/TRAC-IK adoption,
+   since neither is what makes the vendor's own tooling work. No live
+   proof-of-concept run this task (desktop unreachable throughout,
+   confirmed via `ssh`/`avahi-resolve`/the GPU status server all timing
+   out identically) — flagged as the concrete next step. Full detail:
+   `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s 2026-07-27
+   UPDATE.
+
 See `BACKLOG.md` for further-out candidates not yet on this list.
 
 ## Recently landed

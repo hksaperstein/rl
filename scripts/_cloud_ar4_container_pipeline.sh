@@ -104,21 +104,40 @@ check $? "docker + nvidia-container-toolkit ready"
 # util for 8+ minutes instead of crashing outright (a software/CPU render
 # fallback, not a hang).
 if ! find /usr/lib/x86_64-linux-gnu -iname 'libGLX_nvidia*' 2>/dev/null | grep -q .; then
-  DRIVER_MAJOR="$(nvidia-smi --query-gpu=driver_version --format=csv,noheader | cut -d. -f1)"
-  sudo apt-get install -y "libnvidia-gl-${DRIVER_MAJOR}-server"
-  check $? "libnvidia-gl-${DRIVER_MAJOR}-server install"
-  # KNOWN GAP, found live (2026-07-24): apt's currently-offered package
-  # version for this driver major can be a NEWER point release than the
-  # kernel module the DLVM image actually booted with (e.g. apt offered
-  # 580.173.02 while the running kernel module was 580.159.03) -- this
-  # breaks nvidia-smi itself ("Driver/library version mismatch") until a
-  # reboot loads the matching kernel module. A mid-script self-reboot
-  # can't cleanly resume this same bash process, so fail fast and loud
-  # here instead of burning 10+ minutes on a doomed Isaac Sim launch with
-  # a broken GPU: if this fires, `sudo reboot`, wait for SSH, and simply
-  # re-run this same script -- every step above is idempotent (checks
-  # before acting) so the re-run skips straight past what already
-  # succeeded.
+  # FIX (2026-07-27, ar4-graspable-workspace-from-fk task, found live
+  # re-hitting this exact gap): pin the install to the EXACT running
+  # driver's own version string (via `apt-cache madison`) instead of an
+  # unpinned install, which lets apt pick its newest candidate for the
+  # driver MAJOR version -- that newest candidate can be a NEWER point
+  # release than the kernel module the DLVM image actually booted with
+  # (e.g. apt offered 580.173.02 while the running kernel module was
+  # 580.159.03), breaking nvidia-smi ("Driver/library version mismatch")
+  # until a reboot loads the matching module. A mid-script self-reboot
+  # can't cleanly resume this same bash process (see the prior version of
+  # this comment, kept in spirit below) - pinning avoids ever installing a
+  # mismatched point release in the first place, rather than failing fast
+  # and requiring a manual reboot+re-run.
+  DRIVER_FULL="$(nvidia-smi --query-gpu=driver_version --format=csv,noheader)"
+  DRIVER_MAJOR="$(echo "$DRIVER_FULL" | cut -d. -f1)"
+  echo "Running driver: ${DRIVER_FULL} (major ${DRIVER_MAJOR})"
+  APT_VER="$(apt-cache madison "libnvidia-gl-${DRIVER_MAJOR}-server" 2>/dev/null | awk -F'|' -v v="$DRIVER_FULL" '{gsub(/^[ \t]+|[ \t]+$/,"",$2); if (index($2, v) == 1) {print $2; exit}}')"
+  if [ -n "$APT_VER" ]; then
+    echo "Pinning libnvidia-gl-${DRIVER_MAJOR}-server to exact running-driver version: ${APT_VER}"
+    sudo apt-get install -y "libnvidia-gl-${DRIVER_MAJOR}-server=${APT_VER}"
+    check $? "libnvidia-gl-${DRIVER_MAJOR}-server=${APT_VER} pinned install"
+  else
+    echo "WARNING: could not find an apt candidate matching exact driver ${DRIVER_FULL} - falling back to unpinned install (may hit the version-mismatch gap below)." >&2
+    sudo apt-get install -y "libnvidia-gl-${DRIVER_MAJOR}-server"
+    check $? "libnvidia-gl-${DRIVER_MAJOR}-server install (unpinned fallback)"
+  fi
+  # KNOWN GAP, found live (2026-07-24), mitigated but not eliminated by the
+  # pinning above (e.g. if apt-cache madison has no exact-match candidate at
+  # all): a mid-script self-reboot can't cleanly resume this same bash
+  # process, so fail fast and loud here instead of burning 10+ minutes on a
+  # doomed Isaac Sim launch with a broken GPU: if this still fires, `sudo
+  # reboot`, wait for SSH, and simply re-run this same script -- every step
+  # above is idempotent (checks before acting) so the re-run skips straight
+  # past what already succeeded.
   if ! nvidia-smi >/dev/null 2>&1; then
     echo "FATAL: nvidia-smi broke after installing libnvidia-gl-${DRIVER_MAJOR}-server (driver/library version mismatch)." >&2
     echo "This needs a reboot to load the matching kernel module -- run: sudo reboot" >&2

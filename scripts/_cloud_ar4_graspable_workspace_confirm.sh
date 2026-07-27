@@ -74,9 +74,33 @@ sudo systemctl restart docker
 check $? "docker + nvidia-container-toolkit ready"
 
 if ! find /usr/lib/x86_64-linux-gnu -iname 'libGLX_nvidia*' 2>/dev/null | grep -q .; then
-  DRIVER_MAJOR="$(nvidia-smi --query-gpu=driver_version --format=csv,noheader | cut -d. -f1)"
-  sudo apt-get install -y "libnvidia-gl-${DRIVER_MAJOR}-server"
-  check $? "libnvidia-gl-${DRIVER_MAJOR}-server install"
+  # 2026-07-27 fix (found live during this task's own dispatch): the
+  # UNPINNED install below (`apt-get install -y libnvidia-gl-${DRIVER_MAJOR}-
+  # server`) hit EXACTLY the known gap _cloud_ar4_container_pipeline.sh's own
+  # comment already flags - apt's candidate for the driver MAJOR version can
+  # be a newer POINT release (580.173.02) than the kernel module the DLVM
+  # image actually booted with (580.159.03), breaking nvidia-smi
+  # ("Driver/library version mismatch") until a reboot loads the matching
+  # module. Rather than fail-fast-and-require-a-manual-reboot (that doc's
+  # own documented workaround, awkward here since scripts/run_on_cloud_gpu.sh
+  # always tears the instance down on any non-zero remote exit, so a
+  # reboot-and-resume can't happen under that wrapper), pin the install to
+  # the EXACT running driver's own version string via `apt-cache madison`
+  # instead of leaving apt free to pick its newest candidate - this avoids
+  # ever installing a mismatched point release in the first place.
+  DRIVER_FULL="$(nvidia-smi --query-gpu=driver_version --format=csv,noheader)"
+  DRIVER_MAJOR="$(echo "$DRIVER_FULL" | cut -d. -f1)"
+  echo "Running driver: ${DRIVER_FULL} (major ${DRIVER_MAJOR})"
+  APT_VER="$(apt-cache madison "libnvidia-gl-${DRIVER_MAJOR}-server" 2>/dev/null | awk -F'|' -v v="$DRIVER_FULL" '{gsub(/^[ \t]+|[ \t]+$/,"",$2); if (index($2, v) == 1) {print $2; exit}}')"
+  if [ -n "$APT_VER" ]; then
+    echo "Pinning libnvidia-gl-${DRIVER_MAJOR}-server to exact running-driver version: ${APT_VER}"
+    sudo apt-get install -y "libnvidia-gl-${DRIVER_MAJOR}-server=${APT_VER}"
+    check $? "libnvidia-gl-${DRIVER_MAJOR}-server=${APT_VER} pinned install"
+  else
+    echo "WARNING: could not find an apt candidate matching exact driver ${DRIVER_FULL} - falling back to unpinned install (may hit the version-mismatch gap)." >&2
+    sudo apt-get install -y "libnvidia-gl-${DRIVER_MAJOR}-server"
+    check $? "libnvidia-gl-${DRIVER_MAJOR}-server install (unpinned fallback)"
+  fi
   if ! nvidia-smi >/dev/null 2>&1; then
     echo "FATAL: nvidia-smi broke after installing libnvidia-gl-${DRIVER_MAJOR}-server (driver/library version mismatch)." >&2
     echo "This needs a reboot to load the matching kernel module -- run: sudo reboot, wait for SSH, re-run this script." >&2

@@ -42,7 +42,7 @@ from isaaclab_tasks.manager_based.manipulation.lift import mdp
 
 from . import mdp as ar4_mdp
 from .actions import ProximityGatedBinaryJointPositionActionCfg
-from .objects_cfg import CUBE_CFG
+from .objects_cfg import CUBE_CFG, GRASP_PEDESTAL_CENTER_XY, PEDESTAL_CFG, PEDESTAL_HEIGHT_M
 from .pickplace_env_cfg import _EE_OFFSET
 from .robot_cfg import (
     ARM_JOINT_NAMES,
@@ -159,11 +159,36 @@ class Ar4PickPlaceGraspGoalSceneCfg(InteractiveSceneCfg):
         spawn=sim_utils.DomeLightCfg(intensity=2000.0, color=(0.75, 0.75, 0.75)),
     )
     robot: ArticulationCfg = AR4_MK5_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
+
+    # 2026-07-28 (ar4-pedestal-ground-clearance-fix task): a static raised
+    # work surface the cube now rests on. Direct fix for this project's own
+    # multi-week AR4 grasp investigation's terminal finding
+    # (kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md's 2026-07-28
+    # "ar4-joint2-ground-clearance-fix task" UPDATE): a cube resting flush on
+    # the ground (z=0) is genuinely ungraspable anywhere in AR4's real
+    # workspace - the gripper's own ~18.5mm finger length means the
+    # fingertips hit the floor before they can descend to a ground-level
+    # cube's grasp height, for ANY near-vertical approach. See
+    # objects_cfg.py's PEDESTAL_HEIGHT_M/PEDESTAL_CFG for the full
+    # derivation (40mm, empirically confirmed to restore a large, robust
+    # graspable workspace - 30157 final survivors in the corrected FK sweep,
+    # vs. 0 at ground level).
+    pedestal: AssetBaseCfg = PEDESTAL_CFG
+
     cube: RigidObjectCfg = CUBE_CFG.replace(
         # 15mm cube (bumped 12mm->20mm->15mm, both changes 2026-07-24, see
-        # CUBE_CFG's own docstring in objects_cfg.py) - resting z = half
-        # the new size.
-        init_state=RigidObjectCfg.InitialStateCfg(pos=(0.20, 0.28, 0.0075)),
+        # CUBE_CFG's own docstring in objects_cfg.py) - resting z = pedestal
+        # top (PEDESTAL_HEIGHT_M) + half the cube's own size, now that the
+        # cube rests ON TOP of the pedestal above instead of directly on the
+        # ground (2026-07-28 pedestal fix). xy repositioned from the old
+        # (0.20, 0.28) legacy default (never actually inside any FK-verified
+        # graspable region) to the pedestal's own center, so the scene's
+        # default spawn is physically consistent (cube resting on the
+        # platform, not beside/through it) even before any script teleports
+        # the cube to a specific validated grasp point.
+        init_state=RigidObjectCfg.InitialStateCfg(
+            pos=(GRASP_PEDESTAL_CENTER_XY[0], GRASP_PEDESTAL_CENTER_XY[1], PEDESTAL_HEIGHT_M + 0.0075)
+        ),
         spawn=CUBE_CFG.spawn.replace(
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
                 disable_gravity=False,
@@ -200,9 +225,10 @@ class Ar4PickPlaceGraspGoalSceneCfg(InteractiveSceneCfg):
     )
     # Upper-arm-only ground/self collision safety sensor - deliberately
     # excludes gripper_jaw1_link/gripper_jaw2_link and link_6 (the wrist),
-    # which legitimately approach the ground plane (cube rests at
-    # z=0.0075, 15mm cube as of 2026-07-24) to reach the cube. Body names
-    # confirmed via direct
+    # which legitimately approach the pedestal-top plane (cube rests at
+    # z=PEDESTAL_HEIGHT_M + 0.0075, 15mm cube as of 2026-07-24, raised onto
+    # the pedestal 2026-07-28) to reach the cube. Body names confirmed via
+    # direct
     # robot.data.body_names introspection (this project's own convention -
     # see scripts/smoke_test_graspgoal_ground_penalty.py, which printed
     # the live body list: ['world', 'base_link', 'link_1'..'link_5',

@@ -118,11 +118,49 @@ ARM_JOINT_NAMES = ["joint_1", "joint_2", "joint_3", "joint_4", "joint_5", "joint
 # jaw pinch point, measured along link_6's own local +Z axis).
 _EE_OFFSET_LOCAL = np.array([0.0, 0.0, 0.036])
 
-# Matches scripts/grasp_demo_v2.py's current GRASP_AT_HEIGHT default
+# PEDESTAL (2026-07-28, ar4-pedestal-ground-clearance-fix task): the
+# 2026-07-28 "ar4-joint2-ground-clearance-fix" task (see this module's
+# GROUND_CLEARANCE_MIN_M comment below, and
+# kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md's matching UPDATE)
+# found the graspable workspace at a cube resting DIRECTLY ON THE GROUND
+# (z=0) is genuinely EMPTY: even in the best case found anywhere in an
+# 8M-sample sweep, the gripper's real fingertip (jaw1's collision mesh
+# extends _JAW1_MESH_LOWER_EXTENT_M=18.475mm below its own link origin)
+# would sit -3.55mm BELOW the ground plane - a real geometric floor
+# collision, not a filter-tuning artifact. Fix: raise the cube on a static
+# pedestal, mirroring real pick-and-place (objects on a raised work
+# surface, not on the floor at the robot's own base) - this task's own
+# cheap (1M-sample, no ground/roll filter) height probe
+# (see kb doc's 2026-07-28 "ar4-pedestal-ground-clearance-fix task" UPDATE
+# for the full table) found the achievable jaw1-origin ground-clearance
+# ceiling rises almost exactly 1:1 with pedestal height (e.g. +10mm
+# pedestal -> +10.53mm ceiling between the 20mm and 30mm probes), and even
+# the SMALLEST tested pedestal (20mm) already flips the real-fingertip
+# ceiling positive (+15.84mm) - confirming the empty-workspace finding was
+# genuinely about ground clearance, not some other confound that a taller
+# cube wouldn't fix. PEDESTAL_HEIGHT_M=0.040 (40mm) is chosen from within
+# that probe's tested range: it lands solidly in this task's own dispatch
+# brief's suggested "40-60mm... comfortable margin" band (the low end,
+# deliberately - no reason to reach further/higher than needed once the
+# ground-collision problem is already solved with generous headroom), and
+# the probe shows it gives a real-fingertip-ceiling of +35.77mm - over 3x
+# the existing GROUND_CLEARANCE_MIN_M filter's own already-conservative
+# required margin (30mm jaw1-origin clearance translates to >=11.525mm of
+# real fingertip clearance by construction) - and 100% (102/102) of that
+# probe's height/tilt/margin survivors already satisfy the
+# GROUND_CLEARANCE_MIN_M filter outright at this height (vs. 0/101 at the
+# original ground-level height), i.e. the ground-clearance constraint
+# becomes close to non-binding rather than merely "sometimes satisfiable."
+PEDESTAL_HEIGHT_M = 0.040
+
+# Matches scripts/grasp_demo_v2.py's original GRASP_AT_HEIGHT convention
 # (0.0105 = 3mm above the 15mm cube's resting center height of 0.0075,
 # tasks/ar4/objects_cfg.py's CUBE_CFG) - the true grasp-point convention
-# already established for the current cube size, not re-derived here.
-GRASP_AT_HEIGHT = 0.0105
+# already established for the current cube size - now extended by
+# PEDESTAL_HEIGHT_M since the cube's own resting center height becomes
+# PEDESTAL_HEIGHT_M + 0.0075 once it rests on top of the pedestal instead
+# of directly on the ground (see PEDESTAL_HEIGHT_M's own comment above).
+GRASP_AT_HEIGHT = PEDESTAL_HEIGHT_M + 0.0105
 
 # Filter tolerances (2026-07-27 task brief's own specified ranges).
 HEIGHT_TOL_M = 0.002  # +/- 2mm band around GRASP_AT_HEIGHT

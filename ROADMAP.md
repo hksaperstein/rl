@@ -691,6 +691,46 @@ See `BACKLOG.md` for further-out candidates not yet on this list.
 
 ## Recently landed
 
+- **AR4 pedestal-grasp-height-fix: the height fix WORKS (real fingertip now
+  genuinely lands inside the cube's vertical span, not jammed at the top
+  face), but the capstone grasp+lift still fails — root-caused to a NEW,
+  distinct blocker: the still-OPEN gripper collides with the cube DURING
+  the PREGRASP→GRASP descent itself, pinning the whole arm+gripper
+  assembly before CLOSE is ever commanded** (2026-07-28, direct
+  continuation of the trivial-friction-check task's own recommended next
+  step). Lowered the FK-design grasp-height target
+  (`scripts/ar4_graspable_workspace.py`'s `GRASP_AT_HEIGHT` convention) to
+  compensate for a measured ~4.3mm physics-vs-kinematics tracking bias,
+  re-derived a corrected joint config via a Pi-local pure-FK local search
+  (no GPU/Isaac needed), and confirmed via video that the real fingertip
+  now lands genuinely inside the cube's vertical span (+6-7mm from center,
+  well clear of the old top-face-jamming bug). **But `jaw_separation`
+  stays frozen at ~28mm (fully open) through the whole CLOSE phase across
+  3 independent live runs** — two hypotheses for this were tested and
+  BOTH REFUTED with hard numbers: (1) insufficient gripper actuator force
+  — refuted by boosting `effort_limit_sim` 20N→100N (5x the observed
+  ~55-60N contact force) with zero change in outcome; (2) a command-wiring
+  bug — refuted by a raw `joint_pos`/`joint_pos_target` readout showing
+  the CLOSE target correctly reaches the joint (`target=0.0`) while the
+  actual position never moves off `0.014` (fully open) even a micron, with
+  the calculated actuator spring force at that gap (`stiffness × error` =
+  4000 × 0.014 = 56N) closely matching the measured ~58-60N contact force
+  — strong quantitative evidence of a genuine physical wedge/obstruction
+  already present before CLOSE is even issued (`open_gripper_max_force`
+  pre-CLOSE = 60.4N), not a software bug. The arm's own joint-space settle
+  also fails to converge at this config (2.3deg residual, ~13mm
+  FK-vs-achieved pinch discrepancy — much larger than this investigation's
+  previously-documented ~5-7mm residual), consistent with the arm getting
+  physically stuck mid-descent rather than cleanly reaching its intended
+  pose. Next concrete, bounded step (flagged, not decided unilaterally):
+  the corrected joint search only validates the two static PREGRASP/GRASP
+  endpoints, not the interpolated path `settle_to_joint_pose` actually
+  traverses between them — checking/avoiding collision along that
+  intermediate path (or requiring a larger XY margin) is the likely fix,
+  but redesigning the search methodology is outside this task's own
+  bounded "lower the height and verify" scope. Full detail:
+  `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s 2026-07-28
+  "ar4-pedestal-grasp-height-fix task" UPDATE.
 - **AR4 grasp-trivial-check: friction DEFINITIVELY ruled out (code +
   live empirical retest with realistic friction applied); direct visual
   inspection instead confirms the real cause is grasp HEIGHT — jaws close

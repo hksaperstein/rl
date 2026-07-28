@@ -5281,3 +5281,178 @@ own 2026-07-28 "ar4-pedestal-ground-clearance-fix task" UPDATE (the
 pinch-point gap this task's height finding directly builds on) and
 "ar4-cartesian-fingertip-correction task" UPDATE (the roll/heading
 diagnosis this task's height finding refines rather than contradicts).
+
+## UPDATE 2026-07-28 (ar4-pedestal-grasp-height-fix task): the height fix WORKS — real fingertip now lands genuinely inside the cube's vertical span — but a NEW, distinct blocker is found and precisely characterized: a descent-path collision pins the gripper open before CLOSE is ever issued, ruling out both "insufficient force" and "wiring bug" with hard numbers
+
+Direct continuation of the trivial-friction-check task immediately above,
+whose own closing recommendation was concrete and bounded: lower
+`GRASP_AT_HEIGHT` so the real fingertip lands at the cube's vertical
+CENTER instead of its TOP FACE. Dispatched specifically to land the
+capstone grasp+lift, not to re-diagnose from scratch.
+
+**Part 1: the height correction — derived, applied, and video-confirmed working.**
+
+`scripts/ar4_graspable_workspace.py`'s `GRASP_AT_HEIGHT` (the FK-design
+target the whole pedestal-height workspace sweep filters against) was
+`PEDESTAL_HEIGHT_M + 0.0105 = 0.0505m`. The trivial-check task's own live
+measurement at this exact target found the PHYSICALLY-achieved real
+fingertip settling at `0.0548m` — i.e. a real, reproducible ~4.3mm
+physics-vs-kinematics tracking bias (achieved = commanded + ~4.3mm, the
+arm settles short of its own commanded descent, consistent with this
+investigation's already-documented joint-tracking-residual findings). To
+get the ACHIEVED fingertip to the cube's own vertical center
+(`PEDESTAL_HEIGHT_M + CUBE_HALF_SIZE_M = 0.0475m`), the FK-design target
+needed to be lowered by that same bias: `NEW_GRASP_HEIGHT = 0.0475 -
+0.0043 = 0.0432m`.
+
+Rather than re-run the full 8M-sample workspace sweep (which would also
+require loosening the `PEDESTAL_FINGERTIP_CLEARANCE_MIN_M` safety filter,
+since the new target sits below its 5mm floor), a small standalone
+Pi-local pure-FK local search (no GPU/Isaac needed, ~3-4 min runtime) was
+written (`/tmp/.../ar4_height_correction_search.py`, not committed — a
+one-off, mirrors `_ar4_pedestal_select_grasp_points.py`'s own
+`search_pregrasp` Gaussian-perturbation method exactly, just retargeting
+height instead of hover): joint_1 held fixed at the existing
+`Q0_bearing95` point's own value (preserving the same approach azimuth),
+joints 2-6 perturbed and filtered for height/tilt/roll/margin against the
+new target. Found a corrected GRASP config with FK fingertip_z=0.0418m
+(within tolerance of the 0.0432m target), excellent margins (tilt=0.50deg,
+roll_offset=0.56deg, min_margin=34.97deg — all better than the original
+point), landing within ~8.6mm (xy) of the original cube position — well
+inside the existing pedestal's own 30cm×14cm footprint, no resize needed.
+A matching PREGRASP hover config was found the same way.
+
+**Live-tested** (`scripts/ar4_pedestal_grasp_height_corrected_check.py`,
+cloud GPU, container+GCS-asset-cache path): the height/aperture diagnostic
+confirmed the real fingertip lands at `real_fingertip_z=0.0536-0.0545m`
+against a cube span of `[0.0400,0.0550]m` — **genuinely INSIDE the cube's
+vertical span this time** (+6-7mm from center, comfortably clear of the
+old bug's `+0.2mm from top face`). Close-up video/frames
+(`gs://rl-manipulation-hks-runs/ar4-pedestal-grasp-height-corrected-check/`,
+Pi-local at `logs/videos/ar4_pedestal_grasp_height_corrected_check/`,
+gitignored) show the jaws straddling a meaningfully lower portion of the
+cube than the pre-fix video did. **The height convention fix itself is a
+real, verified improvement** — but it did not, by itself, produce a
+grasp+lift.
+
+**Part 2: the capstone grasp+lift still fails — `jaw_separation` frozen at
+~28mm through CLOSE, across 3 independent live runs at this corrected
+height.** `cube_z` stays bit-for-bit frozen at its exact resting value
+(0.0475m) through every single phase (HOME through RETREAT) in all 3 runs
+— not even the transient artifacts seen in earlier failed attempts. Two
+concrete remediation hypotheses were tested in sequence, both refuted with
+hard numbers rather than left as unconfirmed guesses:
+
+1. **Hypothesis: insufficient gripper actuator force.** Every AR4 grasp
+   script in this whole investigation (this one included, originally) has
+   used `tasks/ar4/robot_cfg.py`'s unboosted gripper actuator
+   (`effort_limit_sim=20.0`, i.e. 20 Newtons — genuinely less than the
+   ~48-79N contact-force range documented at literally every validation
+   point this investigation has ever tested, this task's own two runs
+   included: 60.40N and 60.40N pre-CLOSE). The arm's own actuator gains
+   were boosted long ago (`STIFFNESS=4000/DAMPING=200/EFFORT_LIMIT=20`,
+   Newton-meters for the revolute arm joints) specifically to fix an
+   analogous PD-droop-under-load problem
+   (`tasks/ar4/joint_tracking.py`'s own docstring) — but this exact fix
+   was never applied to the GRIPPER's own (separate, linear/prismatic)
+   actuator anywhere in this investigation; every prior "gripper closes
+   successfully" precedent (`scripts/_record_jaw_fix_open_close_cycle.py`)
+   only ever demonstrated it with NO object in the way (zero resistance),
+   so this gap was never stress-tested. Boosted
+   `gripper_cfg`'s `stiffness=4000/damping=200/effort_limit=100N` (5x the
+   observed resistance) by direct analogy to the arm's own fix, same
+   `write_joint_*_to_sim` pattern, and re-ran. **Result: jaw_separation
+   stayed frozen at exactly 28.08mm, bit-for-bit identical to the
+   unboosted run. REFUTED — actuator force budget was never the binding
+   constraint.**
+2. **Hypothesis: a wiring bug in the CLOSE command itself** (this task's
+   own dispatch brief flagged this as the fallback explanation if force
+   boosting didn't help, per "compare against a script where the gripper
+   does close"). Added a raw `robot.data.joint_pos` /
+   `robot.data.joint_pos_target` printout for the gripper joints directly
+   (bypassing the derived world-frame body-position math the
+   `jaw_separation` diagnostic uses) and re-ran. **Result:
+   `joint_pos_target` correctly reads `[0.0, 0.0]` (the CLOSE command
+   genuinely reaches the joint, confirming the command plumbing itself is
+   correct) while `joint_pos` never moves off `[0.014, 0.014]` (fully
+   OPEN) — not even fractionally, across 90 physics steps (0.45s) with a
+   5x force budget. REFUTED — this is not a command-wiring bug either.**
+
+**The real explanation, and why it points at a descent-path collision, not
+a closing-mechanism defect:** with the position error frozen at exactly
+0.014m and stiffness=4000 N/m, the actuator's own nominal spring force at
+that gap is `4000 × 0.014 = 56N` — strikingly close to the measured
+~58-60N contact force. This is the signature of a real, force-balanced
+physical obstruction: something is pressing back on the jaw with almost
+exactly the actuator's own maximum authority at that position, holding it
+in static equilibrium AT the fully-open value rather than partway through
+a close. Combined with `open_gripper_max_force so far (PHASE0-2,
+pre-CLOSE): 60.40N` (i.e. this same large contact force is ALREADY present
+before CLOSE is ever commanded, while the gripper is still nominally OPEN)
+and the arm's own joint-space settle failing to converge at this exact
+config (`GRASP settle: converged=False, max_err_deg=2.29-2.33`, vs.
+PREGRASP's clean `0.0077deg` at the same point) with an unusually large
+~13.4mm FK-vs-achieved pinch-point discrepancy (this investigation's
+previously-documented residual at other points was ~5-7mm) — the picture
+is consistent: **the still-open gripper collides with the cube DURING the
+PREGRASP→GRASP descent itself** (not at either static endpoint), physically
+blocking further arm descent AND jaw closing simultaneously, well before
+the CLOSE command is ever issued. The corrected joint search validates
+only the two STATIC endpoints (PREGRASP hover and GRASP) for kinematic
+clearance — it does not check the INTERMEDIATE joint-space-interpolated
+path `settle_to_joint_pose`'s outer iterations actually traverse between
+them, so a transient collision partway through the descent (plausible
+given the tight ~2.7-3.5mm XY margin between the jaw midline and the cube
+center, against a 7.5mm cube half-width) is entirely consistent with, and
+unchecked by, this task's own search methodology.
+
+**Honest verdict:** the capstone AR4 grasp+lift is **still NOT achieved**,
+but this task closes with real progress and a sharply-narrowed remaining
+blocker, not an open-ended re-diagnosis: (1) the grasp-HEIGHT convention
+fix from the trivial-check task is confirmed real and working (fingertip
+genuinely inside the cube's span now); (2) the remaining blocker is
+precisely characterized and quantitatively evidenced as a descent-path
+collision, with two plausible alternative explanations (actuator force,
+command wiring) explicitly tested and refuted rather than left
+unconsidered. Per this task's own bounded scope (verify/lower the height,
+not redesign the collision-avoidance search methodology) and this repo's
+Senior/Principal split, the concrete next step — checking or avoiding
+collision along the INTERMEDIATE descent path (not just the two static
+endpoints), or requiring a larger XY safety margin in the corrected-config
+search — is flagged back rather than decided and built unilaterally here.
+
+**Cost:** ~5 cloud dispatches total across this task (`g2-standard-4` +
+`nvidia-l4`, mostly on-demand after repeated SPOT stockouts across all 10
+surveyed zones): 2 on-demand stockouts (no charge, auto-torn-down), 1 SPOT
+preemption mid-run (`compute.instances.preempted`, confirmed via `gcloud
+compute operations list`, disk+instance deleted after a failed same-zone
+resume also hit stockout), 1 genuine mid-run segfault (`carb.crashreporter
+-breakpad`, unrelated to this task's own code changes — crashed before any
+of this script's own print statements executed, likely a transient
+instance/driver flakiness compounded by a concurrent `unattended-upgrade`
+process; recovered by simply retrying on the same instance), and 3
+completed runs (the height-corrected baseline, the gripper-force-boost
+test, and the raw-joint diagnostic — the latter two on the SAME
+re-used instance to save setup time). Every fresh instance also hit this
+project's own documented "apt picks a newer `libnvidia-gl` point release
+than the loaded kernel module" gap, recovered via the established `sudo
+reboot` + idempotent-rerun pattern each time. Comfortably under the $2.00
+cost cap (~$0.35-0.55 estimated at the on-demand `g2-standard-4`+`L4`
+approximation for the actual charged uptime).
+
+**Sources:** this task's own live runs —
+`scripts/ar4_pedestal_grasp_height_corrected_check.py` (3 versions: base
+height-corrected, +gripper-force-boost, +raw-joint diagnostic),
+`scripts/_cloud_ar4_pedestal_grasp_height_corrected_check.sh` (cloud
+dispatch payload); the synced logs/frames at
+`gs://rl-manipulation-hks-runs/ar4-pedestal-grasp-height-corrected-check/`
+and `logs/videos/ar4_pedestal_grasp_height_corrected_check/` (Pi-local,
+gitignored); `tasks/ar4/robot_cfg.py`'s gripper `ImplicitActuatorCfg`
+(the never-boosted 20N effort limit); `tasks/ar4/joint_tracking.py`'s
+`settle_to_joint_pose` (the arm-side PD-droop fix this task extended to
+the gripper by analogy); this article's own 2026-07-28
+"ar4-grasp-trivial-friction-check task" UPDATE immediately above (the
+height-at-top-not-center diagnosis this task's fix directly addresses) and
+"ar4-pedestal-ground-clearance-fix"/"ar4-cartesian-fingertip-correction"
+UPDATEs (the `GRASP_AT_HEIGHT` convention and physics-tracking-residual
+findings this task's correction builds on directly).

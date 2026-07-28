@@ -645,6 +645,22 @@ See `BACKLOG.md` for further-out candidates not yet on this list.
 
 ## Recently landed
 
+- **AR4 graspable-workspace-from-FK** (2026-07-27) — inverted the
+  multi-week AR4 IK-failure investigation: instead of fighting IK to
+  reach a vertical grasp pose at the cube's existing default position,
+  forward-sampled the arm's own 6-joint space via pure FK (no IK, no
+  physics, 8M+145-step sweep) to find where a genuinely graspable pose
+  actually exists. Result directly explains the whole prior investigation
+  — the cube's own current default positions sit in a real gap of the
+  graspable annulus. Recommended point `(-0.1127, 0.3255)` has excellent
+  joint margins (min 27.68°) — reachability is solved. Live confirmation
+  (direct joint-target control, no IK) did NOT achieve a grasp+lift
+  though: a NEW, root-caused discrepancy found instead — the gripper
+  collides with the cube even nominally OPEN, traced to the FK filter
+  never constraining gripper roll/heading (only tilt-from-vertical), a
+  concrete, fixable gap flagged for the next session.
+  `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s 2026-07-27
+  UPDATE.
 - **Franka IK dice-line pick-and-place demo** (2026-07-21) — classical
   IK-only pick/line-up/relocate of all 5 dice; 8/10 pick-and-place ops
   succeeded, d4 (this project's well-documented hardest grasp case)

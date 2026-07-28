@@ -3882,3 +3882,153 @@ lines 1263/1412); this article's own 2026-07-22 ("later, same day" and
 "later" UPDATEs) and 2026-07-24 (`ar4-axis-align-ik` UPDATE) sections for
 the previously-independently-found physics-confound evidence this task's
 Q4 answer relies on directly.
+
+## UPDATE 2026-07-27 (ar4-graspable-workspace-from-fk task): the inversion — compute the graspable workspace directly via forward FK, place the cube inside it. Reachability problem SOLVED (excellent joint margins, no IK). A NEW, different, real discrepancy found instead: the FK-computed pose collides with the cube even gripper-OPEN — root-caused to uncontrolled gripper roll/heading, not re-litigating the reachability question
+
+**The inversion, and why.** Every prior session in this file fought IK/DLS
+to reach a vertical grasp pose AT THE CUBE'S EXISTING DEFAULT POSITION
+(world `(0.0, 0.275, ...)`), repeatedly finding the same joint_3-vs-
+vertical-orientation reachability conflict there. This task inverted the
+approach entirely: sample the arm's own 6-joint configuration space
+directly via pure forward kinematics (`tasks/ar4/fk_verification.py`'s
+already-verified vendor-URDF joint table - zero solver risk, a sampled
+config either lands somewhere or it doesn't, no local minima possible) to
+find where a genuinely graspable pose (near-vertical approach, correct
+15mm-cube grasp height, comfortable margin on every joint) actually
+exists, then place the cube there instead of continuing to fight IK at an
+arbitrarily-chosen position.
+
+**Stage 1 (pure FK, Pi-local, no GPU/Isaac Sim, `scripts/ar4_graspable_workspace.py`,
+8M-sample Stage-A sweep + 145-step joint_1 Stage-B sweep, ~144,710 final
+graspable configs): reachability problem cleanly solved, and the result
+DIRECTLY explains this file's own multi-week IK-failure history.**
+Sampling joint_2-6 (joint_1 fixed at 0, exploiting that joint_1 is a pure
+rotation about a point ON the vertical axis - height/tilt/margins for
+joints 2-6 are invariant under it), filtering for tilt-from-vertical
+≤12°, height within 2mm of `GRASP_AT_HEIGHT=0.0105m` (the current
+15mm-cube convention), and ≥0.25rad (≥14.3°) margin on every joint, then
+sweeping joint_1 itself (recomputing the FULL 6-joint FK at each step,
+not an analytic shortcut) to map the complete graspable region: extent is
+a near-full annulus, radius 0.278-0.523m from the base, **with a real,
+visually obvious GAP in exactly the bearing/radius region where the
+cube's OWN CURRENT DEFAULT POSITIONS SIT** (both the old `(0.20, 0.28)`
+and the recentered `(0.0, 0.275)` land inside the gap, not the graspable
+annulus, in the generated scatter plot). This is the single most direct,
+visual confirmation this investigation has produced for why IK kept
+failing there: the position itself was never inside the comfortable
+envelope this filter defines, at any bearing. Chosen recommended point
+(closest-margin match within ±20° of the scene's own bearing=90°
+convention, so the fix stays a same-direction/different-radius change,
+not an unrelated new heading): **world `(-0.1127, 0.3255)`, radius
+0.3445m, bearing 109.1°** - height error +1.51mm, tilt 2.91° from
+vertical, joint margins (degrees) `joint_1=150.5 joint_2=27.68
+joint_3=27.79 joint_4=164.64 joint_5=98.90 joint_6=80.48` (minimum
+27.68°, nearly double the 14.3° filter threshold - a genuinely
+well-margined interior point, not an edge case). A companion PREGRASP
+hover config (same method, +5cm height, local perturbation search around
+the GRASP config) landed within 0.5mm of the same (x,y), tilt 2.89°, min
+margin 23.5°. Visualization:
+`/home/pi/projects/rl/outputs/ar4_graspable_workspace/graspable_workspace.png`
+(gitignored `outputs/`, Pi-local only). Batch-FK cross-checked against
+`fk_verification.py`'s own scalar `compute_link_pose_from_joint_values`
+on 30 random configs before trusting the large sweep: max position error
+`0.000e+00m`, max rotation-matrix error `9.3e-16` - exact agreement.
+
+**Stage 2 (live confirmation, cloud GPU): commanded the arm DIRECTLY to
+the two FK-computed joint configs (no IK anywhere) through the standard
+phased open/close/lift/hold/retreat sequence - reachability itself was
+never in question again (that's what Stage 1 already proved), this
+tested whether the computed pose is ALSO collision-clean in real physics.
+It is NOT, and the real data pins down why.** Real infra friction hit
+first (all fixed or worked around, logged for future dispatches): (a) an
+unpinned `libnvidia-gl-<major>-server` install broke a previously-working
+`nvidia-smi`/CUDA (apt only carries the newest point release, no older
+version to pin to, and a mid-script reboot can't be resumed under
+`scripts/run_on_cloud_gpu.sh`'s wrapper - fixed manually this session via
+a direct SSH-managed install+reboot+resume, worth automating properly
+later); (b) missing `--enable_cameras` (Isaac Sim refuses to spawn ANY
+camera without it - `scripts/ar4_graspable_workspace_confirm.py` now sets
+it, matching `grasp_demo_v2.py`'s own established pattern); (c) **a new,
+undiagnosed rendering-pipeline stall**, distinct from the already-known
+"first cold-container render can take 10+ minutes" gap
+(`docs/cloud/franka-cloud-shakedown.md`) - real GPU (58-64%) and CPU
+(180-320%) activity sustained for 15+ minutes with ZERO forward progress
+in either the log or the output video files' own mtimes, on the camera-
+enabled script specifically. Not root-caused this session (flagged as a
+follow-up); worked around by switching to a camera-free variant
+(`scripts/ar4_graspable_workspace_confirm_numeric.py`, same low-level
+direct-joint-target-driving pattern as `scripts/_verify_gripper_mirror_fix.py`)
+that ran fast and produced clean, unambiguous physics data.
+
+**The real finding: the gripper collides with the cube substantially
+BEFORE closing, even while nominally OPEN (~28mm aperture vs. the 15mm
+cube).** Phase-by-phase, direct joint-position-target control, no IK:
+HOME→PREGRASP converges cleanly (residual 0.079rad by the end of a
+150-step transition - slow, since `joint_6` swings ~33° between the two
+FK-found configs, but genuinely converging, zero contact force
+throughout). PREGRASP→GRASP (gripper still commanded OPEN) does NOT
+converge: by step 20 of 90, contact force is already 52-54N on BOTH
+jaws while the arm is still 11° short of its own target
+(`max_arm_track_err=0.1956rad`) - contact happens mid-descent, not after
+settling - and the residual PLATEAUS at 7.3° (`0.1279rad`) for the rest
+of the phase, never reaching GRASP_Q, while force stays pinned at
+35-61N. The cube itself never moves (`cube_z` exact `0.0075m`,
+unchanged) despite these large forces - consistent with the gripper
+jamming against the cube from an off-axis angle rather than pushing it.
+Commanding CLOSE on top of this already-jammed contact state (Phase 3)
+is what triggered the rendering-pipeline stall/hang above - plausibly a
+PhysX contact-solver struggling with a genuinely bad, already-penetrating
+configuration, though this specific causal link (jammed contact →
+solver hang) is inferred from timing, not independently isolated.
+
+**Root cause (diagnosed, not yet fixed): the FK sampling filter never
+constrained gripper ROLL (heading around the vertical approach axis) at
+all.** Filter (a) only checked "approach axis (link_6 local Z) within
+12° of world -Z" - a single degree of freedom (tilt from vertical), with
+zero constraint on the OTHER 4 rotational degrees of freedom's worth of
+in-plane heading the gripper's jaw-slide axis could have at that pose.
+`grasp_demo_v2.py`'s own canonical orientation
+(`_CANONICAL_X_AXIS_W`/`_CANONICAL_Y_AXIS_W`) picks this heading
+DELIBERATELY (explicitly chosen, and previously re-chosen once already in
+this file's own history, to avoid a `joint_6` hard-limit deadlock at ITS
+specific cube position) - this task's FK sweep let the heading fall out
+of whatever the sampled joint_4/5/6 combination happened to produce, with
+no check that the jaw-opening direction actually straddles the cube's
+own footprint cleanly rather than approaching it edge-on or catching the
+gripper body on one side. This is a genuine, fixable gap in the
+method, not a reachability problem repeating itself - a natural next
+step (not attempted this session, flagged for whoever resumes this) is
+to add a roll/heading constraint (or an explicit collision check against
+the cube's real bounding geometry, not just the pinch-point math) to the
+Stage 1 filter and re-sweep.
+
+**Honest verdict: the FK-forward-sampling method is a genuine, validated
+improvement on the reachability question (Stage 1's annulus-gap finding
+is real, well-evidenced, and directly explains this file's own
+multi-week history) - but the live confirmation did NOT achieve a
+grasp+lift.** Reachability and gripper-cube collision-clearance are two
+separate questions; this task answered the first cleanly and surfaced
+the second as a new, concrete, root-caused (if not yet fixed) problem,
+per this project's own "report the real discrepancy, don't force a
+positive" standard.
+
+**Cost:** cloud on-demand `g2-standard-4`+`nvidia-l4` (chosen per this
+task's own dispatch instruction to prefer `--on-demand` for a short
+confirmatory job), several short failed/superseded provisioning attempts
+plus one ~67-minute instance for the manual driver-fix + confirmation
+run; full teardown verified (`scripts/check_cloud_state.sh`, zero
+instances/disks/snapshots remaining). Total estimated cost well under
+$2.
+
+**Sources:** this task's own live runs - `scripts/ar4_graspable_workspace.py`
+(Stage 1 sweep + cross-check), `scripts/ar4_graspable_workspace_confirm.py`
+and `scripts/ar4_graspable_workspace_confirm_numeric.py` (Stage 2, the
+latter the one that actually completed through Phase 2 before the Phase-3
+stall), raw logs retained locally at
+`logs/ar4_graspable_workspace_confirm/{numeric_confirm_run,camera_run_partial_before_stall}.log`
+(gitignored `logs/`, Pi-local only, not committed);
+`scripts/_cloud_ar4_graspable_workspace_confirm.sh`
+(cloud dispatch payload, container+GCS-cache path per
+`docs/cloud/dispatch-checklist.md`); this article's own 2026-07-22/23/24
+UPDATEs above for the joint_3/reachability-envelope history this task's
+Stage 1 directly responds to.

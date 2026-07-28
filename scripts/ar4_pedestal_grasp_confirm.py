@@ -73,24 +73,39 @@ from tasks.ar4.joint_tracking import settle_to_joint_pose  # noqa: E402
 
 # ----------------------------------------------------------------------
 # 3 validation points - copied verbatim from
-# scripts/_ar4_pedestal_select_grasp_points.py's own printed JSON output
-# (this task). Do not re-derive.
+# scripts/_ar4_pedestal_select_grasp_points.py's own printed JSON output.
+#
+# REVISED 2026-07-28 (same-day ar4-pedestal-fingertip-height-fix
+# follow-up): the FIRST version of these points (committed earlier this
+# task) came from a BUGGED sweep that filtered the abstract
+# _EE_OFFSET-based pinch point's height against GRASP_AT_HEIGHT, not the
+# REAL fingertip height - live-confirmed to fail at all 3 original points
+# (sustained 30-60N contact force while nominally OPEN, at every point,
+# via this exact script) because the real fingertip lands ~15-16mm below
+# where the old filter thought it was, landing INSIDE the pedestal's own
+# solid volume. scripts/ar4_graspable_workspace.py's height filter was
+# corrected to target the real fingertip directly (see its own
+# GROUND_CLEARANCE_MIN_M-section comment for the full story); these 3
+# points are the re-derived, corrected replacements (real fingertip
+# clearance above the pedestal top: 9.81/9.81/10.50mm respectively - a
+# comfortable, verified-positive margin, unlike the old points which were
+# never checked against this quantity at all). Do not re-derive by hand.
 # ----------------------------------------------------------------------
 VALIDATION_POINTS = {
     "Q0_bearing95": {
-        "cube_xy": (-0.03268395855178342, 0.3736940930857331),
-        "grasp_q_deg": [-6.486502296738718, 55.70023063033951, 17.653652481102057, -20.108691036880195, 21.589804778653495, 35.46511508237428],
-        "pregrasp_q_deg": [-6.486502296738718, 45.81794492857074, 20.660026164077877, -17.35915293735889, 22.343296203133704, 28.24200378228704],
+        "cube_xy": (-0.03690307221845676, 0.3902115233016254),
+        "grasp_q_deg": [-6.486502296738718, 53.23822236377881, 14.982846754337578, -14.92769805402622, 21.951674171245376, 114.65851419966206],
+        "pregrasp_q_deg": [-6.486502296738718, 45.26345050158713, 13.541632691134666, -8.35706089858409, 34.462683836708806, 112.67242887258548],
     },
     "Q1_bearing108": {
-        "cube_xy": (-0.11574104570008845, 0.35681861876033505),
-        "grasp_q_deg": [-19.45950689021618, 55.70023063033951, 17.653652481102057, -20.108691036880195, 21.589804778653495, 35.46511508237428],
-        "pregrasp_q_deg": [-19.45950689021618, 45.85773669517647, 20.684872348477526, -15.720456929141802, 22.10412265564435, 38.91001080248476],
+        "cube_xy": (-0.12356049880846685, 0.3719673005252888),
+        "grasp_q_deg": [-19.45950689021618, 53.23822236377881, 14.982846754337578, -14.92769805402622, 21.951674171245376, 114.65851419966206],
+        "pregrasp_q_deg": [-19.45950689021618, 44.40811556086022, 15.481953442347919, -9.280799797359624, 28.688841368903837, 126.93076282947612],
     },
     "Q2_bearing80": {
-        "cube_xy": (0.06336711870675883, 0.37520332616782015),
-        "grasp_q_deg": [10.810837161231213, 55.72469437225485, 17.23085927375185, 19.09519541084618, 18.83806156989572, -18.83102464322388],
-        "pregrasp_q_deg": [10.810837161231213, 46.73117460993635, 17.930914264230953, 11.56407455024493, 26.947068307538117, -12.34071498788734],
+        "cube_xy": (0.05695223525355342, 0.3931739774682811),
+        "grasp_q_deg": [8.648669728984965, 53.613872356501105, 13.204438863134575, 5.288396455851214, 23.404666660546397, -115.23964540657674],
+        "pregrasp_q_deg": [8.648669728984965, 44.83718769224915, 13.335498537014379, 2.5021438396328812, 32.386382376666894, -97.13224456010194],
     },
 }
 

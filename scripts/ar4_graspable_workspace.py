@@ -214,34 +214,78 @@ ROLL_TOL_DEG = 12.0
 # (scripts/build_asset.py's _fix_jaw2_collision_mesh_asymmetry docstring:
 # jaw1 spans [-0.018475, +0.015825] along its own local axis, i.e. ~18.5mm
 # below its own link origin toward the object), this is conclusively a
-# GROUND-PLANE COLLISION by the gripper's real physical geometry - a
-# mechanism this sweep's original filter set never modeled at all (it only
-# ever checked the abstract _EE_OFFSET-based PINCH POINT's height, never
-# any real link's proximity to the ground). GROUND_CLEARANCE_MIN_M below
-# requires gripper_jaw1_link's own world-frame z (held at the physically-
-# correct OPEN position during approach, batch_fk_gripper_jaw1's own
-# _GRIPPER_OPEN_POS_M default) to stay above 0.030m (30mm) - chosen to
-# match the DIRECTLY-OBSERVED live-physics stall point (~26-31mm origin
-# height at the empirically-confirmed ~59.0-59.1deg wall, not merely the
-# theoretical ~18.5mm mesh-extent number, which is itself only a LOWER
-# bound on the true required clearance since it ignores PhysX contact-
-# generation margins and any tilt beyond the nominal value at the point of
-# contact) - applied in ADDITION to (not instead of) the existing
-# height/tilt/margin/roll filters. IMPORTANT ROBUSTNESS NOTE: the
-# conclusion below (empty workspace) does NOT depend sensitively on this
-# exact value - a sweep of this constant from 25mm down to 15mm (i.e. even
-# BELOW the theoretical mesh-extent number, a deliberately loose/permissive
-# choice) still finds ZERO survivors; only at 12mm and below does the
-# filter start passing any configs at all. Directly computing the
-# ACHIEVABLE gripper_jaw1_link ground-clearance ceiling across the full
-# height/tilt/margin-satisfying population (ignoring roll/joint_1, n=235
-# survivors out of a 2M-sample probe) gives max=14.93mm - i.e. even in the
-# best case found anywhere in this population, the real fingertip (mesh
-# extends ~18.475mm below the origin) would sit at 14.93-18.475=-3.55mm,
-# STILL BELOW GROUND. The workspace is empty at this GRASP_AT_HEIGHT
-# convention regardless of exactly which defensible clearance threshold is
-# used.
-GROUND_CLEARANCE_MIN_M = 0.030
+# GROUND-PLANE COLLISION by the gripper's real physical geometry.
+#
+# CORRECTED 2026-07-28 (ar4-pedestal-ground-clearance-fix task, same day
+# follow-up): the mechanism above is real, but the ORIGINAL fix in this
+# section (a standalone GROUND_CLEARANCE_MIN_M=0.030 filter on
+# gripper_jaw1_link's ORIGIN height above the world ground z=0, applied
+# ALONGSIDE an unchanged height filter that still matched the ABSTRACT
+# _EE_OFFSET-based pinch point to GRASP_AT_HEIGHT) was incomplete: it
+# happened to work when the cube sat AT ground level only because both
+# filters were implicitly anchored to the same z=0 reference. The very
+# next task (raising the cube onto a PEDESTAL_HEIGHT_M=0.040m platform,
+# tasks/ar4/objects_cfg.py) found the corrected-looking sweep still
+# produces a genuine collision - now against the PEDESTAL's own top
+# surface instead of the ground - live-confirmed via
+# scripts/ar4_pedestal_grasp_confirm.py (sustained 30-60N contact force
+# while the gripper was still nominally OPEN, at every one of 3
+# independently-chosen validation points). Direct FK measurement at that
+# failure's own GRASP_Q (Q0_bearing95) explains why: gripper_jaw1_link's
+# real origin sits only ~2mm above the ABSTRACT _EE_OFFSET pinch point at
+# this config, but the REAL fingertip is a further 18.475mm below THAT
+# origin - so the real fingertip lands ~15-16mm BELOW whatever height the
+# old filter matched the abstract pinch point to, a fixed geometric offset
+# of this specific comfortable-margin joint-configuration family that does
+# NOT shrink or disappear no matter how high the object is raised (raising
+# the cube by any amount H raises GRASP_AT_HEIGHT by the same H, and the
+# whole matching joint-configuration population shifts up by very nearly
+# the same H too - confirmed by an H=20/30/40/50/60/70mm probe, this task,
+# whose achievable jaw1-origin-clearance-above-GROUND ceiling rose by
+# ~10mm per 10mm of H, i.e. this ~15-16mm gap relative to GRASP_AT_HEIGHT
+# is a CONSTANT, not something a pedestal can outrun). The old
+# GROUND_CLEARANCE_MIN_M=0.030 filter (measured relative to the fixed
+# world ground z=0) simply became irrelevant once the cube - and the whole
+# matching joint population - moved up by 40mm: it was trivially satisfied
+# (observed jaw1-origin clearance ~54mm above ground, comfortably over the
+# 30mm bar) while the REAL local obstacle (the pedestal's own top surface,
+# now 40mm above ground, not 0) was never checked at all.
+#
+# REAL FIX: stop filtering the ABSTRACT _EE_OFFSET pinch point's height
+# against GRASP_AT_HEIGHT at all, and instead filter the REAL fingertip
+# height (gripper_jaw1_link's own world z, held OPEN, minus the known
+# _JAW1_MESH_LOWER_EXTENT_M mesh extent - see that constant below) against
+# GRASP_AT_HEIGHT directly - this is physically what must be true for a
+# real grasp (the actual fingertip, not a bookkeeping convention, needs to
+# reach the cube's own grasp height) and automatically keeps the fingertip
+# comfortably above whatever the real local floor is (ground OR pedestal
+# top), since GRASP_AT_HEIGHT is itself always defined as floor + 0.0105m
+# (this project's own established "3mm above cube center" convention) -
+# once the fingertip lands there within HEIGHT_TOL_M (2mm), it cannot be
+# below the floor by more than 2mm short of that 10.5mm design margin.
+# PEDESTAL_FINGERTIP_CLEARANCE_MIN_M below is a small, explicit, redundant
+# safety check on top of that (defense in depth, matching this project's
+# own established style of not relying solely on an implied guarantee) -
+# NOT the primary mechanism anymore, unlike the retired
+# GROUND_CLEARANCE_MIN_M above.
+_JAW1_MESH_LOWER_EXTENT_M = 0.018475
+"""Known jaw1 collision-mesh lower extent along its own local axis (below
+the gripper_jaw1_link joint origin, toward the object), from
+scripts/build_asset.py's `_fix_jaw2_collision_mesh_asymmetry` docstring
+(2026-07-24 finding: jaw1 spans [-0.018475, +0.015825] in its own local
+frame). Used to translate gripper_jaw1_link's own ORIGIN height (what FK
+directly computes) into the REAL fingertip height that actually contacts
+the world."""
+
+PEDESTAL_FINGERTIP_CLEARANCE_MIN_M = 0.005
+"""Required real-fingertip clearance above the local floor
+(PEDESTAL_HEIGHT_M, i.e. the pedestal's own top surface - or the world
+ground if PEDESTAL_HEIGHT_M were ever 0 again) - see this section's own
+2026-07-28 pedestal-task correction above for why this is now a small,
+redundant safety check rather than the primary filter (the primary
+guarantee comes from directly targeting the real fingertip height at
+GRASP_AT_HEIGHT, which is itself always >= floor + 0.0105m by this
+project's own established grasp-height convention)."""
 
 # World-frame base transform (tasks/ar4/robot_cfg.py's AR4_MK5_CFG.init_state:
 # rot=(0,0,0,1) wxyz = a 180-degree rotation about Z, pos defaults to origin
@@ -522,13 +566,21 @@ def _cross_check_gripper_jaw1(n_samples: int = 30, seed: int = 1) -> None:
 
 
 def _evaluate(joint_values: dict[str, np.ndarray]):
-    """Given batched joint values (all 6 joints), return a dict of derived
-    per-sample arrays: pinch_pos (N,3) in base frame, tilt_deg (N,),
-    margin_rad (N,6) (per-joint margin, columns in ARM_JOINT_NAMES order),
-    roll_offset_deg (N,) - the 2026-07-27 addition, see ROLL_TOL_DEG's own
-    docstring above for what this quantity means and why it's needed - and
-    ground_clearance_m (N,) - the 2026-07-28 addition, see
-    GROUND_CLEARANCE_MIN_M's own docstring above."""
+    """Given batched joint values (all 6 joints), return per-sample arrays:
+    pinch_pos (N,3) in base frame (the ABSTRACT _EE_OFFSET-based point -
+    kept only for tilt/roll/xy-placement purposes, NOT for height filtering
+    anymore, see fingertip_z_m below), tilt_deg (N,), margin_rad (N,6)
+    (per-joint margin, columns in ARM_JOINT_NAMES order), roll_offset_deg
+    (N,) - the 2026-07-27 addition, see ROLL_TOL_DEG's own docstring above
+    for what this quantity means and why it's needed - ground_clearance_m
+    (N,) - gripper_jaw1_link's own ORIGIN height (the 2026-07-28
+    ground-clearance-fix task's addition, kept as a diagnostic/reporting
+    quantity) - and fingertip_z_m (N,) - the REAL fingertip height (jaw1's
+    own origin minus _JAW1_MESH_LOWER_EXTENT_M), the 2026-07-28
+    ar4-pedestal-ground-clearance-fix task's correction: THIS is what
+    height filtering should target against GRASP_AT_HEIGHT (see this
+    module's own GROUND_CLEARANCE_MIN_M-section comment for why the
+    original abstract-pinch-point-based height filter was wrong)."""
     pos, rot = batch_fk_link6(joint_values)
     pinch_pos = pos + np.einsum("nij,j->ni", rot, _EE_OFFSET_LOCAL)
     approach_axis = np.einsum("nij,j->ni", rot, np.array([0.0, 0.0, 1.0]))
@@ -555,7 +607,14 @@ def _evaluate(joint_values: dict[str, np.ndarray]):
     # base_link frame z IS world z here (base_to_world only negates x/y).
     jaw1_pos = batch_fk_gripper_jaw1(joint_values)
     ground_clearance_m = jaw1_pos[:, 2]
-    return pinch_pos, tilt_deg, margins, roll_offset_deg, ground_clearance_m
+    # REAL fingertip height (2026-07-28 ar4-pedestal-ground-clearance-fix
+    # task) - jaw1's own origin minus its known mesh extent below that
+    # origin, an approximation valid to within the near-vertical tilt
+    # tolerance already enforced elsewhere (TILT_TOL_DEG<=12deg means the
+    # mesh's own local axis is within ~12deg of world Z, a <2% correction
+    # this module does not bother computing exactly).
+    fingertip_z_m = ground_clearance_m - _JAW1_MESH_LOWER_EXTENT_M
+    return pinch_pos, tilt_deg, margins, roll_offset_deg, ground_clearance_m, fingertip_z_m
 
 
 def run_sweep(n_stage_a: int, n_joint1_steps: int, seed: int = 0, chunk_size: int = 200_000):
@@ -592,19 +651,29 @@ def run_sweep(n_stage_a: int, n_joint1_steps: int, seed: int = 0, chunk_size: in
         # joint_1 value - roll is therefore evaluated correctly per-step in
         # Stage B below, alongside the full-FK recompute already happening
         # there for exactly this kind of joint_1-dependent quantity.
-        pinch_pos_a, tilt_deg_a, margins_a, _roll_offset_deg_a_unused, ground_clearance_a = _evaluate(joint_values_a)
-        height_err_a = pinch_pos_a[:, 2] - GRASP_AT_HEIGHT
+        pinch_pos_a, tilt_deg_a, margins_a, _roll_offset_deg_a_unused, ground_clearance_a, fingertip_z_a = _evaluate(joint_values_a)
+        # 2026-07-28 (ar4-pedestal-ground-clearance-fix task) - height_err is
+        # now measured against the REAL fingertip height (fingertip_z_a), NOT
+        # the abstract _EE_OFFSET pinch point (pinch_pos_a) - see this
+        # module's GROUND_CLEARANCE_MIN_M-section comment for why the old
+        # pinch-point-based height filter silently passed configs whose real
+        # fingertip lands ~15-16mm below the intended grasp height.
+        height_err_a = fingertip_z_a - GRASP_AT_HEIGHT
         margin_2to6_a = margins_a[:, 1:].min(axis=1)  # exclude joint_1's own column (always 0 here)
 
-        # ground_clearance_a is joint_1-invariant (a z-coordinate, unaffected
-        # by rotation about the vertical axis - same argument as
+        # ground_clearance_a/fingertip_z_a are joint_1-invariant (z-coordinates,
+        # unaffected by rotation about the vertical axis - same argument as
         # height/tilt/margin above), so it is safe to filter here in Stage A
         # too, unlike roll (see roll_offset_deg's own Stage-A comment above).
+        # PEDESTAL_FINGERTIP_CLEARANCE_MIN_M is now a small redundant safety
+        # check on the REAL fingertip (not the old GROUND_CLEARANCE_MIN_M,
+        # retired - see this module's own comment for why) against the
+        # actual local floor (PEDESTAL_HEIGHT_M).
         mask_a = (
             (np.abs(height_err_a) <= HEIGHT_TOL_M)
             & (tilt_deg_a <= TILT_TOL_DEG)
             & (margin_2to6_a >= MARGIN_MIN_RAD)
-            & (ground_clearance_a >= GROUND_CLEARANCE_MIN_M)
+            & (fingertip_z_a >= PEDESTAL_HEIGHT_M + PEDESTAL_FINGERTIP_CLEARANCE_MIN_M)
         )
         for name in survivors_2to6:
             survivors_2to6[name].append(joint_values_a[name][mask_a])
@@ -632,6 +701,7 @@ def run_sweep(n_stage_a: int, n_joint1_steps: int, seed: int = 0, chunk_size: in
 
     world_xy_chunks, world_z_chunks, tilt_chunks, height_err_chunks = [], [], [], []
     margins_chunks, margin_min_chunks, roll_offset_chunks, ground_clearance_chunks = [], [], [], []
+    fingertip_z_chunks = []
     joint_values_chunks = {name: [] for name in ARM_JOINT_NAMES}
 
     for start in range(0, m, steps_per_chunk):
@@ -642,8 +712,11 @@ def run_sweep(n_stage_a: int, n_joint1_steps: int, seed: int = 0, chunk_size: in
         }
         joint_values_b["joint_1"] = np.repeat(j1_chunk, s)
 
-        pinch_pos_b, tilt_deg_b, margins_b, roll_offset_deg_b, ground_clearance_b = _evaluate(joint_values_b)
-        height_err_b = pinch_pos_b[:, 2] - GRASP_AT_HEIGHT
+        pinch_pos_b, tilt_deg_b, margins_b, roll_offset_deg_b, ground_clearance_b, fingertip_z_b = _evaluate(joint_values_b)
+        # 2026-07-28 (ar4-pedestal-ground-clearance-fix task) - see Stage A's
+        # own matching comment: height filtering now targets the REAL
+        # fingertip, not the abstract pinch point.
+        height_err_b = fingertip_z_b - GRASP_AT_HEIGHT
         margin_all_b = margins_b.min(axis=1)
 
         mask_b = (
@@ -651,7 +724,7 @@ def run_sweep(n_stage_a: int, n_joint1_steps: int, seed: int = 0, chunk_size: in
             & (tilt_deg_b <= TILT_TOL_DEG)
             & (margin_all_b >= MARGIN_MIN_RAD)
             & (roll_offset_deg_b <= ROLL_TOL_DEG)
-            & (ground_clearance_b >= GROUND_CLEARANCE_MIN_M)
+            & (fingertip_z_b >= PEDESTAL_HEIGHT_M + PEDESTAL_FINGERTIP_CLEARANCE_MIN_M)
         )
         if mask_b.sum() == 0:
             continue
@@ -664,6 +737,7 @@ def run_sweep(n_stage_a: int, n_joint1_steps: int, seed: int = 0, chunk_size: in
         margin_min_chunks.append(margin_all_b[mask_b])
         roll_offset_chunks.append(roll_offset_deg_b[mask_b])
         ground_clearance_chunks.append(ground_clearance_b[mask_b])
+        fingertip_z_chunks.append(fingertip_z_b[mask_b])
         for name in ARM_JOINT_NAMES:
             joint_values_chunks[name].append(joint_values_b[name][mask_b])
 
@@ -680,6 +754,7 @@ def run_sweep(n_stage_a: int, n_joint1_steps: int, seed: int = 0, chunk_size: in
     margin_min_final = np.concatenate(margin_min_chunks)
     roll_offset_final = np.concatenate(roll_offset_chunks)
     ground_clearance_final = np.concatenate(ground_clearance_chunks)
+    fingertip_z_final = np.concatenate(fingertip_z_chunks)
     joint_values_final = {name: np.concatenate(joint_values_chunks[name]) for name in ARM_JOINT_NAMES}
 
     n_survivors_b = world_xy.shape[0]
@@ -697,6 +772,7 @@ def run_sweep(n_stage_a: int, n_joint1_steps: int, seed: int = 0, chunk_size: in
         "margin_min": margin_min_final,
         "roll_offset_deg": roll_offset_final,
         "ground_clearance_m": ground_clearance_final,
+        "fingertip_z_m": fingertip_z_final,
         "joint_values": joint_values_final,
     }
 
@@ -750,15 +826,17 @@ def summarize_and_plot(result, out_png: str):
         height_err = result["height_err"][idx]
         roll_offset = result["roll_offset_deg"][idx]
         ground_clearance = result["ground_clearance_m"][idx]
+        fingertip_z = result["fingertip_z_m"][idx]
         joints = {name: float(result["joint_values"][name][idx]) for name in ARM_JOINT_NAMES}
         xy = world_xy[idx]
         print(f"\n{label}: world (x, y) = ({xy[0]:.4f}, {xy[1]:.4f})  radius={radii[idx]:.4f}m  bearing={bearing_deg[idx]:.1f}deg")
-        print(f"  height error: {height_err * 1000:.3f} mm (target z={GRASP_AT_HEIGHT:.4f})")
+        print(f"  REAL fingertip height error: {height_err * 1000:.3f} mm (target z={GRASP_AT_HEIGHT:.4f}m, 2026-07-28 pedestal-fix: now measured on the real fingertip, not the abstract pinch point)")
         print(f"  tilt from vertical: {tilt:.2f} deg")
         print(f"  jaw-slide-axis roll/heading offset from world X/Y: {roll_offset:.2f} deg (tol={ROLL_TOL_DEG:.1f} deg)")
+        print(f"  gripper_jaw1_link origin (OPEN) height above ground: {ground_clearance * 1000:.2f} mm")
         print(
-            f"  gripper_jaw1_link ground clearance: {ground_clearance * 1000:.2f} mm "
-            f"(min={GROUND_CLEARANCE_MIN_M * 1000:.1f} mm, 2026-07-28 ground-collision fix)"
+            f"  REAL fingertip clearance above pedestal top: {(fingertip_z - PEDESTAL_HEIGHT_M) * 1000:.2f} mm "
+            f"(min={PEDESTAL_FINGERTIP_CLEARANCE_MIN_M * 1000:.1f} mm)"
         )
         for i, name in enumerate(ARM_JOINT_NAMES):
             lo_deg, hi_deg = JOINT_LIMITS_DEG[name]
@@ -767,7 +845,7 @@ def summarize_and_plot(result, out_png: str):
                 f"  {name}: q={q_deg:7.2f} deg (limits [{lo_deg:.1f}, {hi_deg:.1f}]), "
                 f"margin={math.degrees(margins[i]):.2f} deg"
             )
-        return joints, margins, roll_offset, ground_clearance
+        return joints, margins, roll_offset, ground_clearance, fingertip_z
 
     print("\n=== Graspable workspace summary ===")
     print(f"Total graspable configs found: {world_xy.shape[0]}")
@@ -776,10 +854,10 @@ def summarize_and_plot(result, out_png: str):
     print(f"Radius from base extent: [{radii.min():.4f}, {radii.max():.4f}] m")
     print(f"Bearing extent: [{bearing_deg.min():.1f}, {bearing_deg.max():.1f}] deg (near-full circle minus joint_1's own +/-170deg-limited gap)")
 
-    best_joints, best_margins, best_roll_offset, best_ground_clearance = _report_point(
+    best_joints, best_margins, best_roll_offset, best_ground_clearance, best_fingertip_z = _report_point(
         "GLOBAL best (max min-joint-margin, any azimuth)", best_idx
     )
-    rec_joints, rec_margins, rec_roll_offset, rec_ground_clearance = _report_point(
+    rec_joints, rec_margins, rec_roll_offset, rec_ground_clearance, rec_fingertip_z = _report_point(
         f"RECOMMENDED point (best margin within +/-{bearing_window_deg:.0f}deg of bearing=90deg, "
         "the scene's existing straight-ahead approach direction)",
         rec_idx,
@@ -803,10 +881,11 @@ def summarize_and_plot(result, out_png: str):
         ax.set_xlabel("world x (m)")
         ax.set_ylabel("world y (m)")
         ax.set_title(
-            f"AR4 graspable workspace at z={GRASP_AT_HEIGHT:.4f}m (15mm cube grasp height)\n"
+            f"AR4 graspable workspace at z={GRASP_AT_HEIGHT:.4f}m (15mm cube grasp height,\n"
+            f"cube on a {PEDESTAL_HEIGHT_M*1000:.0f}mm pedestal, 2026-07-28 pedestal fix)\n"
             f"vertical approach <= {TILT_TOL_DEG} deg, joint margin >= {MARGIN_MIN_RAD:.2f}rad, "
             f"jaw-heading offset <= {ROLL_TOL_DEG:.0f} deg (2026-07-27 roll constraint),\n"
-            f"gripper ground clearance >= {GROUND_CLEARANCE_MIN_M * 1000:.0f}mm (2026-07-28 ground-collision fix)"
+            f"REAL fingertip clearance above pedestal top >= {PEDESTAL_FINGERTIP_CLEARANCE_MIN_M * 1000:.0f}mm"
         )
         ax.legend(loc="upper right", fontsize=8)
         ax.set_aspect("equal")
@@ -823,37 +902,32 @@ def summarize_and_plot(result, out_png: str):
         "global_best_margins_deg": {name: math.degrees(best_margins[i]) for i, name in enumerate(ARM_JOINT_NAMES)},
         "global_best_roll_offset_deg": float(best_roll_offset),
         "global_best_ground_clearance_mm": float(best_ground_clearance) * 1000,
+        "global_best_fingertip_clearance_above_pedestal_mm": float(best_fingertip_z - PEDESTAL_HEIGHT_M) * 1000,
         "recommended_xy": tuple(rec_xy.tolist()),
         "recommended_joints_deg": {name: math.degrees(v) for name, v in rec_joints.items()},
         "recommended_margins_deg": {name: math.degrees(rec_margins[i]) for i, name in enumerate(ARM_JOINT_NAMES)},
         "recommended_roll_offset_deg": float(rec_roll_offset),
         "recommended_ground_clearance_mm": float(rec_ground_clearance) * 1000,
+        "recommended_fingertip_clearance_above_pedestal_mm": float(rec_fingertip_z - PEDESTAL_HEIGHT_M) * 1000,
         "recommended_local_cluster_centroid_xy": tuple(local_centroid.tolist()),
     }
 
 
-_JAW1_MESH_LOWER_EXTENT_M = 0.018475
-"""Known jaw1 collision-mesh lower extent along its own local axis (below
-the gripper_jaw1_link joint origin, toward the object), from
-scripts/build_asset.py's `_fix_jaw2_collision_mesh_asymmetry` docstring
-(2026-07-24 finding: jaw1 spans [-0.018475, +0.015825] in its own local
-frame). Used only by diagnose_empty_workspace below to translate an
-ORIGIN-height ceiling into a real-FINGERTIP-height ceiling."""
-
-
 def diagnose_empty_workspace(n_probe: int = 2_000_000, chunk_size: int = 200_000, seed: int = 0) -> None:
-    """Run when run_sweep finds zero survivors (2026-07-28 ground-clearance
-    fix): quantifies WHY, rather than leaving a bare "0 survivors" message.
-    Computes the population of configs satisfying height/tilt/margin ALONE
-    (joint_1=0, no ground-clearance or roll filter - the same Stage-A-style
-    sample this module already draws elsewhere) and reports the achievable
-    gripper_jaw1_link ground-clearance CEILING across that population,
-    translated into a real-fingertip-height ceiling via
-    _JAW1_MESH_LOWER_EXTENT_M. Also saves a histogram PNG (the meaningful
-    substitute for the usual scatter-plot visualization, which has nothing
-    to plot when the workspace itself is empty)."""
+    """Run when run_sweep finds zero survivors: quantifies WHY, rather than
+    leaving a bare "0 survivors" message. Computes the population of configs
+    satisfying REAL-fingertip-height/tilt/margin ALONE (joint_1=0, no
+    ground-clearance or roll filter - the same Stage-A-style sample this
+    module already draws elsewhere) and reports the achievable real
+    fingertip height ceiling across that population, relative to the
+    pedestal top (2026-07-28 ar4-pedestal-ground-clearance-fix task: this
+    now filters/reports on fingertip_z_m directly, not the abstract pinch
+    point - see this module's GROUND_CLEARANCE_MIN_M-section comment).
+    Also saves a histogram PNG (the meaningful substitute for the usual
+    scatter-plot visualization, which has nothing to plot when the
+    workspace itself is empty)."""
     rng = np.random.default_rng(seed)
-    gc_chunks = []
+    fz_chunks = []
     n_survivors = 0
     for start in range(0, n_probe, chunk_size):
         n = min(chunk_size, n_probe - start)
@@ -861,40 +935,40 @@ def diagnose_empty_workspace(n_probe: int = 2_000_000, chunk_size: int = 200_000
         for name in ["joint_2", "joint_3", "joint_4", "joint_5", "joint_6"]:
             lo, hi = JOINT_LIMITS_RAD[name]
             jv[name] = rng.uniform(lo, hi, size=n)
-        pinch_pos, tilt_deg, margins, _roll_unused, ground_clearance = _evaluate(jv)
-        height_err = pinch_pos[:, 2] - GRASP_AT_HEIGHT
+        pinch_pos, tilt_deg, margins, _roll_unused, ground_clearance, fingertip_z = _evaluate(jv)
+        height_err = fingertip_z - GRASP_AT_HEIGHT
         margin_2to6 = margins[:, 1:].min(axis=1)
         mask = (np.abs(height_err) <= HEIGHT_TOL_M) & (tilt_deg <= TILT_TOL_DEG) & (margin_2to6 >= MARGIN_MIN_RAD)
         n_survivors += int(mask.sum())
         if mask.sum() > 0:
-            gc_chunks.append(ground_clearance[mask] * 1000.0)
+            fz_chunks.append(fingertip_z[mask] * 1000.0)
 
     print("\n" + "=" * 78)
-    print("DIAGNOSIS: why is the ground-clearance-corrected workspace empty?")
+    print("DIAGNOSIS: why is the (real-fingertip-corrected) workspace empty?")
     print("=" * 78)
     print(
-        f"Configs satisfying height (+/-{HEIGHT_TOL_M * 1000:.0f}mm of GRASP_AT_HEIGHT={GRASP_AT_HEIGHT * 1000:.1f}mm), "
+        f"Configs satisfying REAL fingertip height (+/-{HEIGHT_TOL_M * 1000:.0f}mm of GRASP_AT_HEIGHT={GRASP_AT_HEIGHT * 1000:.1f}mm), "
         f"tilt (<={TILT_TOL_DEG:.0f}deg), and joint-2..6 margin (>={MARGIN_MIN_RAD:.2f}rad) ALONE "
-        f"(no ground-clearance or roll filter yet): {n_survivors} / {n_probe} samples"
+        f"(no clearance-vs-floor or roll filter yet): {n_survivors} / {n_probe} samples"
     )
-    if not gc_chunks:
-        print("No configs satisfy even height/tilt/margin alone - workspace is empty for a reason upstream of ground clearance.")
+    if not fz_chunks:
+        print("No configs satisfy even height/tilt/margin alone - workspace is empty for a reason upstream of floor clearance.")
         return
-    gc = np.concatenate(gc_chunks)
-    fingertip_ceiling_mm = gc.max() - _JAW1_MESH_LOWER_EXTENT_M * 1000.0
-    print(f"gripper_jaw1_link origin ground-clearance among these: min={gc.min():.2f}mm max={gc.max():.2f}mm mean={gc.mean():.2f}mm median={np.median(gc):.2f}mm")
+    fz = np.concatenate(fz_chunks)
+    fingertip_ceiling_above_pedestal_mm = fz.max() - PEDESTAL_HEIGHT_M * 1000.0
+    print(f"REAL fingertip height among these (world z, mm): min={fz.min():.2f} max={fz.max():.2f} mean={fz.mean():.2f} median={np.median(fz):.2f}")
     print(
-        f"Real fingertip height ceiling (best case anywhere in this population) = "
-        f"{gc.max():.2f}mm - {_JAW1_MESH_LOWER_EXTENT_M * 1000:.2f}mm (known jaw1 mesh extent) = {fingertip_ceiling_mm:.2f}mm"
+        f"Real fingertip clearance ABOVE PEDESTAL TOP ceiling (best case anywhere in this population) = "
+        f"{fz.max():.2f}mm - {PEDESTAL_HEIGHT_M * 1000:.2f}mm (pedestal height) = {fingertip_ceiling_above_pedestal_mm:.2f}mm"
     )
-    if fingertip_ceiling_mm < 0:
+    if fingertip_ceiling_above_pedestal_mm < 0:
         print(
             f"-> NEGATIVE: even in the BEST case found anywhere in this population, the real gripper fingertip "
-            f"would sit {abs(fingertip_ceiling_mm):.2f}mm BELOW the z=0 ground plane. This is not a filter-tuning "
-            "artifact - the workspace is genuinely empty at this GRASP_AT_HEIGHT for a near-vertical approach."
+            f"would sit {abs(fingertip_ceiling_above_pedestal_mm):.2f}mm BELOW the pedestal's own top surface. This is not a "
+            "filter-tuning artifact - the workspace is genuinely empty at this GRASP_AT_HEIGHT for a near-vertical approach."
         )
     else:
-        print(f"-> POSITIVE: {fingertip_ceiling_mm:.2f}mm of real fingertip clearance is achievable somewhere - re-check GROUND_CLEARANCE_MIN_M's own value against this ceiling.")
+        print(f"-> POSITIVE: {fingertip_ceiling_above_pedestal_mm:.2f}mm of real fingertip clearance above the pedestal top is achievable somewhere.")
 
     try:
         import matplotlib

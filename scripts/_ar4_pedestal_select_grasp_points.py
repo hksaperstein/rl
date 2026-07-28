@@ -58,8 +58,12 @@ def search_pregrasp(grasp_q_deg, seed, n_total=2_000_000, chunk=200_000, sigma_d
             samples = seed_2to6[i] + rng.normal(0.0, sigma_rad, size=n)
             joint_values[name] = np.clip(samples, lo, hi)
 
-        pinch_pos_c, tilt_deg_c, margins_c, roll_offset_deg_c, ground_clearance_c = _evaluate(joint_values)
-        height_err_c = pinch_pos_c[:, 2] - HOVER_HEIGHT
+        pinch_pos_c, tilt_deg_c, margins_c, roll_offset_deg_c, ground_clearance_c, fingertip_z_c = _evaluate(joint_values)
+        # 2026-07-28 (same-day pedestal-fix correction): height now measured
+        # on the REAL fingertip (fingertip_z_c), not the abstract pinch
+        # point - see ar4_graspable_workspace.py's own GROUND_CLEARANCE_MIN_M-
+        # section comment for the full story of why this matters.
+        height_err_c = fingertip_z_c - HOVER_HEIGHT
         margin_min_c = margins_c.min(axis=1)
         mask_c = (
             (np.abs(height_err_c) <= HEIGHT_TOL_M)
@@ -90,7 +94,7 @@ def search_pregrasp(grasp_q_deg, seed, n_total=2_000_000, chunk=200_000, sigma_d
     margin_min = margins.min(axis=1)
 
     grasp_single = {name: np.array([v]) for name, v in zip(ARM_JOINT_NAMES, grasp_q_rad)}
-    grasp_pinch_pos, _, _, _, _ = _evaluate(grasp_single)
+    grasp_pinch_pos, _, _, _, _, _ = _evaluate(grasp_single)
     world_xy_grasp = base_to_world(grasp_pinch_pos)[0, :2]
 
     world_xy = base_to_world(pinch_pos)[:, :2]
@@ -127,6 +131,7 @@ def main():
     world_xy = result["world_xy"]
     margin_min = result["margin_min"]
     ground_clearance_m = result["ground_clearance_m"]
+    fingertip_z_m = result["fingertip_z_m"]
     roll_offset_deg = result["roll_offset_deg"]
     tilt_deg = result["tilt_deg"]
     joint_values = result["joint_values"]
@@ -157,7 +162,8 @@ def main():
         print(f"\n=== {label} (target bearing={target_bearing}deg, window used=+/-{window:.0f}deg) ===")
         print(f"  world(x,y) = ({world_xy[best_in_pool, 0]:.4f}, {world_xy[best_in_pool, 1]:.4f})  bearing={bearing_deg[best_in_pool]:.1f}deg")
         print(f"  tilt={tilt_deg[best_in_pool]:.2f}deg roll_offset={roll_offset_deg[best_in_pool]:.2f}deg min_margin={math.degrees(margin_min[best_in_pool]):.2f}deg")
-        print(f"  ground_clearance={ground_clearance_m[best_in_pool]*1000:.2f}mm")
+        print(f"  jaw1_origin_ground_clearance={ground_clearance_m[best_in_pool]*1000:.2f}mm  "
+              f"REAL_fingertip_clearance_above_pedestal_top={(fingertip_z_m[best_in_pool] - PEDESTAL_HEIGHT_M)*1000:.2f}mm")
         print(f"  GRASP_Q_DEG = {grasp_q_deg}")
         pregrasp_q_deg = search_pregrasp(grasp_q_deg, seed=hash(label) % (2**31), label=label)
         points[label] = {

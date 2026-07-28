@@ -4,9 +4,38 @@ Four objects sized to fit the gripper's ~28mm max aperture, laid out two per
 side of the arm base. Fixed initial poses only - no reset/randomization logic
 (that belongs to the follow-on task/RL sub-project).
 
-Grip friction is set once, scene-wide, via Ar4EnvCfg's sim.physics_material
-(UsdFileCfg has no per-spawn physics_material field like the procedural
-shape/mesh spawners do, so a shared scene default is used instead).
+Grip friction, for objects that don't set their own `physics_material`
+(RECT_PRISM_CFG/SPHERE_CFG/WEDGE_CFG below), is inherited from Ar4EnvCfg's
+scene-wide `sim.physics_material` default (`static_friction=1.0,
+dynamic_friction=1.0` in every `tasks/ar4/*_env_cfg.py`'s own
+`__post_init__` - confirmed via Isaac Lab's own
+`SimulationCfg.physics_material` docstring: "the physics engine defaults to
+this material for all rigid body prims that do not have any physics
+material specified on them"; `UsdFileCfg` - used by WEDGE_CFG - has no
+per-spawn `physics_material` field, so a shared scene default was the only
+option for it).
+
+CUBE_CFG (2026-07-28, ar4-grasp-trivial-friction-check task, direct user
+decision) now sets its OWN explicit `physics_material` instead of silently
+inheriting the scene default - not because the scene default was found to
+be wrong (it was independently confirmed correct: `mu=1.0` scene-wide,
+applying automatically to both this cube and the gripper's own jaw links
+since neither had a per-body override, `friction_combine_mode="average"`
+by Isaac Lab's own `RigidBodyMaterialCfg` default, so no `min`-combine
+capping risk either - and 1.0 was already HIGHER than Franka's own
+dice-grasp setup, which sets no override at all and runs on Isaac Lab's
+library default of 0.5/0.5 and grips successfully), but per direct user
+instruction to make a real graspable-material friction value an explicit,
+visible property of the object itself rather than an implicit scene-wide
+side effect. Value chosen: static=0.8/dynamic=0.7, the user's own specified
+"wood/plastic/resin" realistic range (0.7-0.9 static / 0.6-0.8 dynamic) -
+deliberately LOWER than the pre-existing 1.0/1.0 scene default despite that
+default already being sufficient, precisely so this cube's own friction is
+governed by its own explicit, physically-labeled material rather than by
+happening to match whatever the scene-wide default is. Combined against
+the gripper's own unchanged 1.0/1.0 scene-default material (average
+combine mode: effective ~0.9 static / 0.85 dynamic) this remains solidly
+in the graspable range.
 
 Import this module only after an Isaac Sim/Isaac Lab AppLauncher has been
 created.
@@ -24,6 +53,20 @@ _WEDGE_USD_PATH = os.path.join(_RL_ROOT, "assets", "shapes", "wedge.usd")
 _MASS = sim_utils.MassPropertiesCfg(mass=0.01)
 _RIGID_PROPS = sim_utils.RigidBodyPropertiesCfg(disable_gravity=False)
 _COLLISION_PROPS = sim_utils.CollisionPropertiesCfg(collision_enabled=True)
+
+# Explicit, realistic wood/plastic/resin-range graspable-object friction
+# (2026-07-28, ar4-grasp-trivial-friction-check task, direct user decision -
+# see CUBE_CFG's own docstring above for the full rationale/derivation).
+# friction_combine_mode="average" is Isaac Lab's own RigidBodyMaterialCfg
+# default, set explicitly here (not left implicit) so this is not
+# accidentally re-defaulted to "min" later, which would let a low-friction
+# material on either side of a contact cap the effective friction.
+CUBE_PHYSICS_MATERIAL = sim_utils.RigidBodyMaterialCfg(
+    static_friction=0.8,
+    dynamic_friction=0.7,
+    friction_combine_mode="average",
+    restitution_combine_mode="average",
+)
 
 
 def _check_wedge_usd_exists() -> str:
@@ -59,6 +102,7 @@ CUBE_CFG = RigidObjectCfg(
         mass_props=_MASS,
         collision_props=_COLLISION_PROPS,
         visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.8, 0.1, 0.1)),
+        physics_material=CUBE_PHYSICS_MATERIAL,
     ),
 )
 

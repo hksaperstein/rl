@@ -645,6 +645,29 @@ See `BACKLOG.md` for further-out candidates not yet on this list.
 
 ## Recently landed
 
+- **AR4 joint-tracking diagnostic — physics-vs-kinematics confound
+  CONFIRMED and quantified** (2026-07-27) — direct commanded-vs-achieved
+  measurement, cube parked 3m away (nothing obstructing), testing whether
+  the roll-constraint task's live "arm plateaus short, gripper collides
+  while OPEN" result was a real joint-tracking failure rather than pure
+  kinematics being wrong. **Default arm actuator gains (shipped
+  `stiffness=40, damping=4`) catastrophically fail**: max per-joint error
+  96° (`joint_5`), arm settles in a qualitatively different pose under
+  gravity, not a minor droop. **The boosted gains already used by every
+  confirm script in this investigation (`stiffness=4000, damping=200`) are
+  much better but NOT clean**: a real, genuinely-settled 3.2°/~20mm
+  residual remains with nothing in the way — larger than the 15mm cube
+  itself. This reopens the "jaw mesh geometry is the sole remaining
+  culprit" conclusion from the roll-constraint task: a real, now-quantified
+  actuator-tracking gap is large enough on its own to plausibly explain
+  part of that ~45-56N open-gripper collision, independent of jaw mesh.
+  Cross-validated methodology (FK-recompute of achieved joint angles
+  matches live physics to 0.00024mm) and a real infra finding (the known
+  Isaac-Sim-teardown-hang recurred with zero cube contact anywhere in the
+  run, weakening "jammed contact" as its sole cause). Next steps (neither
+  tried yet): push gains higher still, or add gravity-compensation
+  feedforward. `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s
+  2026-07-27 (later, ar4-joint-tracking-diagnostic task) UPDATE.
 - **AR4 graspable-workspace-from-FK** (2026-07-27) — inverted the
   multi-week AR4 IK-failure investigation: instead of fighting IK to
   reach a vertical grasp pose at the cube's existing default position,

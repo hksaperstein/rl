@@ -4207,3 +4207,159 @@ docstring (2026-07-24 finding, cross-referenced for the collision-geometry
 hypothesis); `CLAUDE.md`'s "Platform pivot" section (the jaw
 collision-geometry defect already flagged there as a candidate AR4 root
 cause prior to this task).
+
+## UPDATE 2026-07-27 (later, ar4-joint-tracking-diagnostic task): the physics-vs-pure-kinematics confound this whole file has fought since the MoveIt/DLS session is CONFIRMED REAL, and quantified for the first time — default arm actuator gains catastrophically fail to track (96° error), and even the "already-fixed" boosted gains used by every confirm script in this investigation leave a real, non-negligible ~3.2°/~20mm residual with NOTHING obstructing the arm
+
+**The untested assumption this task closes**: every hypothesis tested since
+the 2026-07-27 "ar4-graspable-workspace-from-fk"/"ar4-graspable-roll-
+constraint" tasks (reachability, roll/heading) implicitly assumed the
+physics-simulated arm actually *reaches* the FK-computed joint config it's
+commanded to — pure kinematics only proves a config exists and is
+reachable in principle, not that a PD-actuated arm under gravity actually
+converges to it. This task tested that assumption directly: command the
+arm to P0's exact FK-computed GRASP_Q
+(`scripts/ar4_graspable_workspace_confirm_numeric.py`'s own
+`VALIDATION_POINTS["P0_recommended_bearing94"]`, reused verbatim), gripper
+held OPEN, **cube parked 3m away (world `(3.0, 3.0)`) so genuinely nothing
+could obstruct the arm** — isolating pure joint-tracking capability from
+any cube-contact-resistance confound — then read back
+`robot.data.joint_pos` after a long dedicated 200-step EXTRA-SETTLE phase
+(confirmed genuinely flat/converged, not just cut off early: per-joint
+error deltas were ≤0.0001°/print-interval by the end in both regimes).
+Two actuator-gain regimes tested in one Isaac Sim launch (runtime
+`robot.write_joint_stiffness_to_sim`/`write_joint_damping_to_sim`, same API
+already used by `scripts/classical_grasp_contact_check.py`/
+`scripts/interactive_joint_demo.py` — no need to relaunch or pay
+provisioning cost twice).
+
+**Result 1 (DEFAULT gains, `tasks/ar4/robot_cfg.py`'s currently-shipped
+`stiffness=40, damping=4`): categorical, severe tracking failure, not a
+minor droop.** Max per-joint error **96.14°** (`joint_5`), with large
+errors on 4 of 6 joints (`joint_1=-3.21° joint_2=+11.92° joint_3=-20.55°
+joint_4=+39.37° joint_5=+96.14° joint_6=-4.63°`) — the arm doesn't
+approximately reach the commanded pose, it settles somewhere qualitatively
+different under gravity. Achieved `link_6`/`gripper_base_link` world
+position vs. FK-predicted: **44.404mm** discrepancy; achieved pinch point
+(link_6 + the established `_EE_OFFSET=(0,0,0.036)`) vs. FK-predicted:
+**58.279mm** — nearly 4x the 15mm cube's own size. This confirms and
+quantifies, for the first time at this specific pose, the 2026-07-22
+"later, same day" UPDATE's flag that the shipped arm actuator gains are
+"too weak to hold the arm's own weight statically" — previously observed
+as generic droop/a 1.42rad error on a different move, never measured this
+precisely before.
+
+**Result 2 (BOOSTED gains, `stiffness=4000, damping=200` — the test-local
+override already used by literally every confirm/diagnostic script in this
+entire investigation, including the roll-constraint task's own live
+confirmation): dramatically better, but NOT clean.** Max per-joint error
+**3.22°** (`joint_2`), genuinely settled (flat across the full 200-step
+extra-settle window). Achieved `link_6`/`gripper_base_link` vs.
+FK-predicted (validated methodology, see below): **18.88mm**; achieved
+pinch point vs. FK-predicted: **19.65mm** — smaller than the DEFAULT case
+by ~3x, but still *larger than the 15mm cube itself*, and on the same
+order of magnitude as this file's own long-fought "9-10mm IK residual."
+**This is the first time the boosted-gain override — treated as a
+sufficient fix ever since 2026-07-22 based on a single 0.026rad/1.5°
+number measured at a *different* joint move — has been checked for
+genuine sub-degree/sub-mm cleanliness at a specific real grasp
+configuration, and it is not clean here.** Mechanistically this is
+expected, not mysterious: `ImplicitActuatorCfg`'s stiffness/damping model
+is a proportional+derivative controller with no integral/gravity-
+compensation term, so *some* nonzero steady-state position error under a
+static gravity load is inherent to finite-gain PD control — boosting gains
+shrinks it, never eliminates it, and evidently 4000/200 isn't enough to
+shrink it below the cube's own size at this pose.
+
+**Methodology validation (not just asserted, cross-checked against the
+live sim before being trusted): pure FK-recompute of the ACHIEVED joint
+angles reproduces the LIVE physics-measured `link_6` world position to
+within 0.00024mm** (DEFAULT regime: FK(achieved_q) = `(-0.064255,
+0.361498, 0.035458)` vs. live-measured `(-0.064255, 0.361498,
+0.035458)`). This is a strong, independent confirmation that
+`tasks/ar4/fk_verification.py`'s vendor-URDF FK chain has zero discrepancy
+against the actual simulated kinematic chain — **100% of the achieved-vs-
+commanded discrepancy in both regimes is explained by joint-angle tracking
+error alone, not by any additional asset/frame-offset defect** (also
+explains why `link_6` and `gripper_base_link` discrepancies are always
+numerically identical: `ee_joint`/`gripper_base_joint` are zero-
+translation fixed joints, so `gripper_base_link` coincides exactly with
+`link_6`'s own origin in this asset — the real jaw geometry only appears
+further out via `_EE_OFFSET`). This same validated FK-recompute method was
+then used (clearly flagged as a computed proxy, not a second live
+measurement) to fill in BOOSTED's achieved-pose comparison after an
+infra-hang truncated the live run before it printed that block (see
+below) — trustworthy given the 0.00024mm cross-check, not a weaker
+substitute.
+
+**Verdict on the task's own central question: BOTH things are true at
+once, not an either/or.** (1) The shipped default arm actuator gains are
+categorically unfit for holding any real grasp pose under gravity — a
+real, severe, previously-unquantified bug, though not the live blocker
+today since every actual grasp confirm script already overrides it. (2)
+Tracking is NOT "fine" even with the boosted override that's been treated
+as sufficient throughout this investigation — a real ~3.2°/~20mm residual
+persists with **nothing obstructing the arm**, on the same order as the
+cube itself. Comparing to the roll-constraint task's own cube-*present*
+numbers (11° short mid-descent, plateauing at 7.3°/0.1279rad, 35-61N
+force): the gap between this task's no-cube 3.2° baseline and that
+session's cube-present 7.3° plateau (~4° extra) is consistent with real
+cube-contact resistance adding to an already-nonzero baseline tracking
+error, rather than the plateau being 100% contact-caused or 100%
+actuator-caused. **This means the jaw-collision-mesh-geometry hypothesis
+flagged as "next concrete hypothesis" in the roll-constraint UPDATE above
+is not the only remaining candidate** — a genuine, now-quantified ~20mm
+actuator-tracking gap, present even with the cube absent, is large enough
+on its own to plausibly explain a meaningful fraction of the "FK says
+this should be collision-free, but it collides at 45-56N" mystery, prior
+to any consideration of jaw mesh at all. The two are not mutually
+exclusive and both may be contributing; this task does not adjudicate
+between them further.
+
+**Real infra finding, same known failure mode as before, differently
+triggered this time**: the live run hung in exactly the documented
+Isaac-Sim-teardown-hang signature (`CLAUDE.md`/`START_HERE.md`'s "known
+gap" note) — process alive, CPU pinned ~110%, GPU 0% utilization, log
+stale for 33+ minutes — but this time with **no cube contact anywhere in
+the run** (cube parked 3m away throughout), which rules out "jammed PhysX
+contact solve" (the leading theory for the two prior stalls in this file,
+both of which happened mid a real jammed-contact state) as a complete
+explanation for this failure mode. The hang landed after the BOOSTED
+regime's `Achieved arm q` print line but before its full FINAL RESULT
+block finished printing — most likely Python's own block-buffered stdout
+(non-TTY, piped through `tee`) delaying the visible symptom, with the
+actual hang occurring somewhere in Isaac Sim's own background/teardown
+machinery shortly after. Recovered via the established safe pattern
+(confirmed via a separate `gcloud compute ssh` — not the blocking
+dispatch's own SSH tail — that GPU was idle and CPU was spinning with zero
+log progress before killing): `sudo kill -TERM` on the stuck remote PID:
+the container exited cleanly (exit 0), the wrapper's own completion
+marker fired normally, and `scripts/check_cloud_state.sh` confirmed a full
+teardown (zero instances/disks/snapshots) afterward.
+
+**Next concrete step, flagged for whoever picks this up**: neither
+boosting gains further (a genuine, cheap, untried experiment — is
+`stiffness=8000` or higher enough to shrink the ~20mm residual below, say,
+2-3mm?) nor jaw-mesh inspection has been tried yet as a direct fix; both
+remain open. Also worth a one-time cheap check: does adding a static
+gravity-compensation feedforward term (rather than only raising gains)
+close the residual more cheaply than brute-force stiffness increases,
+given the PD-only-controller mechanism identified above.
+
+**Cost:** cloud on-demand `g2-standard-4`+`nvidia-l4`, ~41 minutes total
+provisioning-to-teardown (02:51-03:32 UTC) at the established ~$0.722/hr
+on-demand rate ≈ **~$0.49 total**, well under the task's $1.50 cap. Full
+teardown verified via `scripts/check_cloud_state.sh` (zero instances/
+disks/snapshots remaining).
+
+**Sources:** this task's own live run — `scripts/ar4_joint_tracking_diagnostic.py`
+(new script, direct joint-position-target driving, no IK, no camera, no
+cube obstruction, dual-gain-regime measurement in one launch),
+`scripts/_cloud_ar4_joint_tracking_diagnostic.sh` (cloud dispatch payload);
+local (Pi-side, no Isaac Sim needed — `tasks/ar4/fk_verification.py` is
+pure numpy) post-hoc FK cross-checks used to validate the achieved-vs-
+predicted methodology and compute the BOOSTED regime's proxy comparison;
+this article's own 2026-07-22 "later, same day" UPDATE (the original,
+less-precise actuator-gain-weakness finding this task re-measures and
+quantifies) and 2026-07-27 "ar4-graspable-roll-constraint task" UPDATE
+(the cube-present plateau numbers this task's no-cube baseline is compared
+against).

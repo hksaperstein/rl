@@ -670,10 +670,53 @@ Roughly in the order they'd likely be picked up:
    the identical "contact collapses to exactly 0N the instant LIFT-CLOSE
    begins" failure signature untouched.
 
+   **UPDATE (2026-07-28, later still, ar4-grasp-trivial-friction-check
+   task): direct visual inspection (see "Recently landed" above) gives a
+   more visually direct mechanism than roll/heading alone — the jaws are
+   landing at the cube's TOP EDGE, not its side faces, at all 3
+   previously-tested pedestal points.** Not a contradiction of the
+   roll/heading evidence (an edge-only, non-antipodal contact is entirely
+   consistent with everything found so far) but a sharper, now-visually-
+   confirmed candidate for the FIRST thing to fix: lower `GRASP_AT_HEIGHT`
+   (currently pedestal-top + 0.0105m, an unchanged carryover from the
+   pre-pedestal ground-level convention) so the real fingertip — already
+   known to sit ~15-18mm below the abstract pinch point the convention was
+   originally tuned against — lands at the cube's actual vertical center
+   instead of 0.2mm from its top face. This is the concrete next step,
+   flagged rather than applied (outside the trivial-check task's own
+   bounded scope) — cheaper and more directly evidenced than jumping
+   straight to a `ROLL_TOL_DEG`/orientation-search redesign.
+
 See `BACKLOG.md` for further-out candidates not yet on this list.
 
 ## Recently landed
 
+- **AR4 grasp-trivial-check: friction DEFINITIVELY ruled out (code +
+  live empirical retest with realistic friction applied); direct visual
+  inspection instead confirms the real cause is grasp HEIGHT — jaws close
+  onto the cube's TOP EDGE, not its vertical middle** (2026-07-28, direct
+  user instruction to stop building diagnostic machinery and check the
+  trivial causes by direct observation). Cube friction was never near-zero
+  (scene-wide `mu=1.0`, already higher than Franka's own working default
+  of 0.5) — confirmed by code inspection AND by making it an explicit,
+  realistic wood/plastic/resin material (`static=0.8/dynamic=0.7`,
+  `tasks/ar4/objects_cfg.py`'s `CUBE_PHYSICS_MATERIAL`, a real committed
+  fix per direct user decision) and re-testing live: **the grasp still
+  fails identically** (0.00mm height gain at every phase, contact collapses
+  to exactly 0.000N the instant LIFT begins). Close-up video/frames
+  (`outputs/ar4_pedestal_grasp_trivial_check/`, camera repositioned live
+  from the gripper/cube's own post-approach position) directly show the
+  jaws descending onto the cube's upper portion with much of the cube
+  visible below their reach, `jaw_separation` frozen at ~28mm from OPEN
+  through CLOSE (no real closing motion), and — the single clearest frame
+  in this whole investigation — the gripper closed on empty air while the
+  cube sits completely undisturbed on the pedestal once the arm retreats.
+  Height fix itself (lowering `GRASP_AT_HEIGHT` so the real fingertip lands
+  at the cube's vertical center instead of its top face) is flagged as the
+  concrete next step, not applied here (outside this task's own bounded
+  "check the trivial causes" scope). Full detail:
+  `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s 2026-07-28
+  "ar4-grasp-trivial-friction-check task" UPDATE.
 - **AR4 Cartesian fingertip correction — built and tested as designed, but
   does NOT close the capstone grasp: directly confirms, rather than
   overturns, the roll/heading diagnosis** (2026-07-28, direct continuation

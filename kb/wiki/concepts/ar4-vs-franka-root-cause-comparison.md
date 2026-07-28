@@ -5100,3 +5100,184 @@ clearance-fix task" UPDATE immediately above (the 6-7mm gap this task
 tests a fix for, and the roll/heading diagnosis this task's own evidence
 confirms) and "ar4-joint-tracking-closed-loop-fix task" UPDATE (the
 joint_2-hard-stop signature this task observed a variant of on `joint_5`).
+
+## UPDATE 2026-07-28 (ar4-grasp-trivial-friction-check task): friction is DEFINITIVELY ruled out (both by code inspection and by direct empirical test with realistic friction applied) - direct visual inspection instead confirms the real cause is grasp HEIGHT, the jaws closing onto the cube's TOP EDGE rather than straddling its vertical middle
+
+Direct continuation of the investigation above (pedestal-fix, Cartesian-
+correction), dispatched per an explicit user framing: this is a TRIVIAL
+problem, stop building more elaborate diagnostic/correction machinery
+(no workspace re-derivation, no FK sampling, no Cartesian DLS loops) and
+find the bug by direct observation instead. Checked the trivial causes in
+the user's own specified order.
+
+**1. Friction - checked directly, found NOT low, then made explicit anyway
+per a direct mid-task user decision, and empirically retested.** Reading
+`tasks/ar4/objects_cfg.py`'s `CUBE_CFG` and every `tasks/ar4/*_env_cfg.py`
+(24 files) confirmed the cube was never frictionless: it inherited the
+scene-wide `sim.physics_material` default (`static_friction=1.0,
+dynamic_friction=1.0`, present verbatim in every AR4 env cfg's own
+`__post_init__`), and Isaac Lab's own `SimulationCfg.physics_material`
+docstring confirms this scene default DOES apply automatically to any
+rigid body (including this cube, a plain procedural `CuboidCfg` with no
+`physics_material` of its own) that doesn't set its own material. This
+1.0/1.0 value is HIGHER than Franka's own dice-grasp setup, which sets NO
+override at all and runs on Isaac Lab's library default of 0.5/0.5
+(`RigidBodyMaterialCfg`'s own class default) and grips successfully -
+directly refuting the "frictionless cube" hypothesis at the code level
+before any live run.
+
+A direct mid-task user decision (independent of this code-level finding)
+instructed making the cube's friction an explicit, physically-labeled
+property regardless: `tasks/ar4/objects_cfg.py`'s `CUBE_CFG` now sets its
+own `CUBE_PHYSICS_MATERIAL` (`static_friction=0.8, dynamic_friction=0.7,
+friction_combine_mode="average"`) - a realistic wood/plastic/resin value,
+deliberately lower than the already-sufficient 1.0/1.0 scene default.
+Combine mode confirmed `"average"` (Isaac Lab's own default, not `"min"`),
+and the gripper's own material confirmed unchanged (still the 1.0/1.0
+scene default, since `robot_cfg.py` sets no per-body override) - so no
+combine-mode-capping risk: effective cube-vs-jaw friction ≈0.9 static /
+0.85 dynamic, solidly graspable by any normal standard.
+
+**Live-tested with this explicit, realistic friction applied
+(`scripts/ar4_pedestal_grasp_trivial_check.py`, single point
+`Q0_bearing95` - one repro is sufficient since all 3 pedestal points
+failed identically in the prior pedestal-fix task): the grasp still fails,
+with the EXACT failure signature this task was dispatched to explain** -
+sustained two-sided contact during CLOSE (jaw1 48.29N / jaw2 31.52N, same
+order of magnitude as the dispatch brief's own jaw1~64N/jaw2~58N), cube
+height gain **exactly 0.00mm** at every single phase
+(`PHASE0` through `PHASE6` all read `cube_z=0.0475m`, bit-for-bit
+identical), and contact collapsing to **exactly 0.000N** the instant
+`PHASE4-LIFT-CLOSE` begins and staying there through HOLD and RETREAT.
+**Friction is not the cause - this is now empirically closed, not just
+code-inspected.**
+
+**2. Grasp HEIGHT - confirmed as the real cause, both numerically and by
+direct visual inspection.** The height/aperture diagnostic this task added
+found the REAL fingertip (`gripper_jaw1_link`'s own world z minus the
+known 18.475mm mesh extent, `scripts/ar4_graspable_workspace.py`'s
+`_JAW1_MESH_LOWER_EXTENT_M`) sitting at `real_fingertip_z=0.0548m` against
+a cube vertical span of `[0.0400, 0.0550]m` - inside the span by the
+diagnostic's own crude threshold, but only **0.2mm below the cube's own
+TOP FACE**, not anywhere near its vertical center. `jaw_separation` stayed
+**frozen at 28.05mm from the OPEN state straight through the CLOSE
+phase** (identical to 2 decimal places at both `end of
+PHASE2-GRASP-OPEN-SETTLE` and `end of PHASE3-GRASP-CLOSE`) - the jaws
+never actually closed at all, consistent with the cube's own top edge
+mechanically blocking further jaw travel. `open_gripper_max_force` was
+already 48.29N BEFORE the intentional CLOSE command, meaning the
+"open, descended" approach itself already presses the jaws into the
+cube's top edge.
+
+**Direct visual confirmation (close-up camera, repositioned live from the
+gripper/cube's own post-approach world position - see "Camera-timing bug"
+below for why this required a second cloud run):**
+`outputs/ar4_pedestal_grasp_trivial_check/closeup_phase2_grasp_open_descended.png`
+and `closeup_phase3_close.png` show the two gripper jaws descending from
+ABOVE, straddling only the cube's UPPER portion with a good fraction of
+the cube visible sticking out BELOW the jaws' reach - not a side grip at
+the cube's vertical middle. The two frames are visually near-identical
+(matching the frozen `jaw_separation` numbers - no visible jaw motion
+between "open" and "closed"). **`closeup_phase4_lift.png` is the clearest
+single piece of evidence in this whole investigation**: the gripper
+(jaws still nominally closed) has retreated upward per the LIFT command,
+and the red cube sits completely undisturbed on the pedestal with a clean
+visible GAP between the jaw fingertips and the cube - the gripper closed
+on empty air, never on the cube. `closeup_phase6_retreat.png` confirms the
+cube never moved from its exact original resting spot through the whole
+sequence. All frames + `closeup.mp4`/`elbow_context.mp4` synced to
+`outputs/ar4_pedestal_grasp_trivial_check/` (Pi-local, gitignored) and
+`gs://rl-manipulation-hks-runs/ar4-pedestal-grasp-trivial-check/20260728-153949/`.
+
+**3. Aperture/XY alignment - not the problem.** `cube_offset_from_jaw_midline_xy`
+stayed at 2.07-2.09mm against a 7.5mm cube half-size (comfortably centered
+between the jaws in the horizontal plane) at both PHASE2 and PHASE3 -
+ruled out as a contributing cause.
+
+**Honest verdict, per this task's own "exhaust the simple explanations,
+report honestly if none is it" standard: friction was the dispatch
+brief's own "most likely" hypothesis, and it is now DEFINITIVELY refuted -
+both by code-level inspection (the scene default was never near-zero) and
+by a direct empirical retest with an explicit, realistic 0.8/0.7 material
+applied. The friction fix is a real, committed, physically-correct
+improvement (an implicit scene-inherited value replaced with an explicit,
+labeled one) but does NOT close this investigation.** The capstone AR4
+grasp+lift remains **NOT achieved**. The real, now visually-confirmed
+cause is grasp HEIGHT: the established `GRASP_AT_HEIGHT`/pinch-point
+convention places the jaws' closing action at/just below the cube's own
+TOP FACE rather than at its vertical center, so the "close" motion
+presses down on the cube's top edge (real, if not doubly powerful, contact
+force) without ever achieving a genuine side-pinch - the jaws don't close
+around anything, they jam against an edge, and the cube is simply left
+behind the instant the arm moves away. **This is a different, and this
+time visually unambiguous, explanation from the roll/heading-misalignment
+diagnosis the pedestal-fix and Cartesian-correction tasks converged on** -
+not a contradiction of that evidence (a non-antipodal, edge-only contact
+is entirely consistent with "real but non-antipodal contact that doesn't
+survive a lift"), but a more visually direct and now-confirmed mechanism
+for it: the jaws are landing at the cube's top edge, not its side faces,
+at all 3 previously-tested pedestal points (all sharing the same
+`GRASP_AT_HEIGHT` convention).
+
+**Per this task's own bounded scope (confirm/refute the trivial causes,
+not redesign the grasp-height convention) and this repo's Senior/Principal
+split, the concrete height fix itself is flagged back rather than decided
+and applied unilaterally here**: the current `GRASP_AT_HEIGHT` convention
+(pedestal top + 0.0105m, carried over unchanged from the pre-pedestal
+ground-level convention) needs to be lowered so the REAL fingertip
+(already known to sit ~15-18mm below the abstract pinch point used to
+derive it, per the pedestal-fix task's own "Part 1" finding) lands at the
+cube's vertical CENTER (`cube_z` ± a few mm, i.e. roughly 0.040-0.048m
+above the pedestal top for this 15mm cube) instead of at its top face -
+a concrete, well-evidenced, bounded next step, not a re-litigation of the
+whole workspace/FK sweep machinery.
+
+**Cost:** two on-demand `g2-standard-4`+`nvidia-l4` cloud dispatches (the
+desktop was unreachable this task - `home.local` mDNS resolution timed
+out and a full subnet scan/SSH-key check found no matching host - so
+cloud was used per the standing routing policy). Both dispatches hit this
+project's own documented "apt picks a newer libnvidia-gl point release
+than the currently-loaded kernel module" gap (no exact-version apt
+candidate available for the DLVM image's own driver, `580.159.03` vs
+apt's newest `580.173.02`) - recovered both times via the already-
+documented `sudo reboot` + re-run-the-same-idempotent-script pattern
+(dispatched with `--detach` specifically to allow this manual recovery,
+since the default blocking mode's own `trap cleanup EXIT` would have torn
+the instance down before a reboot could be attempted). The FIRST dispatch
+also hit two bugs specific to this task's own new script (both found live,
+both fixed and re-verified in a second dispatch): the closeup camera was
+positioned from the arm's HOME-pose measurement (before any movement),
+landing the eye inside a link's own mesh; and `camera.update()` rendered
+both cameras on EVERY physics step (only skipping the video WRITE, not
+the render), inflating the run to ~29 real minutes even though genuinely
+still working throughout (confirmed via live `nvidia-smi`/CPU% - not the
+idle-GPU signature of a true hang) - both fixed (camera repositioned after
+PREGRASP settles near the cube; render throttled to every 8th step) and
+the corrected second run completed in ~20 minutes. Both runs additionally
+hit this project's own recurring Isaac-Sim-Kit-shutdown-teardown hang
+(real work confirmed complete via already-written snapshot files/flushed
+log before each hang) - recovered via the established `kill -TERM`
+pattern each time, letting the outer dispatch script's own GCS-sync/
+teardown steps continue normally afterward. Both instances confirmed
+torn down cleanly via `scripts/check_cloud_state.sh`. Well under the
+$2.00 cost cap.
+
+**Sources:** this task's own live runs -
+`scripts/ar4_pedestal_grasp_trivial_check.py` (both versions - the first
+with the camera-timing/render-cost bugs, the second with both fixed),
+`scripts/_cloud_ar4_pedestal_grasp_trivial_check.sh` (cloud dispatch
+payload); `tasks/ar4/pedestal_grasp_camera_env_cfg.py` (the new
+closeup/elbow-context camera scene cfg, reusing
+`grasp_verify_env_cfg.py`'s already-proven `CameraCfg` values);
+`tasks/ar4/objects_cfg.py`'s `CUBE_PHYSICS_MATERIAL` (the friction fix);
+direct reads of Isaac Lab's own `SimulationCfg`/`RigidBodyMaterialCfg`
+source (`isaaclab/sim/simulation_cfg.py`,
+`isaaclab/sim/spawners/materials/physics_materials_cfg.py`) for the
+scene-default-application and combine-mode claims; the synced logs/frames
+at `gs://rl-manipulation-hks-runs/ar4-pedestal-grasp-trivial-check/20260728-153949/`
+and `outputs/ar4_pedestal_grasp_trivial_check/` (Pi-local); this article's
+own 2026-07-28 "ar4-pedestal-ground-clearance-fix task" UPDATE (the
+`GRASP_AT_HEIGHT` convention and the ~15-18mm real-fingertip-vs-abstract-
+pinch-point gap this task's height finding directly builds on) and
+"ar4-cartesian-fingertip-correction task" UPDATE (the roll/heading
+diagnosis this task's height finding refines rather than contradicts).

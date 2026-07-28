@@ -90,19 +90,27 @@ echo "/workspace/rl/assets/ar4_mk5/ar4_mk5.usd" > "$HOME/rl/assets/ar4_mk5/usd_p
 step "[4/4] _diag_ar4_joint2_limit_raw_usd_only.py"
 T4_START=$(date +%s)
 sudo docker run --rm --gpus all --network host --entrypoint bash \
-  -e ACCEPT_EULA=Y -e OMNI_KIT_ACCEPT_EULA=YES -e PRIVACY_CONSENT=Y \
+  -e ACCEPT_EULA=Y -e OMNI_KIT_ACCEPT_EULA=YES -e PRIVACY_CONSENT=Y -e PYTHONUNBUFFERED=1 \
   -v "$HOME/rl:/workspace/rl" \
   -w /workspace/rl \
   "$IMAGE" \
-  -c "/workspace/isaaclab/isaaclab.sh -p scripts/_diag_ar4_joint2_limit_raw_usd_only.py" \
+  -c "PYTHONUNBUFFERED=1 /workspace/isaaclab/isaaclab.sh -p scripts/_diag_ar4_joint2_limit_raw_usd_only.py" \
   2>&1 | tee "$HOME/joint2_limit_raw_usd_only.log"
 check "${PIPESTATUS[0]}" "_diag_ar4_joint2_limit_raw_usd_only.py (containerized)"
 T4_END=$(date +%s)
 echo "TIMING run_sec=$((T4_END - T4_START))"
 
+step "RESULT FILE (belt-and-suspenders capture, independent of stdout/tee)"
+if [ -f "$HOME/rl/joint2_limit_raw_usd_only_result.txt" ]; then
+  cat "$HOME/rl/joint2_limit_raw_usd_only_result.txt"
+else
+  echo "WARNING: result file not found -- script may not have reached its own log() calls at all."
+fi
+
 GCS_DEST="gs://rl-manipulation-hks-runs/ar4-joint2-limit-raw-usd-only/$(date -u +%Y%m%d-%H%M%S)/"
 echo "GCS_DEST=${GCS_DEST}"
 gsutil -q cp "$HOME/joint2_limit_raw_usd_only.log" "${GCS_DEST}" 2>&1 || echo "WARNING: log GCS sync failed (non-fatal)"
+gsutil -q cp "$HOME/rl/joint2_limit_raw_usd_only_result.txt" "${GCS_DEST}" 2>&1 || echo "WARNING: result file GCS sync failed (non-fatal or file missing)"
 
 step "TIMING SUMMARY"
 echo "docker_toolkit_install_sec=$((T1_END - T1_START))"

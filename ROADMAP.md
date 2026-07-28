@@ -645,6 +645,35 @@ See `BACKLOG.md` for further-out candidates not yet on this list.
 
 ## Recently landed
 
+- **AR4 joint-tracking closed-loop fix — tracking gap DOES close for most
+  joints, but joint_2 is pinned at a real hard limit the graspable-
+  workspace tooling never modeled** (2026-07-28) — built and tested both
+  candidate fixes for the tracking gap: a stiffness sweep (4000→80000, plus
+  a 10x effort-limit boost) and a new reusable closed-loop primitive
+  (`tasks/ar4/joint_tracking.py`'s `settle_to_joint_pose`, the joint-space
+  analog of `oracle_rollout.py`'s already-validated Cartesian integral-
+  error fix). Both confirm most joints' droop responds exactly to gain/
+  correction as PD theory predicts (e.g. joint_6: 7.47°→0.47° with higher
+  stiffness; PREGRASP_Q converges to sub-0.1°/sub-mm at all 3 validation
+  points via the closed-loop primitive) — but `joint_2` stays frozen at
+  ~3.2-3.3° error at GRASP_Q regardless of a 20x stiffness increase, a 10x
+  effort-limit increase, or a diverging +26° closed-loop correction, with
+  `applied_torque` staying constant instead of scaling with stiffness as
+  real PD droop would. **New diagnosis: joint_2 has a real ~59° ceiling in
+  live physics, vs. `ar4_graspable_workspace.py`'s assumed `(-42°, 90°)`
+  range** — P0/P1/P2's GRASP_Q all need ~62.3-62.5°, just past this
+  unmodeled wall, which explains why every one of that sweep's candidate
+  points still collides while nominally open (worse than before: 87-108N
+  vs. the roll-constraint task's 45-54N, since the correction increases
+  jamming force against a target it can't reach). A direct USD-readback
+  confirmation script was written but hit two consecutive cloud infra
+  stalls before completing — the ~59° figure is a strong mechanistic
+  inference, not yet a directly-read value. Next step: re-run the readback
+  script, correct `JOINT_LIMITS_DEG["joint_2"]`, and re-sweep the
+  graspable workspace with the corrected range before attempting another
+  grasp — the whole P0/P1/P2 candidate set is likely invalidated by this
+  finding. `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s
+  2026-07-28 UPDATE.
 - **AR4 joint-tracking diagnostic — physics-vs-kinematics confound
   CONFIRMED and quantified** (2026-07-27) — direct commanded-vs-achieved
   measurement, cube parked 3m away (nothing obstructing), testing whether

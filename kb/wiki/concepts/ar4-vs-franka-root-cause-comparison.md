@@ -4363,3 +4363,208 @@ less-precise actuator-gain-weakness finding this task re-measures and
 quantifies) and 2026-07-27 "ar4-graspable-roll-constraint task" UPDATE
 (the cube-present plateau numbers this task's no-cube baseline is compared
 against).
+
+## UPDATE 2026-07-28 (ar4-joint-tracking-closed-loop-fix task): the tracking gap DOES close for most joints — but joint_2 is stuck at a hard limit the graspable-workspace tooling never modeled, a NEW, sharper root cause than either gain-tuning or jaw-mesh geometry
+
+Direct continuation of the 2026-07-27 "ar4-joint-tracking-diagnostic
+task" UPDATE immediately above, which quantified but did not yet fix the
+~3.2°/~20mm no-cube tracking residual at the boosted (4000/200) gain.
+Tasked with actually closing that gap (via higher stiffness and/or a
+closed-loop outer-correction primitive) and re-attempting the P0/P1/P2
+grasp+lift with the arm genuinely reaching the commanded pose. Both
+fixes were built and tested; the result is a materially different, more
+specific diagnosis than "tracking gap" — most joints' droop responds
+exactly as PD theory predicts, but one joint (`joint_2`) turns out to be
+pinned at a real, hard, unmodeled physical limit, which explains why
+every fix attempted (gain, closed-loop correction) left the exact same
+residual behind.
+
+**Fix 1 — stiffness sweep (`scripts/ar4_tracking_fix_confirm.py`,
+extending `ar4_joint_tracking_diagnostic.py`'s no-cube/cube-parked-3m-away
+method): 4000 -> 20000 -> 80000 (damping scaled `200*sqrt(stiffness/4000)`
+for a constant damping ratio), plus a 10x `effort_limit_sim` boost
+(20 -> 200Nm) at the highest stiffness, all at P0's exact GRASP_Q.**
+
+| Regime | max joint err | which joint | pinch discrepancy |
+|---|---|---|---|
+| stiffness=4000 (existing baseline) | 7.4654° | joint_6 | 19.320mm |
+| stiffness=20000 | 3.2989° | **joint_2** | 18.422mm |
+| stiffness=80000 | 3.3023° | **joint_2** | 18.322mm |
+| stiffness=80000, effort_limit=200 | 3.2494° | **joint_2** | 19.679mm |
+
+Every joint EXCEPT joint_2 shrank dramatically with higher stiffness
+exactly as finite-gain PD theory predicts (joint_4: 4.19°→0.53°; joint_6:
+7.47°→0.47°) — a real, clean confirmation that most of the original
+tracking gap genuinely was gravity droop, fixable by gain. **joint_2's
+error stayed essentially frozen at 3.25-3.30° across a 20x stiffness
+range AND a 10x effort-limit increase.** `robot.data.applied_torque` for
+joint_2 stayed a near-constant ~2.3-2.4 N·m in every regime — if this
+were real PD droop, torque = stiffness × error should have scaled ~20x
+between the 4000 and 80000 regimes (predicted ~230 N·m -> ~4600 N·m at a
+constant 3.3° error); it did not move at all. This is the diagnostic
+signature of a genuine hard constraint overriding the compliant PD drive
+(a mechanical/PhysX position-limit stop), not a gain-limited spring.
+
+**Fix 2 — closed-loop `settle_to_joint_pose` (new,
+`tasks/ar4/joint_tracking.py`): the same outer integral-correction
+mechanism this repo's own `scripts/oracle_rollout.py` already validated
+in Cartesian/task space (`ik_pursuit_action`'s "per-env Cartesian
+integral-error accumulator... provides the missing integral action that
+proportional-only control lacks"), generalized to joint space — measure
+achieved-vs-desired, re-command `desired + accumulated_correction`,
+repeat.** Directly confirms and sharpens the same finding, on BOTH sides:
+- **At GRASP_Q (baseline 4000/200 gain), it does NOT converge** — 8 outer
+  iterations, joint_2's own correction term grows monotonically to
+  **+26.32°** while the achieved error never drops below ~3.3° the whole
+  time (final: `converged=False`, `max_err_deg=3.3105`, pinch
+  discrepancy 18.085mm) — commanding the PD target 26° further than the
+  original desired value produced ZERO additional movement. This is only
+  explicable by a hard stop, not insufficient gain (with 26° of headroom
+  added on top of an already-boosted gain, a real gain-limited droop
+  would have closed easily).
+- **At PREGRASP_Q (same baseline gain, all 3 points), it converges
+  cleanly and fast**: P0 in 2 iterations to 0.0691°, P1 in 2 iterations to
+  0.0199°, P2 in 3 iterations to 0.0014° — sub-0.1°/sub-mm precision in
+  every case. This is the clean positive control: the primitive itself
+  works exactly as designed whenever the target is within the arm's real
+  achievable range. PREGRASP_Q's own joint_2 value is ~52-53° at all 3
+  points (vs. GRASP_Q's ~62.3-62.5°) — comfortably under whatever the real
+  ceiling is, which is exactly why it converges there and nowhere near
+  GRASP_Q.
+
+**New root cause: `scripts/ar4_graspable_workspace.py`'s own
+`JOINT_LIMITS_DEG["joint_2"] = (-42.0, 90.0)` assumption does not match
+the real, live-simulated joint_2 range.** The FK-based reachability
+sweep that produced every one of this file's P0/P1/P2 "graspable
+workspace" points reported 27.68° of joint_2 margin at P0's GRASP_Q
+(`90.0 - 62.32 = 27.68`, matching the sweep's own printed margin exactly)
+— genuinely comfortable by that tool's own model. Live physics
+disagrees: joint_2 cannot be driven past ~59.0-59.1° by ANY combination
+of gain or commanded overshoot tested this task, a hard ceiling roughly
+**3.2° short of GRASP_Q's own 62.32-62.53° target at all three
+validation points** (P0/P1/P2 all independently landed in this same
+narrow joint_2 band, per the roll-constraint task's own Stage-A filter,
+so all three hit the identical wall). This means the "graspable
+workspace" P0/P1/P2 points were never actually reachable in real physics
+to begin with — a genuine gap in the FK reachability tool's own assumed
+joint table, not a new kinematic-vs-physics confound and not (at least
+not solely) the previously-flagged jaw-collision-mesh-geometry
+hypothesis. A dedicated, tiny follow-up diagnostic
+(`scripts/_diag_ar4_joint_limits_readback.py`, reads
+`robot.data.joint_pos_limits`/`soft_joint_pos_limits` directly from the
+built USD asset) was written to confirm the exact real limit value by
+direct readback rather than inference, but hit two consecutive cloud
+infra stalls (see below) before it could print its result — **the ~59°
+ceiling is therefore a strong, mechanistically-well-evidenced inference
+from the torque/convergence data above, not yet a directly-read USD
+attribute value; re-running that one cheap script is the most direct
+possible next step.**
+
+**Full grasp+lift re-attempt (`scripts/ar4_tracking_fix_confirm.py` Part
+3), programmatic decision CLOSED_LOOP (baseline 4000/200, since the best
+swept stiffness regime did not cleanly reach the <3mm bar), all 3 points:
+GRASP+LIFT NOT CONFIRMED, and WORSE open-gripper collision force than
+before this task.**
+
+| Point | Open-gripper max force (pre-CLOSE) | Both jaws contacted post-close | Real lift | Held through retreat |
+|---|---|---|---|---|
+| P0 | 87.17N (was 53.8N pre-fix) | True | False | False |
+| P1 | 107.94N (was 46.8N pre-fix) | True | False | False |
+| P2 | interrupted by infra hang mid-GRASP-OPEN-SETTLE (see below); 51-72N observed before the hang, same qualitative pattern | — | — | — |
+
+The closed-loop correction actively made the pre-fix open-gripper
+collision WORSE (53-108N vs. the roll-constraint task's own 45-54N), not
+better — a real, understandable side effect: since joint_2 cannot
+physically reach the target, the integral corrector kept commanding an
+ever-larger overshoot in an attempt to close a gap that isn't gain- or
+correction-fixable, which increases jamming force against whatever the
+arm actually contacts at its true (joint_2-capped) pose rather than
+reducing it. This is a genuine, worth-flagging caveat for
+`settle_to_joint_pose` as a general-purpose primitive: it should be
+paired with a bounded-iteration/divergence check (already present via
+`max_outer_iters` and `converged` in the returned dict) and a caller-side
+policy of NOT blindly trusting an unconverged correction for a
+downstream phase — this task's own script did carry the unconverged
+correction forward into PHASE3-CLOSE, which is defensible for isolating
+today's diagnosis (same target position throughout) but would need
+reconsidering before this primitive is reused in a script that assumes
+convergence.
+
+**Real infra finding, a THIRD occurrence of this file's own documented
+stall signature, but for the first time confirmed with genuinely nothing
+resembling the "jammed contact" trigger the first two occurrences
+shared:** the P2 grasp re-attempt hung mid `PHASE2-GRASP-OPEN-SETTLE`
+(CPU pinned ~120%, GPU 0% utilization, log stale 10+ minutes — the
+established signature) while real, sustained ~30-70N contact WAS present
+(so "jammed contact" remains a live explanation for that one). The
+follow-up joint-limits-readback dispatch then hung a SECOND time, on a
+FRESH instance, with a fresh docker pull, on a trivial script with **no
+cube, no phases, nothing beyond constructing the env** — before even
+reaching its own "time taken for scene creation" print line (which took
+1.05s in the very same session's prior successful launch). Both hangs
+recovered via the established safe `kill -TERM` pattern (confirmed via a
+separate `gcloud compute ssh`, not the blocking dispatch's own tail, that
+GPU was idle/CPU pinned/no log progress before killing each time); both
+wrapper scripts completed their own teardown cleanly afterward
+(`scripts/check_cloud_state.sh` confirmed zero instances/disks/snapshots
+both times). The second hang, with zero contact and zero meaningful
+computation before the stall, weakens "jammed PhysX contact" as a
+complete explanation further than the 2026-07-27 no-cube-hang finding
+already had — a genuine, still-unexplained cold-start/environment-
+construction stall on this specific `nvcr.io/nvidia/isaac-lab:2.3.1` +
+`g2-standard-4`/`nvidia-l4` combination appears to be a real, recurring
+risk independent of workload, not yet root-caused.
+
+**Verdict and recommendation.** (1) The closed-loop `settle_to_joint_pose`
+primitive works correctly and should be considered validated as a
+reusable fix for genuine PD-droop-limited joints — P0/P1/P2's clean
+sub-0.1° PREGRASP convergence is a real positive result, not just a null.
+(2) Raising stiffness alone is NOT recommended as a fix for the shared
+`AR4_MK5_CFG` default: it helps most joints but cannot help joint_2 at
+this specific pose at all (a hard limit doesn't respond to gain), so the
+generalizable, recommended fix package for future AR4 grasp scripts is
+the closed-loop primitive, not a blanket gain increase — flagging this
+explicitly per this task's own instruction not to silently change shared
+config. (3) The default shipped gains (`stiffness=40, damping=4`) remain
+confirmed catastrophically insufficient (prior UPDATE); this task did not
+re-litigate that, only whether raising gains further past the existing
+4000/200 override is worthwhile (it is not, for joint_2-limited poses).
+(4) **The concrete, well-evidenced next step for whoever picks this up:
+re-run `scripts/_diag_ar4_joint_limits_readback.py` to get the exact
+joint_2 hard-limit value by direct readback (cheap, ~1 min of real compute
+once cloud infra cooperates), then correct
+`ar4_graspable_workspace.py`'s `JOINT_LIMITS_DEG["joint_2"]` to the real
+value and re-sweep — the entire P0/P1/P2 candidate set was chosen under a
+wrong assumption and should be treated as invalidated for this reason,
+not re-attempted again as-is.** This is judged out of THIS task's own
+bounded scope (close the tracking gap + re-attempt the existing
+candidates), not decided unilaterally.
+
+**Cost:** two cloud on-demand `g2-standard-4`+`nvidia-l4` dispatches.
+Dispatch 1 (`ar4_tracking_fix_confirm.py`, including one wasted ~3min
+attempt that failed because the new scripts were committed only AFTER
+the first dispatch attempt — `run_on_cloud_gpu.sh` ships via `git archive
+HEAD`, which does not include uncommitted files, a real process mistake
+this task made and fixed by committing before redispatching): ~52 min
+total ≈ $0.66. Dispatch 2 (`_diag_ar4_joint_limits_readback.py`,
+including one hang-and-recover cycle): ~27 min ≈ $0.34. Combined ≈ **$1.00**,
+under the task's cost guidance. Full teardown verified both times via
+`scripts/check_cloud_state.sh` (zero instances/disks/snapshots
+remaining).
+
+**Sources:** this task's own live runs —
+`scripts/ar4_tracking_fix_confirm.py` (stiffness sweep, closed-loop test,
+3-point grasp+lift re-attempt), `tasks/ar4/joint_tracking.py`
+(`settle_to_joint_pose`, the new reusable primitive),
+`scripts/_diag_ar4_joint_limits_readback.py` (the not-yet-completed direct
+joint-limit readback), `scripts/_cloud_ar4_tracking_fix_confirm.sh` /
+`scripts/_cloud_ar4_joint_limits_readback.sh` (cloud dispatch payloads);
+`scripts/ar4_graspable_workspace.py`'s own `JOINT_LIMITS_DEG` table (the
+assumed-vs-real mismatch this task's central finding is about);
+`scripts/oracle_rollout.py`'s `ik_pursuit_action` (the pre-existing
+Cartesian-space precedent `settle_to_joint_pose` generalizes into joint
+space); this article's own 2026-07-27 "ar4-joint-tracking-diagnostic
+task" UPDATE (the tracking-gap quantification this task closes) and
+"ar4-graspable-roll-constraint task" UPDATE (the P0/P1/P2 points and
+cube-present force baselines this task's own numbers are compared
+against).

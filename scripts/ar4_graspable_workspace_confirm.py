@@ -77,6 +77,13 @@ parser.add_argument(
 )
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
+# This script uses the scene's cameras (demo_camera/perception_camera) for
+# video recording - Isaac Sim refuses to spawn any camera at all without
+# this flag (RuntimeError: "A camera was spawned without the
+# --enable_cameras flag"). Matches grasp_demo_v2.py's own established
+# pattern (set programmatically here rather than requiring an extra CLI
+# flag on every invocation).
+args_cli.enable_cameras = True
 
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app

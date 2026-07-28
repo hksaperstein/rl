@@ -155,6 +155,21 @@ check "${PIPESTATUS[0]}" "ar4_graspable_workspace_confirm.py (containerized)"
 T4_END=$(date +%s)
 echo "TIMING confirm_run_sec=$((T4_END - T4_START))"
 
+# 2026-07-27 finding (this task's own dispatch): Isaac Sim's own Kit process
+# can exit 0 even after an unhandled Python exception inside the guest
+# script propagates all the way to <module> (observed live: a real
+# RuntimeError crash still reported "[OK]" above via PIPESTATUS[0]==0) -
+# the container's own exit code is NOT a reliable signal for whether this
+# script's actual task logic ran to completion. Explicitly grep the log for
+# both a real Python traceback and the expected VERDICT line so this
+# doesn't silently look like a pass.
+if grep -q "^Traceback (most recent call last):" "$HOME/graspable_workspace_confirm.log"; then
+  echo "WARNING: a Python Traceback was found in graspable_workspace_confirm.log despite exit 0 above - inspect the log, this may NOT be a real pass." >&2
+fi
+if ! grep -q "^VERDICT:" "$HOME/graspable_workspace_confirm.log"; then
+  echo "WARNING: no VERDICT line found in graspable_workspace_confirm.log - the script likely did not reach its own summary/verdict section." >&2
+fi
+
 sudo chown -R "$(id -u):$(id -g)" "$HOME/rl/logs" 2>/dev/null || true
 
 echo "=== GCS sync (logs + videos) ==="

@@ -4769,3 +4769,174 @@ and `urdf/ar_macro.xacro` (vendor spec cross-check); this article's own
 above (the ~59° wall this task root-causes) and 2026-07-27
 "ar4-joint-tracking-diagnostic task" UPDATE (the no-cube-obstruction
 control test this task's ground-collision conclusion relies on).
+
+## UPDATE 2026-07-28 (ar4-pedestal-ground-clearance-fix task): the pedestal fix WORKS and is verified — ground/pedestal collision is genuinely solved — but the capstone grasp+lift still fails, now blocked on a different, already-documented issue (roll/heading-residual contact)
+
+Direct continuation of the 2026-07-28 "ar4-joint2-ground-clearance-fix
+task" immediately above, which left the graspable workspace genuinely
+EMPTY at ground level and flagged raising the cube on a pedestal as the
+concrete next step. Tasked with implementing that pedestal, re-deriving
+the workspace, and running the closing grasp+lift attempt.
+
+### Part 1: the pedestal, and a first (buggy) re-derivation
+
+Added `tasks/ar4/objects_cfg.py`'s `PEDESTAL_CFG`/`make_pedestal_cfg` — a
+plain `AssetBaseCfg` + `CuboidCfg` static collider (collision only, no
+`RigidBodyPropertiesCfg`, matching this repo's own `table`/
+`_notch_fixture_cfg` precedent in `tasks/franka/dice_scene_cfg.py` — a
+prim with `CollisionAPI` but no `RigidBodyAPI` is an ordinary static
+collider, no data-buffer overhead needed since nothing ever reads its own
+pose). Height derivation: a cheap (1M-sample) FK probe across candidate
+pedestal heights (20/30/40/50/60/70mm) found the achievable ground-
+clearance ceiling rises almost exactly 1:1 with height, and even the
+smallest tested height (20mm) already flips the real-fingertip ceiling
+positive (+15.84mm); **40mm** was chosen (low end of the task brief's own
+suggested 40-60mm band, no reason to reach higher once the problem is
+solved with margin) giving a probed ceiling of +35.77mm. Raised the cube
+to rest on top (`Ar4PickPlaceGraspGoalSceneCfg`, `PEDESTAL_HEIGHT_M +
+0.0075`) and updated `scripts/ar4_graspable_workspace.py`'s
+`GRASP_AT_HEIGHT` to match.
+
+Re-swept: genuinely non-empty (30157 final survivors, vs. 0 before).
+Selected 3 distinct validation points at different bearings
+(`scripts/_ar4_pedestal_select_grasp_points.py`, mirroring the
+established P0/P1/P2 bearing-spread convention) and ran the closing
+grasp+lift attempt (`scripts/ar4_pedestal_grasp_confirm.py`, reusing
+`settle_to_joint_pose` and the established PHASE0-6 sequence).
+
+**All 3 points failed identically to the pre-pedestal case**: sustained
+30-60N contact force while the gripper was still nominally OPEN, at every
+point (Q0: 51-65N, Q1: 42-56N, Q2: 42-56N), no lift. This was surprising —
+the pedestal was supposed to fix exactly this signature.
+
+**Root cause, found via direct FK measurement at the failing GRASP_Q**:
+`gripper_jaw1_link`'s real origin sits only ~2mm above the *abstract*
+`_EE_OFFSET`-based "pinch point" the sweep's height filter was actually
+matching to `GRASP_AT_HEIGHT` — but the REAL fingertip is a further
+18.475mm below THAT origin (the same known mesh extent from the
+2026-07-24 jaw-geometry fix). Net effect: the real fingertip lands
+~15-16mm BELOW wherever the filter thought it was placing the grasp
+point — a fixed, geometry-intrinsic offset of this comfortable-margin
+joint-configuration family that does **not** shrink as the pedestal gets
+taller (confirmed via a second height probe: raising `GRASP_AT_HEIGHT` by
+H raises the whole matching population's jaw1-origin height by very
+nearly the same H, so the *relative* offset stays constant). The old
+`GROUND_CLEARANCE_MIN_M=0.030` filter (measured against the fixed world
+ground z=0) simply became irrelevant once the cube — and the whole
+matching population — moved up by 40mm (jaw1-origin clearance ~54mm,
+comfortably over the 30mm bar), while the REAL local obstacle (the
+pedestal's own new top surface, now 40mm above ground) was never checked
+at all. **The pedestal didn't fail; the height-targeting convention it
+inherited was already wrong, and raising the object just moved the same
+bug's failure point from the ground onto the new platform.**
+
+### Part 2: the real fix, and a second, successful re-derivation
+
+Fixed `scripts/ar4_graspable_workspace.py`'s `_evaluate` to compute and
+return the REAL fingertip height (`fingertip_z_m = gripper_jaw1_link`'s
+own world z minus `_JAW1_MESH_LOWER_EXTENT_M`) and changed `run_sweep`'s
+height filter (Stage A and Stage B) to match this directly against
+`GRASP_AT_HEIGHT`, instead of the abstract `_EE_OFFSET` pinch point. This
+automatically keeps the fingertip above the true local floor, since
+`GRASP_AT_HEIGHT` is itself always `floor + 0.0105m` by this project's own
+established convention. `GROUND_CLEARANCE_MIN_M` (ground-relative,
+retired) was replaced with `PEDESTAL_FINGERTIP_CLEARANCE_MIN_M=0.005`
+(pedestal-top-relative, a small redundant safety margin, not the primary
+mechanism anymore).
+
+Sanity-checked the fix at ground level first (a cheap probe, no pedestal):
+the corrected filter finds REAL positive fingertip clearance (8.5-12.4mm
+above ground) even at `PEDESTAL_HEIGHT_M=0` — but checking the surviving
+population's own `joint_2` distribution shows it still sits mostly at or
+above the empirically-confirmed ~59° ground-collision wall (range
+57.96-75.37°, median 59.27°), so this does NOT contradict the prior task's
+"genuinely empty at ground level" finding — it just confirms the fix
+correctly targets a **different, additional** ~15mm bug on top of the
+already-real ground-collision constraint, not a full reversal of it. The
+pedestal is still genuinely needed.
+
+Re-swept with both the pedestal AND the fix: still robust (23560 final
+survivors) and this time with **verified-positive** real fingertip
+clearance above the pedestal top at the 3 new validation points
+(9.81/9.81/10.50mm respectively) — not merely assumed, as the first
+attempt's points had been.
+
+### Part 3: the second grasp+lift attempt — ground/pedestal collision is GONE, but no lift
+
+Re-ran `scripts/ar4_pedestal_grasp_confirm.py` with the corrected points.
+**The pedestal-collision failure signature is genuinely gone**: pinch-
+point discrepancy vs. FK prediction shrank from ~21mm to ~6-7mm, the
+closed-loop `settle_to_joint_pose` converges to sub-1° in most cases (a
+real, qualitative improvement), and there is no longer the earlier
+asymmetric one-jaw-frozen-the-other-growing force pattern characteristic
+of a floor/platform collision.
+
+**But all 3 points still fail to produce a real lift**, via a different
+mechanism: real contact force while nominally OPEN persists (51-57N at
+all 3 points), and — the decisive tell — contact force drops to EXACTLY
+0.000N the instant `PHASE4-LIFT-CLOSE` begins (within ~20 steps), at
+every point. The cube was never actually pinned between the jaws; it was
+nudged/contacted, not gripped. `both_jaws_contacted` is `True` (a
+transient contact was real) but `real_lift`/`held_through_retreat` are
+both `False`.
+
+This is not a new phenomenon — it matches this project's own already-
+documented 2026-07-27 "ar4-graspable-roll-constraint" and 2026-07-24
+"ar4-locked-achieved-orientation-grasp"/"ar4-jaw-bisector-hypothesis"
+findings: `ROLL_TOL_DEG=12°` bounds the jaw-slide axis's heading error but
+does not guarantee zero heading error, and even a heading offset well
+within that tolerance (this task's 3 points: 4.24-11.72° at GRASP_Q,
+comfortably under the 12° bar) can still produce real, but non-antipodal,
+contact that doesn't survive an actual close+lift — a genuinely different,
+already-flagged-but-not-yet-fixed constraint from the ground-clearance
+question this task was scoped to solve.
+
+### Honest verdict
+
+The SPECIFIC problem this task was dispatched to fix — a cube resting on
+the ground being geometrically ungraspable because the gripper's own
+finger length can't reach a ground-level grasp height without hitting the
+floor — is **genuinely solved and directly verified**: the corrected FK
+model confirms real, positive fingertip clearance above the pedestal top
+at every validation point, and the live grasp attempts show no trace of
+the ground/pedestal-collision force signature that characterized every
+prior attempt at this arm's true reachable configurations. This is real
+progress, not a null result.
+
+**The capstone grasp+lift is still not achieved.** The blocker has moved,
+not disappeared: real jaw-vs-cube contact from residual roll/heading
+misalignment prevents a genuinely antipodal grip, exactly matching this
+project's own prior, independent findings on that separate question. Per
+this task's own dispatch brief ("if it STILL fails... report honestly...
+would need its own root-cause, don't force a positive") — this is flagged
+back, not decided or fixed unilaterally, since tightening `ROLL_TOL_DEG`
+or otherwise redesigning the grasp-orientation search is outside this
+task's own bounded ground-clearance scope and would need its own
+grounding/validation.
+
+**Cost**: two on-demand `g2-standard-4`+`nvidia-l4` cloud dispatches
+(~44min and ~38min respectively, ≈$1.00 combined at the confirmed
+$0.361/hr SPOT rate's ~2x on-demand approximation), both individually torn
+down and confirmed clean via `scripts/check_cloud_state.sh`. Both runs hit
+this project's own documented Isaac-Sim Kit-shutdown-teardown hang (0%
+GPU utilization, CPU pinned, log stale, the script's own real work already
+complete and logged) — recovered via the established `kill -TERM` pattern
+both times, confirmed via direct `nvidia-smi`/log inspection (not just
+"stopped responding") before killing each time. All FK sweeps (workspace
+re-derivation, point selection, height probes) were Pi-local, pure-FK, no
+GPU/cloud cost.
+
+**Sources**: this task's own live runs —
+`scripts/_ar4_pedestal_select_grasp_points.py` (point selection, both
+rounds), `scripts/ar4_pedestal_grasp_confirm.py` (both grasp+lift
+attempts), `scripts/_cloud_ar4_pedestal_grasp_confirm.sh` (cloud dispatch
+payload); `scripts/ar4_graspable_workspace.py`'s own
+`PEDESTAL_HEIGHT_M`/`_evaluate`/`GROUND_CLEARANCE_MIN_M`-section comment
+(the fix, with full derivation); `tasks/ar4/objects_cfg.py`'s
+`PEDESTAL_CFG`/`make_pedestal_cfg`; `tasks/franka/dice_scene_cfg.py`'s
+`table`/`_notch_fixture_cfg` (the static-prop precedent reused); this
+article's own 2026-07-28 "ar4-joint2-ground-clearance-fix task" UPDATE
+immediately above (the empty-workspace finding this task fixes) and
+2026-07-27 "ar4-graspable-roll-constraint"/2026-07-24 "ar4-locked-
+achieved-orientation-grasp" UPDATEs (the roll/heading-contact issue this
+task's own new failure mode matches, not re-derived here).

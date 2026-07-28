@@ -641,10 +641,68 @@ Roughly in the order they'd likely be picked up:
    `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s 2026-07-27
    UPDATE.
 
+   **UPDATE (2026-07-28): the follow-on ground-plane-collision finding
+   (below, joint2-ground-clearance-fix task) and its own follow-on pedestal
+   fix (see "Recently landed" above) ARE that concrete next step, already
+   acted on** — the cube was raised onto a 40mm pedestal exactly as that
+   task's own "concrete implication" flagged, the workspace re-derived
+   (twice, after finding and fixing a real bug in the first re-derivation),
+   and a live grasp+lift re-attempted twice. The ground-collision blocker
+   is now closed and verified; the remaining blocker is the
+   roll/heading-residual-contact question (already independently documented
+   below, 2026-07-27 "ar4-graspable-roll-constraint" and 2026-07-24
+   "ar4-locked-achieved-orientation-grasp" UPDATEs) — see "Recently landed"
+   for the full current-state writeup.
+
 See `BACKLOG.md` for further-out candidates not yet on this list.
 
 ## Recently landed
 
+- **AR4 pedestal fix: the ground-collision problem is genuinely SOLVED and
+  verified — but a different, already-documented issue (jaw-vs-cube
+  roll/heading contact) still blocks a real grasp+lift** (2026-07-28,
+  direct continuation of the joint2-ground-clearance-fix task below).
+  Added a static 40mm pedestal (`tasks/ar4/objects_cfg.py`'s
+  `PEDESTAL_CFG`/`make_pedestal_cfg`, a plain `AssetBaseCfg`+`CuboidCfg`
+  static collider) and raised the cube to rest on top of it
+  (`Ar4PickPlaceGraspGoalSceneCfg`) — mirrors real pick-and-place (object
+  on a raised surface, not the floor at the robot's own base). Re-derived
+  the graspable workspace at the pedestal-corrected height: genuinely
+  NON-EMPTY (30157 survivors), a dramatic reversal of the prior task's 0.
+  **First live grasp attempt at 3 new validation points still failed
+  identically to the pre-pedestal case** (sustained 30-60N contact while
+  nominally OPEN) — direct FK measurement found the real cause: the FK
+  sweep's height filter matched the *abstract* `_EE_OFFSET`-based pinch
+  point to the grasp height, not the *real* fingertip (18.475mm further
+  down) — a fixed, pedestal-height-independent ~15mm offset that simply
+  moved the same collision from the ground onto the pedestal's own new top
+  surface. Fixed `ar4_graspable_workspace.py` to target the real fingertip
+  height directly; re-swept (still robust, 23560 survivors) and got 3
+  freshly-corrected points with **verified positive** real fingertip
+  clearance above the pedestal top (9.8-10.5mm, not merely assumed).
+  **Second live grasp attempt at the corrected points: the ground/pedestal-
+  collision failure signature is GONE** (no more asymmetric force pattern,
+  pinch-point discrepancy shrank from ~21mm to ~6mm, closed-loop settle
+  converges to <1° in most cases) — **but all 3 points still fail to
+  achieve a real lift**: real contact force (51-57N) while nominally OPEN
+  persists, and contact drops to exactly 0N the instant LIFT-CLOSE begins
+  (the cube was never actually pinned, just nudged). This matches this
+  project's own already-documented 2026-07-24 "roll/heading residual
+  contact" finding (`ROLL_TOL_DEG=12°` bounds heading but doesn't
+  guarantee a genuinely antipodal grip) rather than a new problem — a
+  separate, pre-existing blocker this task's own scope (the ground-
+  clearance fix) was not tasked to solve. **Honest verdict: the specific
+  ground-collision blocker this task targeted is closed and verified; the
+  capstone grasp+lift is still not achieved, blocked on the roll/heading-
+  residual-contact question instead.** Both cloud runs' teardown hung in
+  Isaac Sim's own documented Kit-shutdown-teardown pattern (0% GPU, log
+  stale, real work already complete and logged) — recovered via the
+  established `kill -TERM` pattern both times, confirmed via direct
+  `nvidia-smi`/log inspection before killing. Combined cloud cost ≈$1,
+  both runs individually torn down and confirmed clean via
+  `scripts/check_cloud_state.sh`. `kb/wiki/concepts/
+  ar4-vs-franka-root-cause-comparison.md`'s 2026-07-28
+  "ar4-pedestal-ground-clearance-fix task" UPDATE.
 - **AR4 joint_2 ~59° wall root-caused: NOT a joint-limit bug — a real
   ground-plane collision the FK workspace tool never modeled, and the
   corrected workspace is genuinely EMPTY at the current grasp height**

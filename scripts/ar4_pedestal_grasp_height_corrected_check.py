@@ -413,6 +413,23 @@ def main() -> None:
                 f"(cube half-size={CUBE_HALF_SIZE_M * 1000:.1f}mm - offset should be well under this for the cube "
                 "to sit BETWEEN the jaws, not beside/outside them)"
             )
+            # RAW joint-level diagnostic (2026-07-28, added after two runs at
+            # this corrected height showed jaw_separation frozen at 28.07-
+            # 28.08mm through CLOSE even with gripper effort_limit boosted to
+            # 100N, well above the observed ~55-60N contact force - ruling out
+            # "insufficient actuator force" as the cause. Prints the RAW
+            # commanded target vs the ACTUAL low-level joint_pos for both
+            # gripper joints directly, to distinguish "command never reaches
+            # the joint" (a real wiring bug) from "joint reads near its
+            # target but the WORLD-frame body positions used above don't
+            # reflect it" (a body-position/FK-reporting bug instead).
+            gripper_joint_pos = robot.data.joint_pos[0, gripper_cfg.joint_ids].cpu().tolist()
+            gripper_joint_pos_target = robot.data.joint_pos_target[0, gripper_cfg.joint_ids].cpu().tolist()
+            print(
+                f"[RAW-JOINT @ {label}] gripper joint_pos={['%.5f' % v for v in gripper_joint_pos]} "
+                f"joint_pos_target={['%.5f' % v for v in gripper_joint_pos_target]} "
+                f"(joint_names={GRIPPER_JOINT_NAMES}, OPEN=0.014 CLOSED=0.0)"
+            )
 
         def _settle_tracked(desired_q, gripper_expr, label, snapshot_name=None, capture=True):
             def on_step(outer, i):

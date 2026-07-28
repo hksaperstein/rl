@@ -4032,3 +4032,95 @@ stall), raw logs retained locally at
 `docs/cloud/dispatch-checklist.md`); this article's own 2026-07-22/23/24
 UPDATEs above for the joint_3/reachability-envelope history this task's
 Stage 1 directly responds to.
+
+## UPDATE 2026-07-27 (ar4-graspable-roll-constraint task): fixing the diagnosed gap — constrain gripper roll/heading, re-sweep, re-confirm
+
+Direct continuation of the "ar4-graspable-workspace-from-fk task" UPDATE
+immediately above, which left one concrete, already-root-caused gap open:
+the Stage 1 filter constrained the gripper's approach-axis TILT from
+vertical (≤12°) but never constrained its ROLL (heading about that same
+vertical axis) — so the FK-sampled configs reached the right position
+pointing straight down, but the jaw-slide axis could point at ANY in-plane
+heading, and the live confirmation found the gripper body colliding with
+the cube at 52-61N even while nominally OPEN as a direct result.
+
+**The fix (`scripts/ar4_graspable_workspace.py`).** Added
+`ROLL_TOL_DEG = 12.0` and a new derived quantity,
+`_jaw_heading_offset_deg`: the gripper's jaw-slide axis is link_6's local
++X (same convention `scripts/grasp_demo_v2.py`'s own canonical orientation
+already uses — that script's `_CANONICAL_X_AXIS_W = (0, 1, 0)` IS this
+exact axis, just for its own fixed pose). Converting local +X to world
+frame (via the same pure-180°-about-Z base→world rotation already used
+for positions — valid for free vectors too, no translation component) and
+taking its horizontal (x, y) heading, the constraint checks how far that
+heading is from being parallel to EITHER world X or world Y — the only
+two headings that let a flat-jaw gripper straddle a face of the scene's
+axis-aligned, non-rotated cube (`tasks/ar4/objects_cfg.py`'s `CUBE_CFG`)
+without clipping a corner (heading and heading+180° are physically the
+same jaw orientation, and X/Y-face grasps are equally valid on a square
+cube, so the true period is 90°, not 360°). **Sanity-checked before
+trusting it**: `_sanity_check_roll_criterion` confirms the criterion
+ACCEPTS `grasp_demo_v2.py`'s own known-good world-frame jaw axis `(0, 1,
+0)` (offset 0.0000°) and REJECTS the worst-case 45°-diagonal heading
+`(1, 1)` (offset exactly 45.0000°, i.e. definitely outside the 12°
+tolerance) — both asserted, not just printed.
+
+**A real correctness subtlety caught before it became a silent bug**: roll
+is NOT joint_1-invariant the way height/tilt/joint-2-6-margins are. The
+existing Stage A/B split exploits that joint_1 (a pure rotation about the
+vertical axis, at the base of the chain) can't change a point's height or
+a vector's angle FROM vertical — but it clearly CAN change a vector's
+world-frame HEADING (the same reason Stage B sweeps joint_1 to map
+bearing at all). Filtering roll at Stage A's joint_1=0 would have
+silently discarded Stage-A survivors whose roll only becomes acceptable
+at some OTHER joint_1 value. Roll is therefore filtered only in Stage B,
+using the actual swept joint_1 per step (recomputed via the same full
+6-joint FK Stage B already does for exactly this class of joint_1-
+dependent quantity) — Stage A's own height/tilt/margin mask is
+unchanged.
+
+**Re-swept, and the result is a clean geometric confirmation the
+constraint is doing real work, not just filtering noise.** Same 8M-sample
+Stage-A sweep (998 survivors, identical to before — Stage A is untouched
+by the roll change) × 145-step joint_1 Stage-B sweep (144,710 total
+samples): **38,521 final survivors (26.6%)** — matching almost exactly
+the geometric prediction for a 12°-tolerance/90°-periodic acceptance
+window (4 × 24° / 360° = 26.7%), a strong internal-consistency signal the
+math is right, not merely permissive-looking. The visualization
+(`outputs/ar4_graspable_workspace/graspable_workspace.png`, regenerated)
+now shows the annulus as a visibly BANDED/dotted ring (four acceptance
+bands per revolution) instead of the prior solid ring — roll rejection is
+visibly, not just numerically, restructuring the workspace.
+
+**New recommended point: same Stage-A survivor as before (identical
+joint_2-6), different joint_1/bearing to also satisfy roll.** World
+`(-0.0238, 0.3436)`, radius 0.3445m (unchanged — joint_2-6 fixed),
+bearing 94.0° (vs. the prior roll-unconstrained 109.1° — now much closer
+to the scene's own bearing=90° "straight ahead" convention, since roll
+happened to prefer a joint_1 nearer that heading this time), height error
++1.51mm, tilt 2.91°, min joint margin 27.68° (identical to before — roll
+doesn't touch this), **jaw-slide-axis roll/heading offset 10.08°** (within
+the new 12° tolerance — genuinely constrained now, not arbitrary).
+PREGRASP hover config re-derived via the same local-Gaussian-
+perturbation-search method as the original (`scripts/_ar4_pregrasp_search_roll_constrained.py`,
+now also filtered by the same roll criterion): lands 1.7mm from the same
+(x,y), tilt 0.91°, roll offset 3.98°, min margin 24.12°.
+
+**Two additional, genuinely distinct validation points** (different
+Stage-A survivors — different joint_2-6, not just a different joint_1
+sweep of the same one) chosen to test whether the fix generalizes across
+the region rather than being one lucky point: `P1` world `(-0.1123,
+0.3352)`, bearing 108.5°, tilt 5.15°, roll offset 1.06° (very well
+margined on roll specifically), min margin 27.65°; `P2` world `(-0.0508,
+0.3635)`, bearing 98.0°, tilt 6.91°, roll offset 10.83°, min margin
+27.47°. Both re-derived their own PREGRASP configs via the same search
+method.
+
+### Live confirmation (cloud GPU)
+
+TODO — cloud confirmation run in progress at time of writing; this
+section will be filled in with the real numeric result (open-gripper
+contact force before vs. after the fix, close-phase contact force on
+both jaws, real height gain, retreat-hold behavior, across all 3
+validation points) once the run completes. Not leaving this as a
+standing TODO — will be replaced before this task's own commit.

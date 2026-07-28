@@ -98,11 +98,54 @@ import torch  # noqa: E402
 
 from isaaclab.envs import ManagerBasedEnv  # noqa: E402
 from isaaclab.managers import SceneEntityCfg  # noqa: E402
+from isaaclab.utils.math import create_rotation_matrix_from_view, quat_from_matrix  # noqa: E402
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # noqa: E402
 
 from tasks.ar4.grasp_verify_env_cfg import Ar4GraspVerifyEnvCfg  # noqa: E402
 from tasks.ar4.robot_cfg import ARM_JOINT_NAMES, GRIPPER_JOINT_NAMES  # noqa: E402
+
+
+def _lookat_quat_opengl(eye, target):
+    """OpenGL look-at convention (forward=-Z, up=+Y) - duplicated verbatim
+    from scripts/grasp_demo_v2.py's own helper of the same name (that
+    script has its own AppLauncher/Isaac-Sim import-time side effects, so
+    it isn't importable here - same reasoning scripts/ar4_graspable_workspace.py
+    already documents for its own small constant duplications)."""
+    import numpy as np
+
+    eyes = torch.tensor([eye])
+    targets = torch.tensor([target])
+    rot_mat = create_rotation_matrix_from_view(eyes, targets, up_axis="Z")
+    return tuple(quat_from_matrix(rot_mat)[0].tolist())
+
+
+def _compute_elbow_context_camera(elbow_pos, jaw1_pos, jaw2_pos, cube_pos, standoff_scale=0.9, standoff_min=0.30, z_lift=0.18):
+    """Duplicated verbatim from scripts/grasp_demo_v2.py's own function of
+    the same name (2026-07-24, ar4-axis-align-ik task) - given LIVE-MEASURED
+    (never guessed) link_3 (elbow)/jaw1/jaw2/cube world positions, returns
+    (eye, target) for a WIDE camera keeping elbow, forearm, wrist, and
+    gripper/cube all visible together. Reused here (2026-07-27,
+    ar4-graspable-roll-constraint task) per this task's own explicit
+    requirement for an "elbow-inclusive camera framing so the whole grasp
+    is visible" - this repo's standing named camera for exactly that."""
+    import numpy as np
+
+    elbow = np.asarray(elbow_pos, dtype=float)
+    jaw1 = np.asarray(jaw1_pos, dtype=float)
+    jaw2 = np.asarray(jaw2_pos, dtype=float)
+    cube = np.asarray(cube_pos, dtype=float)
+    jaw_mid = (jaw1 + jaw2) / 2.0
+    gripper_point = (jaw_mid + cube) / 2.0
+    target = (elbow + gripper_point) / 2.0
+
+    span = float(np.linalg.norm(gripper_point - elbow))
+    standoff = max(standoff_min, standoff_scale * span)
+
+    eye = target.copy()
+    eye[0] += standoff
+    eye[2] += z_lift
+    return tuple(eye.tolist()), tuple(target.tolist()), span, standoff
 
 LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs")
 _video_suffix = f"_{args_cli.video_suffix}" if args_cli.video_suffix else ""
@@ -172,6 +215,14 @@ def main() -> None:
     gripper_joint_ids, gripper_joint_names_found = robot.find_joints(GRIPPER_JOINT_NAMES)
     print(f"[INFO] Gripper joint ids resolved: {gripper_joint_names_found} -> {gripper_joint_ids}")
 
+    # 2026-07-27 (ar4-graspable-roll-constraint task): resolve link_3
+    # (elbow) + gripper jaw body ids for the elbow-context camera below -
+    # same bodies scripts/grasp_demo_v2.py's own --elbow-camera resolves.
+    elbow_body_ids, elbow_body_names_found = robot.find_bodies(["link_3"])
+    print(f"[INFO] Elbow (link_3) body id resolved: {elbow_body_names_found} -> {elbow_body_ids}")
+    gripper_jaw_body_ids, gripper_jaw_body_names_found = robot.find_bodies(["gripper_jaw1_link", "gripper_jaw2_link"])
+    print(f"[INFO] Gripper jaw body ids resolved: {gripper_jaw_body_names_found} -> {gripper_jaw_body_ids}")
+
     def _print_gripper_state(label: str) -> None:
         live_gripper_q = robot.data.joint_pos[0, gripper_joint_ids].tolist()
         print(f"  [GRIPPER-CHECK] {label}: actual joint_pos {gripper_joint_names_found}={['%.5f' % v for v in live_gripper_q]}")
@@ -182,6 +233,18 @@ def main() -> None:
     demo_video_path = VIDEO_PATH.replace(".mp4", "_demo_camera.mp4")
     demo_video_writer = imageio.get_writer(demo_video_path, fps=int(1.0 / env.step_dt), codec="libx264")
     demo_camera = env.scene["demo_camera"]
+    # 2026-07-27 (ar4-graspable-roll-constraint task): THIRD video output -
+    # elbow-inclusive framing (this task's own explicit requirement: "so
+    # the whole grasp is visible"), reusing grasp_verify_env_cfg.py's
+    # already-defined elbow_context_camera (placeholder pose, repositioned
+    # below from a LIVE measurement once the arm settles at GRASP_Q - same
+    # pattern grasp_demo_v2.py's own --elbow-camera uses, per the
+    # isaac-sim-video-capture skill's "measure the real subject, don't
+    # guess coordinates" rule).
+    elbow_video_path = VIDEO_PATH.replace(".mp4", "_elbow_context.mp4")
+    elbow_video_writer = imageio.get_writer(elbow_video_path, fps=int(1.0 / env.step_dt), codec="libx264")
+    elbow_camera = env.scene["elbow_context_camera"]
+    elbow_camera_positioned = False
 
     with torch.inference_mode():
         env.reset()
@@ -235,6 +298,42 @@ def main() -> None:
                 demo_rgb = demo_camera.data.output["rgb"][0].cpu().numpy()
                 demo_video_writer.append_data(demo_rgb[:, :, :3].astype("uint8"))
 
+                # Reposition the elbow-context camera ONCE, right after the
+                # arm has settled at GRASP_Q (end of PHASE 2, the last step
+                # before CLOSE is commanded) - a live measurement of the
+                # ACTUAL settled pose, not a pre-computed guess, per the
+                # isaac-sim-video-capture skill. From this point on
+                # (CLOSE/LIFT/HOLD/RETREAT - the actual grasp being
+                # confirmed), every frame is recorded to elbow_video_writer.
+                if phase_idx == 2 and i == duration - 1:
+                    elbow_pos_w_for_cam = robot.data.body_pos_w[0, elbow_body_ids].cpu().tolist()[0]
+                    jaw_pos_w_for_cam = robot.data.body_pos_w[0, gripper_jaw_body_ids].cpu().tolist()
+                    cube_pos_for_cam = cube.data.root_pos_w[0].cpu().tolist()
+                    elbow_eye, elbow_target, elbow_span, elbow_standoff = _compute_elbow_context_camera(
+                        elbow_pos_w_for_cam, jaw_pos_w_for_cam[0], jaw_pos_w_for_cam[1], cube_pos_for_cam,
+                    )
+                    print(
+                        f"[ELBOW-CONTEXT CAMERA] elbow_world(link_3)={['%.5f' % v for v in elbow_pos_w_for_cam]} "
+                        f"jaw1_world={['%.5f' % v for v in jaw_pos_w_for_cam[0]]} "
+                        f"jaw2_world={['%.5f' % v for v in jaw_pos_w_for_cam[1]]} "
+                        f"cube_world={['%.5f' % v for v in cube_pos_for_cam]} elbow_to_gripper_span={elbow_span:.4f}m "
+                        f"standoff={elbow_standoff:.4f}m -> EYE={['%.5f' % v for v in elbow_eye]} TARGET={['%.5f' % v for v in elbow_target]}"
+                    )
+                    elbow_quat = _lookat_quat_opengl(elbow_eye, elbow_target)
+                    elbow_eye_t = torch.tensor([elbow_eye], device=env.device)
+                    elbow_quat_t = torch.tensor([elbow_quat], device=env.device)
+                    elbow_camera.set_world_poses(positions=elbow_eye_t, orientations=elbow_quat_t, convention="opengl")
+                    elbow_camera_positioned = True
+                    # NOTE: do NOT append a frame this exact step - the
+                    # camera's cached RGB output was rendered BEFORE this
+                    # reposition took effect (set_world_poses only updates
+                    # the buffer; it doesn't force a synchronous re-render),
+                    # so reading it now would write one stale/placeholder
+                    # frame. Start appending from the NEXT step onward.
+                elif elbow_camera_positioned:
+                    elbow_rgb = elbow_camera.data.output["rgb"][0].cpu().numpy()
+                    elbow_video_writer.append_data(elbow_rgb[:, :, :3].astype("uint8"))
+
                 if i == duration // 2:
                     _print_gripper_state(f"PHASE {phase_idx} MIDPOINT (step {i})")
 
@@ -259,6 +358,8 @@ def main() -> None:
 
         video_writer.close()
         demo_video_writer.close()
+        elbow_video_writer.close()
+        print(f"[INFO] elbow-context video written to: {elbow_video_path} (camera positioned: {elbow_camera_positioned})")
 
         print("\n" + "=" * 70)
         print("SUMMARY")

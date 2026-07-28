@@ -27,6 +27,25 @@ direction, not a scoped backlog.
 
 Roughly in the order they'd likely be picked up:
 
+0. **ROS2 + MoveIt pivot for AR4 grasping — direct user decision, BLOCKED
+   2026-07-28 on desktop unreachability, needs a Principal call on how to
+   proceed.** The user has directed (twice) moving off this project's own
+   hand-rolled Isaac Sim IK/control approach — whose remaining blocker is a
+   root-caused descent-path collision plus a brittle grasp sequence (see
+   "Recently landed" below) — onto the AR4 vendor's own ROS2 + MoveIt stack
+   (`~/projects/annin_ws` on the desktop), whose collision-aware planning is
+   exactly the missing mechanism. A dispatched task to assess reachability
+   and, if feasible, demonstrate a MoveIt pick found the desktop (`saps@
+   home.local`) unreachable by multiple independent methods (SSH, mDNS,
+   `check_desktop_gpu.sh`, a full subnet scan with per-host SSH-key checks)
+   — the same failure signature already seen once earlier the same day.
+   Since the vendor stack only exists on the desktop (not cloud) and a
+   from-scratch cloud ROS2/MoveIt2/Gazebo build-out is a large, unbounded
+   new-toolchain effort, no MoveIt work was attempted; this is flagged back
+   for Principal to decide: wait/retry once the desktop is reachable again,
+   or explicitly commit to the from-scratch cloud path. Full detail:
+   `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s 2026-07-28
+   (later, ar4-moveit-pivot task) UPDATE.
 1. **Target-selection-clutter E2** (3→4 distractors) — the next
    separately-gated stage after Stage E1's clean pass (2026-07-21); not
    auto-started by E1.

@@ -5456,3 +5456,90 @@ height-at-top-not-center diagnosis this task's fix directly addresses) and
 "ar4-pedestal-ground-clearance-fix"/"ar4-cartesian-fingertip-correction"
 UPDATEs (the `GRASP_AT_HEIGHT` convention and physics-tracking-residual
 findings this task's correction builds on directly).
+
+## UPDATE 2026-07-28 (later, ar4-moveit-pivot task): strategic pivot to ROS2+MoveIt directed by the user — BLOCKED before any MoveIt work could start, because the desktop hosting the vendor stack is unreachable, same failure mode already seen twice earlier this same day
+
+Direct user decision (stated twice) to stop iterating on this project's own
+hand-rolled Isaac Sim IK/control approach — whose remaining blocker, per
+the two UPDATEs immediately above, is a descent-path collision plus a
+brittle grasp sequence — and instead use the AR4 vendor's own ROS2 + MoveIt
+stack (`~/projects/annin_ws` on the desktop,
+`AR4_DESCRIPTION_PATH=/home/saps/projects/annin_ws/src/ar4_ros_driver/annin_ar4_description`),
+whose collision-aware motion planning is exactly the class of mechanism
+this project's own hand-rolled approach lacks. This task's own dispatch
+brief was explicit that reachability must be checked FIRST, before any
+heavy work, precisely because the vendor stack only exists on the desktop
+(not cloud) and standing up ROS2 Humble + MoveIt2 + Gazebo + the AR4
+packages from scratch on a cloud instance would be a large, unbounded
+effort not to be undertaken without checking in first.
+
+**Reachability check: desktop confirmed UNREACHABLE, by multiple
+independent methods, not just a single flaky check:**
+
+1. `ssh desktop` / `ssh saps@home.local` — `Could not resolve hostname
+   home.local: Name or service not known`, both on first attempt and on a
+   deliberate retry.
+2. `avahi-resolve -n home.local` — `Failed to resolve host name
+   'home.local': Timeout reached`, both on first attempt and retry.
+3. `scripts/check_desktop_gpu.sh` — returned `UNKNOWN` (its own defined
+   fail-safe state per this repo's dispatch-routing convention) on the
+   first call (`curl` DNS resolution timeout), and the retry exceeded even
+   a 10-second outer timeout without resolving.
+4. A full `/24` subnet ping sweep (`192.168.0.2`-`192.168.0.254`, the
+   Pi's own subnet on both `eth0`/`wlan0`) found 7 live hosts total,
+   2 of which are the Pi itself (`.19` eth0, `.22` wlan0, confirmed via
+   `avahi-resolve -n agent.local` → `.22`). Of the remaining 5
+   (`.21`/`.23`/`.106`/`.143`/`.49`), an SSH attempt with the actual
+   `~/.ssh/id_ed25519_desktop` key against each found: 4 refused the TCP
+   connection outright (port 22 closed/no sshd), and the 5th (`.49`)
+   accepted the TCP connection but rejected the key
+   (`Permission denied (publickey)`) — and `avahi-browse -a` independently
+   identifies `.49`'s MAC (`88:a2:9e:8b:0f:e7`) as a device advertising
+   itself as `ender3` (a 3D printer, not the desktop). **No host on the
+   subnet matches the desktop.**
+
+This is the same failure signature (`home.local` mDNS timeout + full
+subnet scan/SSH-key check finding no matching host) already independently
+recorded in the "ar4-pedestal-grasp-trivial-check" UPDATE above, from
+earlier the SAME day (2026-07-28) — i.e. this is not a one-off transient
+blip newly discovered by this task, but a now twice-confirmed, currently
+persistent unreachability of the desktop for the whole day so far.
+
+**Per this task's own explicit dispatch instruction, this is where the
+task stops rather than proceeding to build a from-scratch cloud ROS2+
+MoveIt2+Gazebo stack** — that is a genuinely large, open-ended effort
+(a new toolchain this project has never stood up before, on
+infrastructure — cloud — this task's own brief specifically flagged as
+inappropriate to improvise onto without checking in first) and is exactly
+the kind of unbounded new-direction commitment that belongs to Principal's
+own judgment, not a Senior's unilateral call, per this repo's
+Senior/Principal split. **No MoveIt work of any kind was attempted or
+started** — the vendor stack's actual build/package state in
+`~/projects/annin_ws` (colcon workspace status, ROS2 distro, whether
+`annin_ar4_moveit_config` exists and builds, whether a Gazebo/fake-
+controller demo is present) remains UNKNOWN, since it can only be
+inspected on the desktop itself.
+
+**Flagged decision for Principal:** how to proceed given the desktop is
+currently unreachable — (a) wait/retry later and re-attempt this same
+task once the desktop is back (cheapest, but open-ended on timing —
+this repo's own history shows desktop reachability has been intermittent
+across multiple sessions, not a single isolated incident), or (b)
+explicitly commit to the from-scratch cloud ROS2+MoveIt2+Gazebo build-out
+this task's brief flagged as out-of-scope to improvise unilaterally
+(bounded, but a real multi-hour-plus new-toolchain effort with its own
+failure modes, distinct from the AR4-cloud-container path already proven
+out for pure Isaac-Sim work). No cost incurred this task (no cloud
+dispatch was made — the blocker was found before any GPU-touching or
+cloud-provisioning step).
+
+**Sources:** this task's own live checks (`ssh`, `avahi-resolve`,
+`avahi-browse -a`, `scripts/check_desktop_gpu.sh`, a full subnet ping
+sweep with per-host SSH-key verification) — all read-only, no code
+changed, no experiment scripts written; this article's own 2026-07-28
+"ar4-pedestal-grasp-trivial-check" UPDATE above (the same-day prior
+desktop-unreachable finding this task's own check independently
+reproduces); `CLAUDE.md`'s "Pi-as-primary-agent GPU dispatch" section and
+`scripts/check_desktop_gpu.sh`/`scripts/run_on_desktop_gpu.sh` (the
+desktop-first-cloud-fallback routing policy and its documented UNKNOWN
+fail-safe behavior this task's checks followed).

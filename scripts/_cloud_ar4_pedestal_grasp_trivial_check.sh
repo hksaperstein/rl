@@ -149,11 +149,11 @@ echo "/workspace/rl/assets/ar4_mk5/ar4_mk5.usd" > "$HOME/rl/assets/ar4_mk5/usd_p
 step "[4/4] ar4_pedestal_grasp_trivial_check.py (single point, close-up+elbow video, realistic cube friction)"
 T4_START=$(date +%s)
 sudo docker run --rm --gpus all -e NVIDIA_DRIVER_CAPABILITIES=all --network host --entrypoint bash \
-  -e ACCEPT_EULA=Y -e OMNI_KIT_ACCEPT_EULA=YES -e PRIVACY_CONSENT=Y \
+  -e ACCEPT_EULA=Y -e OMNI_KIT_ACCEPT_EULA=YES -e PRIVACY_CONSENT=Y -e PYTHONUNBUFFERED=1 \
   -v "$HOME/rl:/workspace/rl" \
   -w /workspace/rl \
   "$IMAGE" \
-  -c "/workspace/isaaclab/isaaclab.sh -p scripts/ar4_pedestal_grasp_trivial_check.py --headless" \
+  -c "PYTHONUNBUFFERED=1 /workspace/isaaclab/isaaclab.sh -p scripts/ar4_pedestal_grasp_trivial_check.py --headless" \
   2>&1 | tee "$HOME/pedestal_grasp_trivial_check.log"
 check "${PIPESTATUS[0]}" "ar4_pedestal_grasp_trivial_check.py (containerized)"
 T4_END=$(date +%s)

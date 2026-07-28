@@ -117,6 +117,14 @@ STIFFNESS = 4000.0
 DAMPING = 200.0
 EFFORT_LIMIT = 20.0
 
+# Render throttle (2026-07-28, added after this script's first cloud run
+# took ~29min real time - confirmed via live nvidia-smi/CPU% inspection to
+# be genuinely rendering, not hung - because camera.update() was called for
+# BOTH cameras on EVERY physics step, only skipping the video WRITE, not
+# the render+GPU-readback itself). Only actually render/capture every
+# CAPTURE_EVERY_N-th step; forced snapshots always render regardless.
+CAPTURE_EVERY_N = 8
+
 VIDEO_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs", "videos", "ar4_pedestal_grasp_trivial_check")
 os.makedirs(VIDEO_DIR, exist_ok=True)
 
@@ -271,47 +279,64 @@ def main() -> None:
         robot.write_joint_damping_to_sim(torch.full((1, n_arm), DAMPING, device=env.device), joint_ids=arm_cfg.joint_ids)
         robot.write_joint_effort_limit_to_sim(torch.full((1, n_arm), EFFORT_LIMIT, device=env.device), joint_ids=arm_cfg.joint_ids)
 
-        # Cameras are repositioned ONCE, right here, before any phase runs -
-        # target = midpoint of jaw1/jaw2 (current, pre-approach) and the
-        # cube's own settled position, so the fixed camera frames the whole
-        # approach-close-lift sequence without needing per-step repositioning
-        # (same "compute once after the subject's rough location is known"
-        # convention as grasp_demo_v2.py).
-        jaw1_pos0 = robot.data.body_pos_w[0, jaw_body_ids[0]].cpu().tolist()
-        jaw2_pos0 = robot.data.body_pos_w[0, jaw_body_ids[1]].cpu().tolist()
-        cube_pos0 = cube.data.root_pos_w[0].cpu().tolist()
-        elbow_pos0 = robot.data.body_pos_w[0, elbow_body_id].cpu().tolist()
-
-        closeup_eye, closeup_target = _compute_closeup_camera(jaw1_pos0, jaw2_pos0, cube_pos0)
-        elbow_eye, elbow_target = _compute_elbow_context_camera(elbow_pos0, jaw1_pos0, jaw2_pos0, cube_pos0)
-        closeup_camera.set_world_poses(
-            positions=torch.tensor([closeup_eye], device=env.device),
-            orientations=torch.tensor([_lookat_quat_opengl(closeup_eye, closeup_target)], device=env.device),
-            convention="opengl",
-        )
-        elbow_camera.set_world_poses(
-            positions=torch.tensor([elbow_eye], device=env.device),
-            orientations=torch.tensor([_lookat_quat_opengl(elbow_eye, elbow_target)], device=env.device),
-            convention="opengl",
-        )
-        print(f"[CAMERA] closeup eye={closeup_eye} target={closeup_target}")
-        print(f"[CAMERA] elbow_context eye={elbow_eye} target={elbow_target}")
-
-        fps = max(1, int((1.0 / env.physics_dt) / 4))  # 4x speedup for a watchable, not enormous, file
+        fps = max(1, int((1.0 / env.physics_dt) / (4 * CAPTURE_EVERY_N)))
         closeup_writer = imageio.get_writer(os.path.join(VIDEO_DIR, "closeup.mp4"), fps=fps, codec="libx264")
         elbow_writer = imageio.get_writer(os.path.join(VIDEO_DIR, "elbow_context.mp4"), fps=fps, codec="libx264")
 
         frame_counter = {"n": 0}
+        cameras_positioned = {"done": False}
+
+        def _reposition_cameras():
+            # Repositioned ONCE, the FIRST time a frame is actually captured
+            # (i.e. after PHASE1-PREGRASP-OPEN-SETTLE has already moved the
+            # arm near the cube/pedestal - NOT at the HOME reset pose used
+            # by an earlier version of this script, which put the arm's own
+            # resting jaw position and the far-away cube position on
+            # opposite sides of a midpoint+offset computation and landed the
+            # closeup eye INSIDE a link's own mesh - confirmed live via a
+            # solid-blue-link-fills-the-frame snapshot, 2026-07-28 first
+            # cloud run of this exact script). Live-measured, not guessed,
+            # matching grasp_demo_v2.py's own "camera computed once after
+            # GRASP_Q is actually reached" convention.
+            jaw1_pos = robot.data.body_pos_w[0, jaw_body_ids[0]].cpu().tolist()
+            jaw2_pos = robot.data.body_pos_w[0, jaw_body_ids[1]].cpu().tolist()
+            cube_pos = cube.data.root_pos_w[0].cpu().tolist()
+            elbow_pos = robot.data.body_pos_w[0, elbow_body_id].cpu().tolist()
+            closeup_eye, closeup_target = _compute_closeup_camera(jaw1_pos, jaw2_pos, cube_pos)
+            elbow_eye, elbow_target = _compute_elbow_context_camera(elbow_pos, jaw1_pos, jaw2_pos, cube_pos)
+            closeup_camera.set_world_poses(
+                positions=torch.tensor([closeup_eye], device=env.device),
+                orientations=torch.tensor([_lookat_quat_opengl(closeup_eye, closeup_target)], device=env.device),
+                convention="opengl",
+            )
+            elbow_camera.set_world_poses(
+                positions=torch.tensor([elbow_eye], device=env.device),
+                orientations=torch.tensor([_lookat_quat_opengl(elbow_eye, elbow_target)], device=env.device),
+                convention="opengl",
+            )
+            print(f"[CAMERA] closeup eye={closeup_eye} target={closeup_target}")
+            print(f"[CAMERA] elbow_context eye={elbow_eye} target={elbow_target}")
+            cameras_positioned["done"] = True
 
         def _capture_frame(force_snapshot_name=None):
+            frame_counter["n"] += 1
+            # Render throttle (2026-07-28, second cloud run of this script):
+            # the first attempt called camera.update() - a real render+GPU
+            # readback for BOTH cameras - on EVERY physics step (only
+            # skipping the VIDEO WRITE, not the render itself), inflating a
+            # ~90-480-step phase into a ~29-minute run. Only actually render
+            # every CAPTURE_EVERY_N-th step (always render on a forced
+            # snapshot regardless of phase).
+            if force_snapshot_name is None and (frame_counter["n"] % CAPTURE_EVERY_N != 0):
+                return
+            if not cameras_positioned["done"]:
+                _reposition_cameras()
             closeup_camera.update(env.physics_dt, force_recompute=True)
             elbow_camera.update(env.physics_dt, force_recompute=True)
             closeup_rgb = closeup_camera.data.output["rgb"][0, ..., :3].cpu().numpy().astype("uint8")
             elbow_rgb = elbow_camera.data.output["rgb"][0, ..., :3].cpu().numpy().astype("uint8")
-            frame_counter["n"] += 1
-            if frame_counter["n"] % 4 == 0:  # match the 4x-speedup fps above
-                closeup_writer.append_data(closeup_rgb)
-                elbow_writer.append_data(elbow_rgb)
+            closeup_writer.append_data(closeup_rgb)
+            elbow_writer.append_data(elbow_rgb)
             if force_snapshot_name is not None:
                 imageio.imwrite(os.path.join(VIDEO_DIR, f"closeup_{force_snapshot_name}.png"), closeup_rgb)
                 imageio.imwrite(os.path.join(VIDEO_DIR, f"elbow_{force_snapshot_name}.png"), elbow_rgb)
@@ -358,10 +383,11 @@ def main() -> None:
                 "to sit BETWEEN the jaws, not beside/outside them)"
             )
 
-        def _settle_tracked(desired_q, gripper_expr, label, snapshot_name=None):
+        def _settle_tracked(desired_q, gripper_expr, label, snapshot_name=None, capture=True):
             def on_step(outer, i):
                 _track_forces(is_pre_close=True)
-                _capture_frame()
+                if capture:
+                    _capture_frame()
 
             gripper_target = [gripper_expr[n] for n in GRIPPER_JOINT_NAMES]
             result = settle_to_joint_pose(
@@ -371,7 +397,7 @@ def main() -> None:
                 gripper_joint_ids=gripper_cfg.joint_ids, gripper_target=gripper_target,
                 render=True, on_step=on_step, label=label,
             )
-            if snapshot_name is not None:
+            if snapshot_name is not None and capture:
                 _capture_frame(force_snapshot_name=snapshot_name)
             return result
 
@@ -395,12 +421,22 @@ def main() -> None:
 
         cube_z_by_phase = {}
         cube_z_by_phase["PHASE0-HOME-OPEN"] = cube.data.root_pos_w[0, 2].item()
-        _capture_frame(force_snapshot_name="phase0_home_open")
+        # No camera capture here - the arm is still at HOME, far from the
+        # cube/pedestal, and the closeup/elbow cameras haven't been
+        # positioned yet (see _reposition_cameras's own docstring for why
+        # positioning from a HOME-pose measurement was the exact bug found
+        # in this script's first cloud run).
 
-        pregrasp_result = _settle_tracked(pregrasp_q, GRIPPER_OPEN_EXPR, "PHASE1-PREGRASP-OPEN-SETTLE", snapshot_name="phase1_pregrasp_open")
+        pregrasp_result = _settle_tracked(pregrasp_q, GRIPPER_OPEN_EXPR, "PHASE1-PREGRASP-OPEN-SETTLE", capture=False)
         cube_z_by_phase["PHASE1-PREGRASP-OPEN"] = cube.data.root_pos_w[0, 2].item()
         corrected_pregrasp_target = [d + c for d, c in zip(pregrasp_q, pregrasp_result["correction"])]
         print(f"[INFO] PREGRASP settle: converged={pregrasp_result['converged']} iters={pregrasp_result['n_outer_iters']} max_err_deg={pregrasp_result['max_err_deg']:.4f}")
+
+        # The arm is now genuinely near the cube/pedestal (PREGRASP settled)
+        # - position the cameras from this live state, then take the
+        # PHASE1 snapshot for reference before continuing to PHASE2.
+        _reposition_cameras()
+        _capture_frame(force_snapshot_name="phase1_pregrasp_open")
 
         grasp_result = _settle_tracked(grasp_q, GRIPPER_OPEN_EXPR, "PHASE2-GRASP-OPEN-SETTLE", snapshot_name="phase2_grasp_open_descended")
         cube_z_by_phase["PHASE2-GRASP-OPEN"] = cube.data.root_pos_w[0, 2].item()

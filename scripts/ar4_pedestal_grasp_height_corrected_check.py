@@ -130,6 +130,33 @@ STIFFNESS = 4000.0
 DAMPING = 200.0
 EFFORT_LIMIT = 20.0
 
+# GRIPPER actuator gain boost (2026-07-28, ar4-pedestal-grasp-height-fix task,
+# added after this script's own FIRST cloud run at the corrected height: real
+# fingertip landed genuinely INSIDE the cube's vertical span (a real
+# improvement over the old top-face-jamming bug), but jaw_separation still
+# stayed frozen at 28.07mm through the entire CLOSE phase, with 48-79N of
+# jaw-cube contact force already present BEFORE the intentional close command
+# - the SAME magnitude range documented at EVERY OTHER validation point ever
+# tested in this whole investigation (48.29N, 66.65N, 79.17N - see
+# kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md's matching
+# UPDATEs). tasks/ar4/robot_cfg.py's gripper ImplicitActuatorCfg has ALWAYS
+# used effort_limit_sim=20.0 (Newtons, since gripper_jaw[12]_joint are
+# prismatic) unboosted in every grasp script in this investigation - genuinely
+# less than the observed 48-79N contact resistance range, so the position
+# controller is force-capped and CANNOT physically push the jaw further once
+# real resistance appears, independent of the commanded target - this is the
+# same "implicit actuator PD droops under real load" mechanism this repo
+# already diagnosed and fixed for the ARM (STIFFNESS/DAMPING/EFFORT_LIMIT
+# above), just never applied to the GRIPPER before (every prior close-success
+# precedent, e.g. scripts/_record_jaw_fix_open_close_cycle.py, only ever
+# demonstrated closing with NO object in the way - zero resistance - so this
+# gap was never stress-tested). Boosted here by direct analogy, not a new
+# mechanism: same fix, same actuator-cfg pattern, applied to the other set of
+# joints on the same robot.
+GRIPPER_STIFFNESS = 4000.0
+GRIPPER_DAMPING = 200.0
+GRIPPER_EFFORT_LIMIT = 100.0  # comfortably above the observed 48-79N range
+
 # Render throttle (see ar4_pedestal_grasp_trivial_check.py's own comment for
 # the full story - camera.update() for both cameras on every physics step
 # inflates run time ~15x even though the render itself is real work, not a
@@ -289,6 +316,15 @@ def main() -> None:
         robot.write_joint_stiffness_to_sim(torch.full((1, n_arm), STIFFNESS, device=env.device), joint_ids=arm_cfg.joint_ids)
         robot.write_joint_damping_to_sim(torch.full((1, n_arm), DAMPING, device=env.device), joint_ids=arm_cfg.joint_ids)
         robot.write_joint_effort_limit_to_sim(torch.full((1, n_arm), EFFORT_LIMIT, device=env.device), joint_ids=arm_cfg.joint_ids)
+
+        # GRIPPER gain boost (2026-07-28, see GRIPPER_EFFORT_LIMIT's own
+        # comment above for full rationale) - same write pattern as the arm
+        # above, applied to gripper_cfg.joint_ids instead.
+        n_gripper = len(gripper_cfg.joint_ids)
+        robot.write_joint_stiffness_to_sim(torch.full((1, n_gripper), GRIPPER_STIFFNESS, device=env.device), joint_ids=gripper_cfg.joint_ids)
+        robot.write_joint_damping_to_sim(torch.full((1, n_gripper), GRIPPER_DAMPING, device=env.device), joint_ids=gripper_cfg.joint_ids)
+        robot.write_joint_effort_limit_to_sim(torch.full((1, n_gripper), GRIPPER_EFFORT_LIMIT, device=env.device), joint_ids=gripper_cfg.joint_ids)
+        print(f"[INFO] Gripper actuator gains boosted: stiffness={GRIPPER_STIFFNESS} damping={GRIPPER_DAMPING} effort_limit={GRIPPER_EFFORT_LIMIT}N (was 1000/50/20N, tasks/ar4/robot_cfg.py default)")
 
         fps = max(1, int((1.0 / env.physics_dt) / (4 * CAPTURE_EVERY_N)))
         closeup_writer = imageio.get_writer(os.path.join(VIDEO_DIR, "closeup.mp4"), fps=fps, codec="libx264")

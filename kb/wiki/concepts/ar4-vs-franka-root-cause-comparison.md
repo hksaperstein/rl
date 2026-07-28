@@ -4568,3 +4568,204 @@ task" UPDATE (the tracking-gap quantification this task closes) and
 "ar4-graspable-roll-constraint task" UPDATE (the P0/P1/P2 points and
 cube-present force baselines this task's own numbers are compared
 against).
+
+## UPDATE 2026-07-28 (ar4-joint2-ground-clearance-fix task): the ~59° joint_2 wall is NOT a joint-limit bug — direct USD readback confirms the authored limit matches vendor spec exactly; the real mechanism is a GROUND-PLANE COLLISION the FK workspace tool never modeled, and the corrected workspace is genuinely EMPTY at the current grasp height
+
+Direct continuation of the 2026-07-28 "ar4-joint-tracking-closed-loop-fix
+task" UPDATE immediately above, which left one concrete, well-evidenced
+next step open: directly read joint_2's real baked-in USD limit (rather
+than continuing to infer it from torque/convergence data) and correct
+`scripts/ar4_graspable_workspace.py`'s `JOINT_LIMITS_DEG["joint_2"]` if it
+disagrees.
+
+### Part 1: direct USD readback — three consecutive cloud stalls, then a working lightweight bootstrap, then a units bug, then the real answer
+
+Every full-`ManagerBasedRLEnv`-construction dispatch
+(`scripts/_diag_ar4_joint2_limit_root_cause.py`, combining a raw
+pxr/UsdPhysics prim read with Isaac Lab's own `robot.data.joint_pos_limits`
+readback) hit the exact documented "CPU pinned ~106-113%, GPU 0%
+utilization, log stale" cold-start stall THREE consecutive times — always
+before printing even its own first diagnostic line, confirmed live via a
+separate `gcloud compute ssh` each time before `kill -TERM`-recovering (per
+the established safe pattern) and redispatching. This is now a
+4th-and-5th occurrence of this project's own previously-documented,
+still-unexplained recurring infra risk on `nvcr.io/nvidia/isaac-lab:2.3.1`
++ `g2-standard-4`/`nvidia-l4` — worth escalating as a real, recurring cost
+(this task alone burned ~3 full docker-pull-plus-GCS-download cycles, each
+~4-5 minutes, before getting any data at all from this specific code path).
+
+**Working around it**: switched to a much lighter bootstrap
+(`scripts/_diag_ar4_joint2_limit_raw_usd_only.py`, using
+`isaacsim.SimulationApp` directly with NO `ManagerBasedRLEnv`/articulation
+construction — the same pattern `scripts/_inspect_jaw_axis_math.py`
+already used successfully for the gripper joints in the 2026-07-21/23
+sessions). This ran cleanly start-to-finish in ~35 seconds of real compute
+— strong evidence the stall is specifically in
+`ManagerBasedRLEnv`/articulation-view construction (contact sensors and/or
+the full task cfg's other scene entities), not in Isaac Sim's own app
+launch or in this task's own diagnostic logic.
+
+**A second, distinct bug then hid the result even after the lightweight
+script ran successfully**: the first lightweight run completed cleanly
+(exit 0, 35s) but printed ZERO of its own diagnostic output — jumped
+straight from Kit's "Simulation App Startup Complete" to "Simulation App
+Shutting Down" with no gap. Root cause: missing `PYTHONUNBUFFERED=1` in
+the `docker run` invocation — Python's stdout is fully (not line-)
+buffered when piped through `tee` (non-TTY), and `simulation_app.close()`
+apparently short-circuits the normal interpreter shutdown/atexit flush
+path in this Isaac Sim build. Fixed by adding `-e PYTHONUNBUFFERED=1` to
+the container env AND to the exec'd command, plus (belt-and-suspenders,
+since this exact "output silently lost" failure mode is now confirmed real
+rather than theoretical) an explicit unbuffered result file the wrapper
+script cats and GCS-syncs independently of stdout capture.
+
+**Retried, got real data — but it was initially wrong by a units bug of my
+own**: `physics:lowerLimit`/`physics:upperLimit` on a `UsdPhysics`
+revolute joint are stored directly in **degrees**, not radians (a real USD
+Physics schema convention this diagnostic script didn't initially account
+for) — the first successful printout showed wildly implausible values
+(e.g. joint_2 upper limit "5156.620deg") because the script called
+`math.degrees()` on an already-degree value. Recovering the actual stored
+value (`printed_value * pi/180`) resolves this exactly:
+
+| Joint | Raw USD limit (recovered) | Vendor spec | Match? |
+|---|---|---|---|
+| joint_1 | **±160.00°** | ±170.00° | **MISMATCH** (~10° narrower) |
+| joint_2 | -42.00°/+89.9999° | -42.00°/+90.00° | match (float32 rounding) |
+| joint_3 | -88.9999°/+51.999996° | -89.00°/+52.00° | match |
+| joint_4 | ±179.99999° | ±180.00° | match |
+| joint_5 | ±104.99999° | ±105.00° | match |
+| joint_6 | ±179.99999° | ±180.00° | match |
+
+**Answer to the task's central question: joint_2's raw, authored USD hard
+limit is EXACTLY -42°/+90°, matching the vendor spec
+(`config/mk3.yaml`, cross-checked against `urdf/ar_macro.xacro`'s own
+`<joint name="joint_2">` `<limit lower="${robot_parameters['j2_limit_min']}"
+upper="${robot_parameters['j2_limit_max']}">` tag, fetched directly from
+`github.com/ycheng517/ar4_ros_driver` this task) to within float32
+rounding. This is NOT a joint-limit asset-import bug** — the ~59.0-59.1°
+physical wall found by the prior task is 31° away from the joint's own
+real limit, so hitting SOME OTHER hard limit doesn't explain it either.
+
+**A genuine, separate, bonus finding from checking all 6 joints per this
+task's own brief**: `joint_1`'s raw USD limit is `±160.00°`, a real ~10°
+narrower-than-vendor (`±170.00°`) mismatch — this IS consistent with an
+asset-import discrepancy (though whether it's the URDF importer itself or
+something in `scripts/build_asset.py`'s own post-processing is not
+determined this task). Not yet fixed or further investigated — flagged
+for whoever picks this up, since it's outside this task's own bounded
+scope (joint_2's wall) and the workspace tool's `joint_1` range (`±170°`)
+was never load-bearing for any of P0/P1/P2's own configs, which all use
+much smaller `joint_1` values (`-4.3°` to `-19.5°`).
+
+### Part 2: the real mechanism — a ground-plane collision, found via a pure-FK sweep (Pi-local, no GPU, no cloud cost)
+
+With the joint-limit hypothesis eliminated, direct FK computation
+(`tasks/ar4/fk_verification.py`, pure numpy, Pi-local) of
+`gripper_jaw1_link`'s own world-frame height as `joint_2` sweeps from 40°
+to 90° at each of P0/P1/P2's own exact GRASP_Q configs shows a clean,
+monotonically DECREASING height that is nearly IDENTICAL across all three
+independently-sampled configs (different `joint_3`-`joint_6`, only
+`joint_2` shared) — a purely geometric, `joint_2`-driven effect. At the
+empirically-observed ~59.0-59.1° wall, `gripper_jaw1_link`'s own joint
+origin sits only **~26-31mm above the z=0 ground plane**
+(`tasks/ar4/pickplace_graspgoal_env_cfg.py`'s `GroundPlaneCfg`, no
+`init_state` override — top surface at z=0, matching the 15mm cube's own
+resting center at z=0.0075m). Combined with the 2026-07-27
+joint-tracking-diagnostic task's own no-cube-obstruction control test
+(cube parked 3m away, wall still hit identically — already ruling out
+cube contact) and the previously-measured jaw1 collision-mesh extent
+(`scripts/build_asset.py`'s `_fix_jaw2_collision_mesh_asymmetry` docstring:
+jaw1's mesh spans `[-0.018475, +0.015825]` along its own local axis, i.e.
+~18.5mm below its own joint origin toward the object), this is
+conclusively **a ground-plane collision by the gripper's real physical
+geometry** — self-collision is already disabled at the articulation level
+(`robot_cfg.py`'s `enabled_self_collisions=False`) and an effort ceiling
+was already ruled out by the prior task's 10x `effort_limit_sim` test, so
+neither of those alternatives applies; the ground plane (a separate scene
+asset, not part of the robot's own self-collision group) was simply never
+checked by anything in this investigation before.
+
+### Part 3: the fix, and the corrected workspace is genuinely EMPTY
+
+`scripts/ar4_graspable_workspace.py` never modeled ANY real link's
+proximity to the ground — it only ever checked the abstract
+`_EE_OFFSET`-based pinch point's height. Fixed by extending the batch FK
+chain to also compute `gripper_jaw1_link`'s real world-frame position
+(held at the physically-correct OPEN position during approach, matching
+every grasp script's own PREGRASP/GRASP-OPEN phase convention), cross-
+checked against the scalar FK to floating-point precision
+(`_cross_check_gripper_jaw1`, max error `5.55e-17m`) before trusting it,
+and added `GROUND_CLEARANCE_MIN_M = 0.030` (30mm, matching the directly-
+observed live-physics stall point) as a new filter, applied in addition to
+the existing height/tilt/margin/roll filters.
+
+**Re-swept (full 8M-sample Stage A + 145-step Stage B, same scale as every
+prior sweep in this file): 0 survivors.** This is robust, not a threshold-
+tuning artifact — a sensitivity sweep across `GROUND_CLEARANCE_MIN_M` from
+25mm down to 15mm (a deliberately loose choice, BELOW the known ~18.5mm
+jaw-mesh extent) still finds zero survivors at every value down to 15mm;
+only at 12mm and below does the filter start passing any configs at all.
+More directly: computing the ACHIEVABLE `gripper_jaw1_link` ground-
+clearance ceiling across the full height/tilt/margin-satisfying population
+(ignoring roll/`joint_1`, n=235 survivors out of a 2M-sample probe) gives
+**max=14.93mm** — translating to a real-fingertip-height ceiling (14.93mm
+- 18.475mm known mesh extent) of **-3.55mm**: even in the best case found
+ANYWHERE in this population, the real gripper fingertip would sit 3.55mm
+BELOW the ground plane. Visualized: a histogram of achievable ground
+clearance across this population sits entirely to the left of the "zero
+real-fingertip-clearance" line
+(`outputs/ar4_graspable_workspace/empty_workspace_ground_clearance_diagnosis.png`,
+gitignored `outputs/`, Pi-local only).
+
+**Honest verdict, per this project's own "report the real discrepancy,
+don't force a positive" standard: AR4 genuinely cannot perform a clean
+near-vertical grasp of the current 15mm cube anywhere in its real
+reachable workspace, at the current `GRASP_AT_HEIGHT=0.0105m` (10.5mm
+above ground) convention.** This is not a re-litigation of reachability
+(Stage 1 of the 2026-07-27 graspable-workspace-from-FK task already solved
+that cleanly) or of roll/heading (already refuted 2026-07-27) — it is a
+THIRD, independent, and this time terminal, constraint: the gripper's own
+real jaw geometry needs more vertical room than a 10.5mm-above-ground
+target height leaves it, regardless of which (x, y, joint_1) point is
+chosen. No live grasp+lift re-attempt was made this task, since there is
+no valid corrected point to attempt one at — forcing an attempt at an
+already-known-infeasible point would not be a genuine test.
+
+**Concrete implication, flagged back rather than decided unilaterally
+(a task-design/architecture question outside this task's own bounded
+scope)**: the cube likely needs to be raised off the ground (a small
+pedestal/platform giving the gripper real clearance) or grasped closer to
+its own top face (trading grip depth for ground clearance) for a vertical
+grasp to become geometrically possible with this gripper's real finger
+length; alternatively, the whole vertical-grasp strategy may need
+reconsidering for this specific arm/gripper/cube-size combination (a
+non-vertical/angled approach, or a taller object). This mirrors the
+Franka-pivot rationale's own broader theme of AR4-asset-specific physical
+constraints repeatedly turning out to be the actual blocker once measured
+directly, rather than a deeper RL/task-design problem.
+
+**Cost:** cloud on-demand `g2-standard-4`+`nvidia-l4`, 5 dispatch attempts
+across ~1.5 hours real time (3 full-env stalls + 1 lightweight run with
+the buffered-stdout bug + 1 final successful lightweight run), each
+individually torn down and confirmed clean via `scripts/check_cloud_state.sh`
+(including one manual orphaned-instance recovery after a local tool-call
+timeout killed the dispatch wrapper mid-provision). Total well under $2.
+The workspace re-sweep itself and the empty-workspace diagnosis were both
+Pi-local, pure-FK, zero additional cost.
+
+**Sources:** this task's own live runs —
+`scripts/_diag_ar4_joint2_limit_root_cause.py` (full-env variant, hit 3
+stalls, never completed), `scripts/_diag_ar4_joint2_limit_raw_usd_only.py`
+(lightweight variant, the one that actually produced data),
+`scripts/_cloud_ar4_joint2_limit_root_cause.sh` /
+`scripts/_cloud_ar4_joint2_limit_raw_usd_only.sh` (cloud dispatch
+payloads); `scripts/ar4_graspable_workspace.py`'s own updated
+`GROUND_CLEARANCE_MIN_M`/`batch_fk_gripper_jaw1`/`diagnose_empty_workspace`
+(the fix + empty-workspace quantification, all Pi-local); direct GitHub
+fetch of `ycheng517/ar4_ros_driver`'s `annin_ar4_description/config/mk3.yaml`
+and `urdf/ar_macro.xacro` (vendor spec cross-check); this article's own
+2026-07-28 "ar4-joint-tracking-closed-loop-fix task" UPDATE immediately
+above (the ~59° wall this task root-causes) and 2026-07-27
+"ar4-joint-tracking-diagnostic task" UPDATE (the no-cube-obstruction
+control test this task's ground-collision conclusion relies on).

@@ -645,6 +645,53 @@ See `BACKLOG.md` for further-out candidates not yet on this list.
 
 ## Recently landed
 
+- **AR4 joint_2 ~59° wall root-caused: NOT a joint-limit bug — a real
+  ground-plane collision the FK workspace tool never modeled, and the
+  corrected workspace is genuinely EMPTY at the current grasp height**
+  (2026-07-28, direct continuation of the joint-tracking-closed-loop-fix
+  task below). Direct pxr/UsdPhysics read of the built USD (after working
+  around 3 consecutive cloud cold-start stalls in the full-env-construction
+  path by using a lighter `isaacsim.SimulationApp`-only bootstrap, plus a
+  buffered-stdout bug that silently ate the first attempt's own output)
+  confirms joint_2's authored `physics:lowerLimit/upperLimit` is exactly
+  `-42°/+90°` — matching the vendor spec (`config/mk3.yaml`, cross-checked
+  against `urdf/ar_macro.xacro`'s own `<limit>` tag) to within float32
+  rounding. **Not an asset-import bug.** (Bonus finding from checking all 6
+  joints: `joint_1`'s raw USD limit is `±160°`, a real ~10° narrower-than-
+  vendor `±170°` mismatch — flagged, not yet fixed, out of this task's own
+  scope.) The real mechanism: a Pi-local pure-FK sweep of
+  `gripper_jaw1_link`'s real world-frame height (not just the abstract
+  pinch-point the tool previously checked) shows it falls monotonically as
+  joint_2 approaches GRASP_Q, nearly identically across P0/P1/P2's three
+  independently-sampled configs, reaching only ~28-31mm above the z=0
+  ground plane right at the empirically-observed ~59° wall — combined with
+  the prior task's own no-cube-obstruction control (wall persisted with
+  the cube 3m away), this is conclusively **the gripper's real jaw
+  geometry hitting the ground plane**, not the cube, not a joint limit,
+  not self-collision (already disabled) or an effort ceiling (already
+  ruled out). Fixed `scripts/ar4_graspable_workspace.py` by adding a real
+  ground-clearance filter (extends the batch FK chain to
+  `gripper_jaw1_link`, held at the physically-correct OPEN position) —
+  previously totally absent. Re-swept (full 8M-sample sweep): **0
+  survivors** — and this is robust, not a tuning artifact: even a
+  deliberately permissive 15mm clearance threshold (looser than the known
+  ~18.5mm jaw-mesh extent) already finds zero, and the best-case real
+  fingertip clearance achievable anywhere in the height/tilt/margin-
+  satisfying population is **-3.55mm** (i.e. still below ground even in
+  the best case). **AR4 genuinely cannot perform a clean near-vertical
+  grasp of the current 15mm cube anywhere in its real reachable
+  workspace, at this grasp height** — a clean, well-quantified null result
+  per this project's own "report the real discrepancy, don't force a
+  positive" standard, not a forced grasp attempt. No live grasp+lift
+  re-attempt was made this task since there is no valid corrected point to
+  attempt one at. Concrete implication flagged back to whoever picks this
+  up (a task-design/architecture decision, not this task's own call): the
+  cube likely needs to be raised (a small pedestal) or grasped higher on
+  its own body (closer to its top face) to give the gripper's real
+  fingertip length room to clear the ground, or the whole vertical-grasp
+  strategy needs reconsidering for this arm/gripper/cube-size combination.
+  `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s 2026-07-28
+  "ar4-joint2-ground-clearance-fix task" UPDATE.
 - **AR4 joint-tracking closed-loop fix — tracking gap DOES close for most
   joints, but joint_2 is pinned at a real hard limit the graspable-
   workspace tooling never modeled** (2026-07-28) — built and tested both

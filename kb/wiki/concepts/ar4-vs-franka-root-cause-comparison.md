@@ -5543,3 +5543,123 @@ reproduces); `CLAUDE.md`'s "Pi-as-primary-agent GPU dispatch" section and
 `scripts/check_desktop_gpu.sh`/`scripts/run_on_desktop_gpu.sh` (the
 desktop-first-cloud-fallback routing policy and its documented UNKNOWN
 fail-safe behavior this task's checks followed).
+
+## UPDATE 2026-07-28 (later still, ar4-moveit-cloud-from-scratch task): MoveIt DOES plan and execute a collision-aware pick, from scratch on a fresh cloud instance — the strategic pivot's central premise HOLDS, with an honest repeatability caveat
+
+**What this tests.** The previous UPDATE (ar4-moveit-pivot task) found the
+desktop hosting the vendor `ar4_ros_driver`/MoveIt stack unreachable and
+was blocked before any MoveIt work could start. This task was directed to
+stop waiting on the desktop and instead stand up ROS2 Humble + MoveIt2 +
+the vendor AR4 stack from scratch on a fresh, ephemeral GCP cloud instance,
+and demonstrate a collision-aware pick — the same question this whole
+investigation has been building toward since the platform pivot's own
+rationale (MoveIt's collision-aware planning as the fix for the hand-rolled
+approach's un-planned-descent-collision and brittle grasp sequencing, see
+`kb/wiki/experiments/...` and this file's own 5285/5460 UPDATEs).
+
+**Setup (full detail:** `scripts/ar4_moveit_pick_demo/README.md`,
+committed alongside this update). Mid-task course correction from the
+user: use a **prebuilt** `moveit/moveit2:humble-release` Docker image
+(ROS2 Humble + MoveIt2 2.5.9) rather than apt-installing ROS2/MoveIt from
+scratch on the host — cut setup from an anticipated hours down to minutes.
+Provisioned a plain Ubuntu 22.04 CPU-only `e2-standard-4` instance directly
+via `gcloud` (not `scripts/run_on_cloud_gpu.sh`'s GPU-provisioning path —
+this task is CPU-only and needed a *persistent* instance for a real
+install-debug-launch-test loop, not one opaque command). Cloned
+`ycheng517/ar4_ros_driver` into the container, ran `rosdep install`, and
+hit — then fixed — **two real vendor-package/ros2_control-version-skew
+bugs**, both genuine upstream API drift against the 2026-04/2026-06
+`humble` apt packages this image ships, not anything AR4-asset-specific:
+(1) `annin_ar4_driver`'s real-hardware servo-gripper driver referenced a
+`hardware_interface::HardwareInfo::limits` field removed from the current
+`ros2_control`/`hardware_interface` API (patched to stop depending on it —
+that code path is real-hardware-only, never exercised by this task's
+fake-hardware demo); (2) the vendor's `ompl_planning.yaml`/`pilz_planning.yaml`
+used an older list-style `request_adapters`/`response_adapters` format,
+crashing `move_group` on startup with `InvalidParameterTypeException`
+(fixed by converting to the current single-string format, confirmed
+against the `moveit_resources_panda_moveit_config` reference config
+shipped in the same container image). See
+`scripts/ar4_moveit_pick_demo/vendor_patches/` for the exact patches.
+
+**Result: YES — MoveIt planned and executed a full collision-aware pick
+sequence**, using the vendor MoveIt config's own fake/mock
+`ros2_control` hardware (RViz visualization, no Gazebo physics — the
+task's own pre-authorized fallback deliverable, chosen over attempting
+real Gazebo grasp physics given this project's own prior documented
+experience that Gazebo grasp physics is finicky and this fallback still
+directly demonstrates the collision-aware-planning mechanism in question).
+Sequence: sanity move to `home` → add a 15mm cube on a 40mm pedestal as
+real MoveIt `CollisionObject`s → open gripper → plan+execute an approach
+(pre-grasp) pose above the cube → plan+execute a descent to the grasp pose
+→ close the gripper onto the cube (snug, jaw half-gap = cube half-width) →
+attach the cube to `gripper_base_link` in the planning scene → plan+execute
+a lift/retreat → plan+execute a carry to a different (x,y) goal location
+while still attached. **Every step logged SUCCESS.** Verified beyond the
+log lines, per this project's own verification standard (check the
+underlying state directly, not just a claimed-SUCCESS line): `ros2 run
+tf2_ros tf2_echo world ee_link` after the full sequence showed the real
+`ee_link` pose at (0.280, 0.120, 0.212) with ~180° X rotation — an exact
+match to the commanded final "carry to goal location" target, to
+sub-millimeter/sub-degree precision; `ros2 service call /get_planning_scene`
+confirmed the cube genuinely attached to `gripper_base_link` at the
+expected fixed relative pose (not silently dropped). Video:
+`logs/videos/ar4_moveit_cloud_pick_demo_2026-07-28.mp4` (RViz screen
+capture via Xvfb + ffmpeg, ~74s, shows the arm moving from `home`, the
+pedestal/cube collision objects appearing in the scene, and the arm
+reaching toward the target region — camera framing is the RViz default,
+not re-aimed at the grasp region, so the close-up moment itself is easier
+to confirm from the log+TF evidence above than from eyeballing the video
+alone).
+
+**Honest gap, reported rather than smoothed over: this exact recipe is NOT
+perfectly repeatable on re-run.** Several follow-up runs on the same live
+instance, using the identical grasp-pose target, hit real planning
+flakiness specifically at the "descend to grasp pose" step — sometimes
+failing outright even after raising planning attempts (10→20) and time
+budget (10s→15s), or via a substitute Cartesian-path formulation that
+capped out at a fixed, non-obvious completion fraction (0.765, then 0.333
+with a *shorter* approach distance — getting worse with a shorter distance
+rules out "distance" as the direct cause). A dedicated, isolated
+repeatability sweep (3 repeats each, real `home` re-execute immediately
+before each single `plan()` call, no intervening calls) confirmed the
+exact same grasp pose succeeds 3/3 at several nearby (x,y) columns in
+isolation — yet the identical target failed repeatedly once embedded back
+in the full pick sequence, with or without the collision objects present
+(tested both ways as a control). This points to a genuine numerical-IK-
+solver sensitivity (the vendor stack's own `kinematics.yaml` uses
+`kdl_kinematics_plugin`, confirmed in the 2026-07-27 ar4-moveit-vs-dls-
+root-cause UPDATE above — an iterative/numerical solver, not an analytic
+one, and numerical IK solvers are known to be seed/context-sensitive near
+workspace boundaries) rather than a logic bug in the demo script, but this
+task's scope did not fully root-cause *why* other planning calls in
+between perturb it. `pick_demo.cpp` as committed is the exact recipe that
+produced the successful, fully-verified run described above; the
+repeatability investigation and its dead ends are preserved in the file's
+own header comment and in `scripts/ar4_moveit_pick_demo/README.md`.
+
+**What this means for the platform pivot.** The strategic bet behind the
+ROS2+MoveIt pivot — that MoveIt's collision-aware motion planning is the
+right tool for the blockers the hand-rolled Isaac Sim IK/control approach
+hit (5285/5460 UPDATEs: a descent-path collision pinning the gripper open
+before CLOSE was ever issued, brittle grasp sequencing) — is **directly
+supported**: MoveIt, using the vendor's own AR4 description/SRDF and a
+real classical planner (OMPL/RRTConnect), successfully planned a
+collision-free path all the way to a grasp pose adjacent to real collision
+geometry, closed the gripper, and carried the (virtually) attached object
+to a new location, all collision-checked throughout — the exact mechanism
+this project's own hand-rolled approach never had. The repeatability
+caveat above is a real, separate, and narrower finding (IK-solver
+robustness at specific poses) — it does not undercut the core positive
+result, but it means "does MoveIt reliably solve this arm's grasp problem"
+is not yet a fully closed question; a natural next step (not started
+here, out of this task's scope) would be root-causing the specific
+plan()-call-ordering sensitivity, or trying an analytic/faster-converging
+IK plugin (e.g. `trac_ik` or `pick_ik`) in place of `kdl_kinematics_plugin`.
+
+**Cost:** ≈$0.22 (e2-standard-4 CPU-only on-demand instance, ~1h35m
+runtime, against the task's $5 cap — well under). Full teardown verified
+via `scripts/check_cloud_state.sh` (zero instances/disks/snapshots).
+Setup artifacts (the `ar4_pick_demo` ROS2 package source and the two
+vendor patches) committed at `scripts/ar4_moveit_pick_demo/` — the cloud
+ROS2 workspace itself was not, and is not, part of this repo.

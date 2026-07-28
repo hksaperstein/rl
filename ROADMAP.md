@@ -27,25 +27,32 @@ direction, not a scoped backlog.
 
 Roughly in the order they'd likely be picked up:
 
-0. **ROS2 + MoveIt pivot for AR4 grasping — direct user decision, BLOCKED
-   2026-07-28 on desktop unreachability, needs a Principal call on how to
-   proceed.** The user has directed (twice) moving off this project's own
-   hand-rolled Isaac Sim IK/control approach — whose remaining blocker is a
-   root-caused descent-path collision plus a brittle grasp sequence (see
-   "Recently landed" below) — onto the AR4 vendor's own ROS2 + MoveIt stack
-   (`~/projects/annin_ws` on the desktop), whose collision-aware planning is
-   exactly the missing mechanism. A dispatched task to assess reachability
-   and, if feasible, demonstrate a MoveIt pick found the desktop (`saps@
-   home.local`) unreachable by multiple independent methods (SSH, mDNS,
-   `check_desktop_gpu.sh`, a full subnet scan with per-host SSH-key checks)
-   — the same failure signature already seen once earlier the same day.
-   Since the vendor stack only exists on the desktop (not cloud) and a
-   from-scratch cloud ROS2/MoveIt2/Gazebo build-out is a large, unbounded
-   new-toolchain effort, no MoveIt work was attempted; this is flagged back
-   for Principal to decide: wait/retry once the desktop is reachable again,
-   or explicitly commit to the from-scratch cloud path. Full detail:
+0. **ROS2 + MoveIt pivot for AR4 grasping — RESOLVED POSITIVE 2026-07-28,
+   from-scratch cloud path.** After the desktop hosting the vendor
+   `ar4_ros_driver`/MoveIt stack was found unreachable (see the prior
+   ar4-moveit-pivot entry below), a follow-up task stood up ROS2 Humble +
+   MoveIt2 + the vendor AR4 stack from scratch on a fresh, ephemeral GCP
+   CPU-only cloud instance (Docker + the prebuilt `moveit/moveit2:humble-release`
+   image, per a mid-task user course-correction, not an apt-from-scratch
+   install) and **MoveIt successfully planned and executed a full
+   collision-aware pick** (approach → descend to grasp → close gripper →
+   attach cube → lift/retreat → carry to a goal location) against a real
+   cube+pedestal collision object, using the vendor MoveIt config's
+   fake/mock hardware in RViz (the task's own pre-authorized Gazebo-physics
+   fallback). Verified beyond a log line via `tf2_echo` (exact final-pose
+   match) and `get_planning_scene` (cube genuinely attached). This directly
+   supports the pivot's central premise — MoveIt's collision-aware planner
+   is the right tool for the blockers the hand-rolled Isaac Sim approach
+   hit. Honest caveat: the exact same recipe is NOT perfectly repeatable on
+   re-run — later re-runs hit real numerical-IK-solver (`kdl_kinematics_plugin`)
+   flakiness at the same step, not fully root-caused within this task's
+   scope. Two real vendor-package/`ros2_control`-version-skew bugs were
+   found and patched along the way (see
+   `scripts/ar4_moveit_pick_demo/README.md`). Full detail:
    `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s 2026-07-28
-   (later, ar4-moveit-pivot task) UPDATE.
+   (later still, ar4-moveit-cloud-from-scratch task) UPDATE. Natural next
+   step, not started here: root-cause the plan-ordering IK sensitivity, or
+   try a different IK plugin (`trac_ik`/`pick_ik`) for better repeatability.
 1. **Target-selection-clutter E2** (3→4 distractors) — the next
    separately-gated stage after Stage E1's clean pass (2026-07-21); not
    auto-started by E1.
@@ -710,6 +717,21 @@ See `BACKLOG.md` for further-out candidates not yet on this list.
 
 ## Recently landed
 
+- **ROS2+MoveIt2 collision-aware AR4 pick, from scratch on a fresh cloud
+  instance: SUCCEEDED** (2026-07-28, ar4-moveit-cloud-from-scratch task).
+  MoveIt planned and executed a full pick (approach → descend → grasp →
+  attach → lift/retreat → carry to goal), verified via `tf2_echo` and
+  `get_planning_scene`, not just log lines — directly supporting the
+  platform pivot's premise that MoveIt's collision-aware planner solves
+  the hand-rolled approach's descent-collision/grasp-sequencing blockers.
+  Two real vendor-package/`ros2_control` version-skew bugs found and
+  patched along the way. Honest caveat: not perfectly repeatable on
+  re-run (numerical-IK-solver flakiness at the same step, not fully
+  root-caused). Full detail:
+  `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s 2026-07-28
+  (later still, ar4-moveit-cloud-from-scratch task) UPDATE; artifacts at
+  `scripts/ar4_moveit_pick_demo/`; video at
+  `logs/videos/ar4_moveit_cloud_pick_demo_2026-07-28.mp4`.
 - **AR4 pedestal-grasp-height-fix: the height fix WORKS (real fingertip now
   genuinely lands inside the cube's vertical span, not jammed at the top
   face), but the capstone grasp+lift still fails — root-caused to a NEW,

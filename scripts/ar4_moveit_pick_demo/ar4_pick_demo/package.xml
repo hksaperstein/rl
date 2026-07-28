@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>ar4_pick_demo</name>
+  <version>0.0.1</version>
+  <description>Standalone MoveIt2 collision-aware pick demo for the AR4 arm (cloud shakedown)</description>
+  <license>MIT</license>
+  <maintainer email="harrison.saperstein@gmail.com">Harrison Saperstein</maintainer>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>moveit_ros_planning_interface</depend>
+  <depend>moveit_msgs</depend>
+  <depend>shape_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>geometric_shapes</depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

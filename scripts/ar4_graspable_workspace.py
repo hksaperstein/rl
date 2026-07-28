@@ -129,6 +129,30 @@ HEIGHT_TOL_M = 0.002  # +/- 2mm band around GRASP_AT_HEIGHT
 TILT_TOL_DEG = 12.0  # within the brief's "<=10-15 degrees of straight-down"
 MARGIN_MIN_RAD = 0.25  # ~14.3 degrees; within the brief's "0.2-0.3rad" range
 
+# ROLL/HEADING tolerance (2026-07-27 UPDATE, ar4-graspable-roll-constraint
+# task). The original sweep above constrained ONLY the approach axis's tilt
+# from vertical (TILT_TOL_DEG) - a single DOF - and left the OTHER
+# in-plane rotational DOF (heading/roll about that same approach axis)
+# completely unconstrained. The live confirmation this omission fed into
+# (kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md's 2026-07-27
+# "ar4-graspable-workspace-from-fk task" UPDATE) found the gripper colliding
+# with the cube at ~52-61N even while nominally OPEN (28mm aperture vs a
+# 15mm cube) - the jaw-slide axis was pointed at some arbitrary in-plane
+# heading, not straddling the cube's own square footprint. This constant
+# bounds that heading error (see _jaw_heading_offset_deg below for the exact
+# quantity) to within a tight tolerance of being parallel to either world X
+# or world Y - the only two headings that let a flat-jaw gripper close on an
+# axis-aligned, non-rotated cube (tasks/ar4/objects_cfg.py's CUBE_CFG) without
+# clipping a corner. Chosen equal to TILT_TOL_DEG (not looser): the tilt
+# tolerance was already established as "tight enough to still be a vertical
+# approach" for this same grasp geometry, and roll misalignment is at least
+# as sensitive (a jaw-slide axis off-heading by 12 degrees on a 15mm cube
+# grazes a corner well before an equivalent tilt error would); if the
+# post-constraint sweep turns out empty or too sparse at this value, WIDEN
+# it deliberately and note the widening here, rather than silently loosening
+# without comment.
+ROLL_TOL_DEG = 12.0
+
 # World-frame base transform (tasks/ar4/robot_cfg.py's AR4_MK5_CFG.init_state:
 # rot=(0,0,0,1) wxyz = a 180-degree rotation about Z, pos defaults to origin
 # since robot_cfg.py does not override ArticulationCfg's own default).
@@ -138,6 +162,84 @@ def base_to_world(p_base: np.ndarray) -> np.ndarray:
     out[..., 0] *= -1.0
     out[..., 1] *= -1.0
     return out
+
+
+# The base->world transform above is a pure 180-degree-about-Z rotation, no
+# translation - so it applies identically to FREE VECTORS (directions, e.g. a
+# jaw-slide axis) as it does to POSITIONS. Reused directly (not re-derived)
+# for exactly that purpose in _jaw_heading_offset_deg below.
+_axis_base_to_world = base_to_world
+
+
+def _jaw_heading_offset_deg(jaw_axis_world_xy: np.ndarray) -> np.ndarray:
+    """2026-07-27 roll/heading constraint (see ROLL_TOL_DEG above for full
+    motivation). Given the gripper's jaw-slide axis's WORLD-frame horizontal
+    (x, y) component - shape (..., 2) - returns, in degrees, how far that
+    in-plane heading is from being parallel to EITHER world X or world Y
+    (the only two headings compatible with straddling a face of the
+    world-axis-aligned, non-rotated cube: tasks/ar4/objects_cfg.py's
+    CUBE_CFG). 0deg = exactly parallel to world X or world Y. 45deg (the
+    worst possible case) = exactly diagonal, equidistant from both and
+    therefore misaligned with both.
+
+    Derivation: any heading and its "straddles a face" quality repeats every
+    90 degrees (a square cube face grasped jaw-parallel to X is equally as
+    valid as one grasped jaw-parallel to Y, and heading+180deg is the same
+    physical jaw orientation as heading, since an open/close axis has no
+    intrinsic direction) - so the raw heading angle is folded into [0, 90)
+    via modulo, then folded again into [0, 45] by taking the smaller distance
+    to either fold boundary (0 or 90), which are exactly the "parallel to
+    world X" / "parallel to world Y" headings.
+    """
+    heading_deg = np.degrees(np.arctan2(jaw_axis_world_xy[..., 1], jaw_axis_world_xy[..., 0]))
+    folded_0_90 = np.mod(heading_deg, 90.0)
+    return np.minimum(folded_0_90, 90.0 - folded_0_90)
+
+
+def _sanity_check_roll_criterion() -> None:
+    """Numerically confirm the roll criterion accepts scripts/grasp_demo_v2.py's
+    own established-good jaw-slide heading BEFORE trusting it for the real
+    sweep (2026-07-27 task brief's own explicit requirement). That script's
+    canonical grasp orientation (`_CANONICAL_X_AXIS_W = (0.0, 1.0, 0.0)`,
+    i.e. link_6 local +X - the jaw-slide axis, same convention as this
+    script's `_EE_OFFSET`/approach-axis local +Z) is defined directly as a
+    WORLD-frame basis vector, so this checks _jaw_heading_offset_deg against
+    that exact world-frame vector - no FK/base-frame conversion needed for
+    this particular check, since the vector is already given in world frame.
+    Also checks the orthogonal (0,1,0)->world +Y case is equally accepted
+    (by symmetry, since a jaw-slide axis has no intrinsic +/- direction and
+    world X/Y are both valid cube-straddling headings), and that a genuinely
+    BAD 45-degree-diagonal heading is correctly REJECTED at ROLL_TOL_DEG, to
+    confirm the check isn't vacuously permissive."""
+    canonical_jaw_axis_world_xy = np.array(_CANONICAL_X_AXIS_W_FOR_SANITY_CHECK[:2])
+    offset_canonical = float(_jaw_heading_offset_deg(canonical_jaw_axis_world_xy))
+    offset_world_x = float(_jaw_heading_offset_deg(np.array([1.0, 0.0])))
+    offset_diagonal = float(_jaw_heading_offset_deg(np.array([1.0, 1.0])))
+    print(
+        f"[sanity-check] grasp_demo_v2.py canonical jaw axis (0,1,0) -> heading offset "
+        f"{offset_canonical:.4f} deg (must be ~0, i.e. ACCEPTED at ROLL_TOL_DEG={ROLL_TOL_DEG})"
+    )
+    print(f"[sanity-check] world +X jaw axis (1,0,0) -> heading offset {offset_world_x:.4f} deg (must be ~0)")
+    print(
+        f"[sanity-check] worst-case 45deg-diagonal jaw axis (1,1) -> heading offset "
+        f"{offset_diagonal:.4f} deg (must be ~45, i.e. REJECTED at ROLL_TOL_DEG={ROLL_TOL_DEG})"
+    )
+    assert offset_canonical < 1e-6, "roll criterion does NOT accept grasp_demo_v2.py's own known-good jaw heading"
+    assert offset_world_x < 1e-6, "roll criterion does NOT accept world +X heading"
+    assert abs(offset_diagonal - 45.0) < 1e-6, "roll criterion does not correctly identify the worst-case diagonal heading"
+    assert offset_diagonal > ROLL_TOL_DEG, "ROLL_TOL_DEG is set so loose it would accept the worst-case diagonal heading"
+
+
+# Matches scripts/grasp_demo_v2.py's own _CANONICAL_X_AXIS_W exactly (see that
+# module's own docstring, "2026-07-22, ar4-grasp-orientation-fix task", for
+# the full derivation/justification of this specific heading choice) - the
+# established-good jaw-slide-axis convention this sweep's own roll criterion
+# is sanity-checked against above. Duplicated here as a plain constant
+# (rather than importing scripts/grasp_demo_v2.py, which has its own
+# AppLauncher/Isaac-Sim-touching import-time side effects unsuitable for this
+# pure-numpy script) with an explicit cross-reference so the two never
+# silently drift apart unnoticed.
+_CANONICAL_X_AXIS_W_FOR_SANITY_CHECK = (0.0, 1.0, 0.0)
 
 
 # ----------------------------------------------------------------------
@@ -245,8 +347,10 @@ def _cross_check(n_samples: int = 30, seed: int = 0) -> None:
 
 def _evaluate(joint_values: dict[str, np.ndarray]):
     """Given batched joint values (all 6 joints), return a dict of derived
-    per-sample arrays: pinch_pos (N,3) in base frame, tilt_deg (N,), and
-    margin_rad (N,6) (per-joint margin, columns in ARM_JOINT_NAMES order)."""
+    per-sample arrays: pinch_pos (N,3) in base frame, tilt_deg (N,),
+    margin_rad (N,6) (per-joint margin, columns in ARM_JOINT_NAMES order),
+    and roll_offset_deg (N,) - the 2026-07-27 addition, see ROLL_TOL_DEG's
+    own docstring above for what this quantity means and why it's needed."""
     pos, rot = batch_fk_link6(joint_values)
     pinch_pos = pos + np.einsum("nij,j->ni", rot, _EE_OFFSET_LOCAL)
     approach_axis = np.einsum("nij,j->ni", rot, np.array([0.0, 0.0, 1.0]))
@@ -258,7 +362,16 @@ def _evaluate(joint_values: dict[str, np.ndarray]):
         lo, hi = JOINT_LIMITS_RAD[name]
         q = joint_values.get(name, np.zeros(n))
         margins[:, i] = np.minimum(q - lo, hi - q)
-    return pinch_pos, tilt_deg, margins
+    # Jaw-slide axis = link_6 local +X (rot's first column, SAME convention as
+    # scripts/grasp_demo_v2.py's _CANONICAL_X_AXIS_W / this file's own
+    # approach_axis-as-local-+Z above), converted from base_link frame to
+    # world frame via the same pure-rotation transform base_to_world already
+    # applies to positions (valid for free vectors too - see
+    # _axis_base_to_world's own comment).
+    jaw_axis_base = rot[:, :, 0]
+    jaw_axis_world = _axis_base_to_world(jaw_axis_base)
+    roll_offset_deg = _jaw_heading_offset_deg(jaw_axis_world[:, :2])
+    return pinch_pos, tilt_deg, margins, roll_offset_deg
 
 
 def run_sweep(n_stage_a: int, n_joint1_steps: int, seed: int = 0, chunk_size: int = 200_000):
@@ -281,7 +394,21 @@ def run_sweep(n_stage_a: int, n_joint1_steps: int, seed: int = 0, chunk_size: in
             lo, hi = JOINT_LIMITS_RAD[name]
             joint_values_a[name] = rng.uniform(lo, hi, size=n)
 
-        pinch_pos_a, tilt_deg_a, margins_a = _evaluate(joint_values_a)
+        # NOTE: roll_offset_deg is DELIBERATELY NOT filtered here in Stage A,
+        # unlike height/tilt/margin_2to6. Those three quantities are provably
+        # joint_1-invariant (see this function's own module-docstring
+        # argument: joint_1 rotates the downstream chain about the vertical
+        # axis, which cannot change a point's height or a vector's angle from
+        # vertical, nor joints 2-6's own margins) - but a jaw-slide axis's
+        # WORLD-frame HEADING is exactly the kind of quantity joint_1 DOES
+        # change (the same way it changes a point's world-frame bearing, the
+        # very reason Stage B exists to sweep joint_1 and recompute bearing
+        # per step). Pre-filtering roll at joint_1=0 would silently discard
+        # Stage-A survivors whose roll only becomes acceptable at some OTHER
+        # joint_1 value - roll is therefore evaluated correctly per-step in
+        # Stage B below, alongside the full-FK recompute already happening
+        # there for exactly this kind of joint_1-dependent quantity.
+        pinch_pos_a, tilt_deg_a, margins_a, _roll_offset_deg_a_unused = _evaluate(joint_values_a)
         height_err_a = pinch_pos_a[:, 2] - GRASP_AT_HEIGHT
         margin_2to6_a = margins_a[:, 1:].min(axis=1)  # exclude joint_1's own column (always 0 here)
 
@@ -313,7 +440,7 @@ def run_sweep(n_stage_a: int, n_joint1_steps: int, seed: int = 0, chunk_size: in
     steps_per_chunk = max(1, chunk_size // max(s, 1))
 
     world_xy_chunks, world_z_chunks, tilt_chunks, height_err_chunks = [], [], [], []
-    margins_chunks, margin_min_chunks = [], []
+    margins_chunks, margin_min_chunks, roll_offset_chunks = [], [], []
     joint_values_chunks = {name: [] for name in ARM_JOINT_NAMES}
 
     for start in range(0, m, steps_per_chunk):
@@ -324,12 +451,15 @@ def run_sweep(n_stage_a: int, n_joint1_steps: int, seed: int = 0, chunk_size: in
         }
         joint_values_b["joint_1"] = np.repeat(j1_chunk, s)
 
-        pinch_pos_b, tilt_deg_b, margins_b = _evaluate(joint_values_b)
+        pinch_pos_b, tilt_deg_b, margins_b, roll_offset_deg_b = _evaluate(joint_values_b)
         height_err_b = pinch_pos_b[:, 2] - GRASP_AT_HEIGHT
         margin_all_b = margins_b.min(axis=1)
 
         mask_b = (
-            (np.abs(height_err_b) <= HEIGHT_TOL_M) & (tilt_deg_b <= TILT_TOL_DEG) & (margin_all_b >= MARGIN_MIN_RAD)
+            (np.abs(height_err_b) <= HEIGHT_TOL_M)
+            & (tilt_deg_b <= TILT_TOL_DEG)
+            & (margin_all_b >= MARGIN_MIN_RAD)
+            & (roll_offset_deg_b <= ROLL_TOL_DEG)
         )
         if mask_b.sum() == 0:
             continue
@@ -340,6 +470,7 @@ def run_sweep(n_stage_a: int, n_joint1_steps: int, seed: int = 0, chunk_size: in
         height_err_chunks.append(height_err_b[mask_b])
         margins_chunks.append(margins_b[mask_b])
         margin_min_chunks.append(margin_all_b[mask_b])
+        roll_offset_chunks.append(roll_offset_deg_b[mask_b])
         for name in ARM_JOINT_NAMES:
             joint_values_chunks[name].append(joint_values_b[name][mask_b])
 
@@ -354,6 +485,7 @@ def run_sweep(n_stage_a: int, n_joint1_steps: int, seed: int = 0, chunk_size: in
     height_err_final = np.concatenate(height_err_chunks)
     margins_final = np.concatenate(margins_chunks)
     margin_min_final = np.concatenate(margin_min_chunks)
+    roll_offset_final = np.concatenate(roll_offset_chunks)
     joint_values_final = {name: np.concatenate(joint_values_chunks[name]) for name in ARM_JOINT_NAMES}
 
     n_survivors_b = world_xy.shape[0]
@@ -369,6 +501,7 @@ def run_sweep(n_stage_a: int, n_joint1_steps: int, seed: int = 0, chunk_size: in
         "height_err": height_err_final,
         "margins": margins_final,
         "margin_min": margin_min_final,
+        "roll_offset_deg": roll_offset_final,
         "joint_values": joint_values_final,
     }
 
@@ -420,11 +553,13 @@ def summarize_and_plot(result, out_png: str):
         margins = result["margins"][idx]
         tilt = result["tilt_deg"][idx]
         height_err = result["height_err"][idx]
+        roll_offset = result["roll_offset_deg"][idx]
         joints = {name: float(result["joint_values"][name][idx]) for name in ARM_JOINT_NAMES}
         xy = world_xy[idx]
         print(f"\n{label}: world (x, y) = ({xy[0]:.4f}, {xy[1]:.4f})  radius={radii[idx]:.4f}m  bearing={bearing_deg[idx]:.1f}deg")
         print(f"  height error: {height_err * 1000:.3f} mm (target z={GRASP_AT_HEIGHT:.4f})")
         print(f"  tilt from vertical: {tilt:.2f} deg")
+        print(f"  jaw-slide-axis roll/heading offset from world X/Y: {roll_offset:.2f} deg (tol={ROLL_TOL_DEG:.1f} deg)")
         for i, name in enumerate(ARM_JOINT_NAMES):
             lo_deg, hi_deg = JOINT_LIMITS_DEG[name]
             q_deg = math.degrees(joints[name])
@@ -432,7 +567,7 @@ def summarize_and_plot(result, out_png: str):
                 f"  {name}: q={q_deg:7.2f} deg (limits [{lo_deg:.1f}, {hi_deg:.1f}]), "
                 f"margin={math.degrees(margins[i]):.2f} deg"
             )
-        return joints, margins
+        return joints, margins, roll_offset
 
     print("\n=== Graspable workspace summary ===")
     print(f"Total graspable configs found: {world_xy.shape[0]}")
@@ -441,8 +576,10 @@ def summarize_and_plot(result, out_png: str):
     print(f"Radius from base extent: [{radii.min():.4f}, {radii.max():.4f}] m")
     print(f"Bearing extent: [{bearing_deg.min():.1f}, {bearing_deg.max():.1f}] deg (near-full circle minus joint_1's own +/-170deg-limited gap)")
 
-    best_joints, best_margins = _report_point("GLOBAL best (max min-joint-margin, any azimuth)", best_idx)
-    rec_joints, rec_margins = _report_point(
+    best_joints, best_margins, best_roll_offset = _report_point(
+        "GLOBAL best (max min-joint-margin, any azimuth)", best_idx
+    )
+    rec_joints, rec_margins, rec_roll_offset = _report_point(
         f"RECOMMENDED point (best margin within +/-{bearing_window_deg:.0f}deg of bearing=90deg, "
         "the scene's existing straight-ahead approach direction)",
         rec_idx,
@@ -465,7 +602,11 @@ def summarize_and_plot(result, out_png: str):
         ax.scatter([0.0], [0.0], c="black", marker="s", s=80, label="arm base (world origin)")
         ax.set_xlabel("world x (m)")
         ax.set_ylabel("world y (m)")
-        ax.set_title(f"AR4 graspable workspace at z={GRASP_AT_HEIGHT:.4f}m (15mm cube grasp height)\nvertical approach <= {TILT_TOL_DEG} deg, joint margin >= {MARGIN_MIN_RAD:.2f}rad")
+        ax.set_title(
+            f"AR4 graspable workspace at z={GRASP_AT_HEIGHT:.4f}m (15mm cube grasp height)\n"
+            f"vertical approach <= {TILT_TOL_DEG} deg, joint margin >= {MARGIN_MIN_RAD:.2f}rad, "
+            f"jaw-heading offset <= {ROLL_TOL_DEG:.0f} deg (2026-07-27 roll constraint)"
+        )
         ax.legend(loc="upper right", fontsize=8)
         ax.set_aspect("equal")
         ax.grid(True, alpha=0.3)
@@ -479,9 +620,11 @@ def summarize_and_plot(result, out_png: str):
         "global_best_xy": tuple(best_xy.tolist()),
         "global_best_joints_deg": {name: math.degrees(v) for name, v in best_joints.items()},
         "global_best_margins_deg": {name: math.degrees(best_margins[i]) for i, name in enumerate(ARM_JOINT_NAMES)},
+        "global_best_roll_offset_deg": float(best_roll_offset),
         "recommended_xy": tuple(rec_xy.tolist()),
         "recommended_joints_deg": {name: math.degrees(v) for name, v in rec_joints.items()},
         "recommended_margins_deg": {name: math.degrees(rec_margins[i]) for i, name in enumerate(ARM_JOINT_NAMES)},
+        "recommended_roll_offset_deg": float(rec_roll_offset),
         "recommended_local_cluster_centroid_xy": tuple(local_centroid.tolist()),
     }
 
@@ -489,6 +632,9 @@ def summarize_and_plot(result, out_png: str):
 if __name__ == "__main__":
     print("Cross-checking vectorized batch FK against the established scalar FK...")
     _cross_check()
+
+    print("\nSanity-checking the roll/heading criterion against grasp_demo_v2.py's own known-good jaw heading...")
+    _sanity_check_roll_criterion()
 
     print("\nRunning forward-sampling sweep...")
     result = run_sweep(n_stage_a=8_000_000, n_joint1_steps=145, seed=0, chunk_size=200_000)

@@ -11,11 +11,14 @@ instead of questioning whether that position was reachable at all.
 scripts/ar4_graspable_workspace.py inverted this: forward-sampled the arm's
 own 6-joint configuration space (pure FK, zero solver risk) to find where a
 genuinely graspable pinch pose (near-vertical approach, correct height for
-the 15mm cube, comfortable margin on every joint) actually exists, and
-recommended a specific interior point: world (x, y) = (-0.1127, 0.3255),
-radius 0.3445m, bearing ~109 deg (near the scene's existing "straight ahead"
-bearing=90 convention) - see that script's own run output / the kb doc's
-matching update for the full characterization and the visualization PNG.
+the 15mm cube, comfortable margin on every joint, AND - 2026-07-27 addition,
+see ROLL_TOL_DEG in that script - a jaw-slide-axis heading that actually
+straddles a face of the cube instead of colliding with it while open)
+actually exists, and recommended a specific interior point: world (x, y) =
+(-0.0238, 0.3436), radius 0.3445m, bearing ~94 deg (near the scene's
+existing "straight ahead" bearing=90 convention) - see that script's own run
+output / the kb doc's matching update for the full characterization and the
+visualization PNG.
 
 This script is the live confirmation: places the cube at that EXACT
 recommended point and drives the arm DIRECTLY to the two FK-precomputed
@@ -108,32 +111,41 @@ VIDEO_PATH = os.path.join(LOG_DIR, "videos", f"ar4_graspable_workspace_confirm{_
 GRIPPER_OPEN = 1.0
 GRIPPER_CLOSE = -1.0
 
-# FK-recommended point, scripts/ar4_graspable_workspace.py's own sweep
-# output (8M-sample Stage A + 145-step joint_1 Stage B sweep, 2026-07-27):
-# world (x, y) = (-0.1127, 0.3255), radius=0.3445m, bearing=109.1deg (near
-# the scene's existing bearing=90deg "straight ahead" convention). height
-# error at this point: +1.51mm off GRASP_AT_HEIGHT=0.0105m; tilt from
-# vertical: 2.91deg; min joint margin (any of joint_1-6): 27.68deg (well
-# above the 14.3deg/0.25rad filter threshold).
-RECOMMENDED_CUBE_XY = (-0.11270833064477809, 0.3255077063604289)
+# 2026-07-27 UPDATE (ar4-graspable-roll-constraint task): superseded by the
+# ROLL-CONSTRAINED sweep - scripts/ar4_graspable_workspace.py's Stage 1
+# filter now also constrains the gripper jaw-slide axis's world-frame
+# heading (ROLL_TOL_DEG=12deg from parallel to world X or Y), after the
+# original (roll-unconstrained) point below was live-confirmed to collide
+# with the cube at 52-61N even gripper-OPEN (kb/wiki/concepts/
+# ar4-vs-franka-root-cause-comparison.md's 2026-07-27 "ar4-graspable-
+# workspace-from-fk task" UPDATE). Same Stage-A survivor (identical
+# joint_2-6), re-swept over joint_1 with roll filtered: closest-to-bearing-90
+# joint_1 that also satisfies roll landed at joint_1=-4.32deg, bearing=94.0deg,
+# world (x,y)=(-0.0238, 0.3436) - same radius (0.3445m) and min joint margin
+# (27.68deg) as before, PLUS jaw-slide-axis roll/heading offset 10.08deg
+# (within the new 12deg tolerance).
+RECOMMENDED_CUBE_XY = (-0.023809635667085667, 0.3436444906384511)
 
 HOME_Q = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 
 # GRASP_Q: the exact FK-forward-sampled joint configuration whose pinch
 # point (link_6 + _EE_OFFSET, matching grasp_demo_v2.py's own convention)
 # lands at RECOMMENDED_CUBE_XY at GRASP_AT_HEIGHT=0.0105m, tilt=2.91deg from
-# vertical. Degrees, converted to radians below.
-GRASP_Q_DEG = [-19.45950689021618, 62.32407343477408, 24.213659245578118, -15.360723852639964, 6.104608002441614, 99.52404978549994]
+# vertical, jaw-slide-axis roll/heading offset=10.08deg (2026-07-27 addition).
+# Degrees, converted to radians below.
+GRASP_Q_DEG = [-4.32433486449247, 62.32407343477408, 24.213659245578118, -15.360723852639964, 6.104608002441614, 99.52404978549994]
 
 # PREGRASP_Q: a SEPARATE FK-forward-sampled config (same method - local
 # Gaussian perturbation search around GRASP_Q's own joint_2-6 values, joint_1
 # held fixed at GRASP_Q's value since azimuth shouldn't change for a pure
-# vertical-hover waypoint) at the SAME (x,y) (within 0.5mm) but hover height
-# = GRASP_AT_HEIGHT + 0.05m = 0.0605m, tilt=2.89deg, min joint margin 23.5deg.
-# This is a genuinely different, independently-found valid FK config, not an
-# interpolation/guess - both waypoints came from the same "sample forward,
-# keep what satisfies the filters" method this whole task is built around.
-PREGRASP_Q_DEG = [-19.45950689021618, 52.360982999717486, 28.492202965999496, -14.980745756538473, 7.161794376970106, 132.48857602752358]
+# vertical-hover waypoint, NOW also filtered by the same roll criterion -
+# scripts/_ar4_pregrasp_search_roll_constrained.py) at the SAME (x,y) (within
+# 1.7mm) but hover height = GRASP_AT_HEIGHT + 0.05m = 0.0605m, tilt=0.91deg,
+# roll offset=3.98deg, min joint margin=24.12deg. This is a genuinely
+# different, independently-found valid FK config, not an interpolation/
+# guess - both waypoints came from the same "sample forward, keep what
+# satisfies the filters" method this whole task is built around.
+PREGRASP_Q_DEG = [-4.32433486449247, 52.434178877076384, 27.87529831816333, -2.2493188573178595, 8.860705727687604, 100.52702739544871]
 
 GRASP_Q = [math.radians(d) for d in GRASP_Q_DEG]
 PREGRASP_Q = [math.radians(d) for d in PREGRASP_Q_DEG]

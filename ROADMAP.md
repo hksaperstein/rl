@@ -654,10 +654,61 @@ Roughly in the order they'd likely be picked up:
    "ar4-locked-achieved-orientation-grasp" UPDATEs) — see "Recently landed"
    for the full current-state writeup.
 
+   **UPDATE (2026-07-28, later): a Cartesian fingertip-correction fix was
+   tried as an alternative explanation for the residual (see "Recently
+   landed" above, ar4-cartesian-fingertip-correction task) and REFUTED as
+   the mechanism — even a point where the correction achieved real
+   progress (Q2, ~2x residual reduction) still produced zero lift.** This
+   strengthens rather than replaces the roll/heading diagnosis above: the
+   concrete next step for whoever picks this investigation back up is now
+   specifically the grasp-ORIENTATION-search question (tightening
+   `ROLL_TOL_DEG` below its current 12°, or redesigning how a grasp
+   orientation is selected so it's genuinely antipodal rather than merely
+   within-tolerance) — not another position-precision fix, since two
+   independent position-precision mechanisms (joint-space tracking,
+   Cartesian fingertip correction) have now both been tried and both left
+   the identical "contact collapses to exactly 0N the instant LIFT-CLOSE
+   begins" failure signature untouched.
+
 See `BACKLOG.md` for further-out candidates not yet on this list.
 
 ## Recently landed
 
+- **AR4 Cartesian fingertip correction — built and tested as designed, but
+  does NOT close the capstone grasp: directly confirms, rather than
+  overturns, the roll/heading diagnosis** (2026-07-28, direct continuation
+  of the pedestal-fix task below). Built
+  `tasks/ar4/joint_tracking.py`'s new `settle_to_cartesian_pose` (a DLS
+  outer-loop that nulls the REAL fingertip's Cartesian error, not just
+  joint-space error) to test the hypothesis that the pedestal-fix task's
+  remaining ~6-7mm pinch-point residual was a joint-space-vs-Cartesian
+  lever-arm gap, independent of the already-flagged roll/heading issue.
+  Live-tested at the same 3 pedestal-corrected validation points: the
+  correction did NOT converge to its own <2mm target at any point within 8
+  iterations (Q0: 5.585→5.044mm, Q1: 5.287→5.243mm barely moved, Q2:
+  7.376→3.544mm, best case) - but more importantly, even Q2 (the point
+  with the largest real improvement, plus a strong-looking two-sided
+  PHASE3-CLOSE contact ~64N/~58N) still produced **exactly 0.00mm height
+  gain**, with contact collapsing to 0.000N within 20 steps of LIFT-CLOSE
+  beginning - identical to every other point and every prior attempt.
+  **Honest verdict: this task's own hypothesis (fixable Cartesian position
+  gap) is not supported by the evidence; the pedestal-fix task's diagnosis
+  (jaw-vs-cube roll/heading misalignment preventing a genuinely antipodal
+  grip) stands as the real blocker.** The capstone AR4 grasp+lift remains
+  NOT achieved. A secondary, unexplained finding: the new primitive itself
+  plateaus rather than converging at these configs, with `joint_5` showing
+  the same "correction grows without closing the gap" signature previously
+  seen on `joint_2` at a different pose - flagged for whoever extends it,
+  not chased further here. Also surfaced a real, reproducible tension
+  between this project's "blocking foreground cloud dispatch" convention
+  and a job whose own duration (~23min to the teardown hang) exceeds one
+  tool call's ~10min timeout ceiling (worked around via `--detach` +
+  manual polling/teardown this task, not yet resolved as a standing
+  pattern) - see `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s
+  2026-07-28 "ar4-cartesian-fingertip-correction task" UPDATE for full
+  detail, including a partial-log-loss infra note (the container `docker
+  run` invocation still lacks `PYTHONUNBUFFERED=1`, unlike an already-fixed
+  sibling script).
 - **AR4 pedestal fix: the ground-collision problem is genuinely SOLVED and
   verified — but a different, already-documented issue (jaw-vs-cube
   roll/heading contact) still blocks a real grasp+lift** (2026-07-28,

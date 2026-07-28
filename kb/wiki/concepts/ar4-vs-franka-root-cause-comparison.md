@@ -4940,3 +4940,163 @@ immediately above (the empty-workspace finding this task fixes) and
 2026-07-27 "ar4-graspable-roll-constraint"/2026-07-24 "ar4-locked-
 achieved-orientation-grasp" UPDATEs (the roll/heading-contact issue this
 task's own new failure mode matches, not re-derived here).
+
+## UPDATE 2026-07-28 (ar4-cartesian-fingertip-correction task): the Cartesian outer-loop fix was built and tested as designed, but does NOT close the capstone grasp — directly confirming, not overturning, the pedestal-fix task's own roll/heading diagnosis
+
+Direct continuation of the 2026-07-28 "ar4-pedestal-ground-clearance-fix
+task" immediately above. That task's own remaining ~6-7mm pinch-point
+discrepancy was hypothesized (this task's own dispatch brief) to come from
+`settle_to_joint_pose` nulling error in JOINT space only — a small residual
+on an upstream joint amplifies via lever arm to several mm at the
+fingertip even when every joint individually looks converged - a
+DIFFERENT, independent mechanism from the roll/heading-misalignment
+explanation that task's own "Honest verdict" section flagged as the more
+likely cause. Tasked with building a genuine Cartesian closed-loop
+correction, verifying it converges the real fingertip to <2mm, then
+re-running the grasp - and reporting honestly if it still fails.
+
+**Built**: `tasks/ar4/joint_tracking.py`'s new `settle_to_cartesian_pose` -
+measures the REAL achieved pinch-point world position each outer
+iteration, computes the Cartesian error against the FK-predicted target,
+and maps it to a joint-space correction via a damped-least-squares solve
+of the pinch point's own position Jacobian (`J_pos - skew(R@offset) @
+J_ang`, the identical identity `scripts/grasp_demo_v2.py`'s own DLS polish
+already uses for `_ee_point_pos_and_jacobian` - reimplemented in pure torch
+so this module stays isaaclab-import-free per its own established
+convention). `scripts/ar4_cartesian_grasp_confirm.py` re-runs the exact
+same 3 pedestal-corrected validation points
+(Q0_bearing95/Q1_bearing108/Q2_bearing80), inserting this correction
+between the existing joint-space GRASP-OPEN-SETTLE and the CLOSE phase.
+
+**Result: the correction does NOT converge to the <2mm target at any of
+the 3 points within its 8-iteration budget, and even where it makes real
+partial progress, the grasp still completely fails.**
+
+| Point | Pinch residual BEFORE (joint-settle only) | Pinch residual AFTER (+ Cartesian correction, 8 iters) | Converged (<2mm)? | Open-gripper max force | Height gain | Verdict |
+|---|---|---|---|---|---|---|
+| Q0_bearing95 | 5.585mm | 5.044mm | No | 51.71N | **0.00mm exactly** | NOT CONFIRMED |
+| Q1_bearing108 | 5.287mm | 5.243mm (barely moved) | No | 66.65N | **0.00mm exactly** | NOT CONFIRMED |
+| Q2_bearing80 | 7.376mm | 3.544mm (best case, ~2x improvement) | No | 79.17N | **0.00mm exactly** | NOT CONFIRMED (inferred from raw phase data - see below) |
+
+(Q2's own literal `VERDICT`/`FINAL MULTI-POINT SUMMARY` lines were lost to
+a real infra issue - see "Infra note" below - but are not needed: the
+underlying `cube_z_by_phase` values printed for every phase are flat at
+0.0475m throughout, and `PHASE4-LIFT-CLOSE`'s own per-step force trace
+shows contact collapsing from 18.978N/41.307N at step 0 to exactly
+0.000N/0.000N by step 20 and staying there through HOLD and RETREAT -
+the identical signature every other point (and every prior attempt in
+this investigation) shows, so `real_lift=False`/`held_through_retreat=False`
+follow directly from the same already-validated verdict arithmetic, not a
+new inference method.)
+
+**Two distinct findings, not one:**
+
+1. **The Cartesian correction primitive itself has a real, unexplained
+   convergence gap.** At Q2, the per-iteration error trace
+   (7.22→6.59→4.94→3.93→4.05→4.06→3.45→3.54mm) shows real initial progress
+   through iteration 3, then a plateau/mild oscillation around ~3.5-4mm
+   for the remaining 5 iterations - not a clean monotonic convergence to
+   the 2mm target. At Q0/Q1 the correction barely moved the residual at
+   all (5.585→5.044mm, 5.287→5.243mm). This does not by itself prove a bug
+   in the new primitive - it could equally be a genuine kinematic-
+   authority limit at this specific joint-configuration family, echoing
+   the 2026-07-28 "ar4-joint-tracking-closed-loop-fix task" finding that
+   `joint_2` hit a real unmodeled hard stop at a different (pre-pedestal)
+   configuration: at Q2 specifically, `joint_5`'s own correction term (from
+   the underlying `settle_to_joint_pose` calls this task reused unchanged)
+   grew from -22.4deg to -28.6deg across outer iterations without closing
+   the joint-space gap either (`GRASP joint-settle: converged=False
+   max_err_deg=4.7075`, vs. Q0/Q1's much smaller 0.84-0.89deg residuals) -
+   the same "correction keeps growing, achieved state doesn't move"
+   signature previously diagnosed as a hard constraint, this time on a
+   different joint. Not chased further - outside this task's own bounded
+   scope (confirm/refute the Cartesian-correction hypothesis for the
+   already-known 6-7mm gap), flagged for whoever next touches
+   `settle_to_cartesian_pose` or extends this investigation.
+2. **Even the best-case, most-improved point (Q2, residual cut roughly in
+   half to 3.5mm, with a strong-looking two-sided `PHASE3-GRASP-CLOSE`
+   contact sustained at jaw1~64-66N/jaw2~57-58N for the full close
+   duration) still produced ZERO height gain** - not just "under the 1cm
+   bar" but exactly 0.00mm, with contact force collapsing to precisely
+   0.000N within 20 steps of `PHASE4-LIFT-CLOSE` beginning, identical to
+   every other point and every prior attempt in this investigation. A
+   real, if partial, position-residual improvement did not translate into
+   a real, if partial, grasp improvement.
+
+**Honest verdict, per this task's own dispatch brief ("if it STILL fails
+even with the fingertip verified <2mm on-target... report honestly...
+don't force a positive"):** the fingertip was NOT actually driven under
+2mm at any point (a genuine partial null on this task's own primary
+convergence target), but the more important result is that even the point
+which came closest (Q2, 3.5mm, a real ~2x improvement over the joint-only
+baseline) still failed identically to the points that barely improved at
+all - strong evidence that the position residual was never the binding
+constraint on the capstone grasp+lift, and that the 2026-07-28
+pedestal-fix task's own "Honest verdict" (the blocker is jaw-vs-cube
+roll/heading misalignment producing a non-antipodal grip that cannot
+survive a lift, not the Cartesian position gap) was the correct diagnosis
+all along. This task's own hypothesis (joint-space-vs-Cartesian lever-arm
+amplification as an INDEPENDENT, fixable mechanism) is **not supported** by
+this evidence - a real, well-evidenced null result for the specific
+mechanism this task was dispatched to test, not a bug in the fix or a
+methodology failure. The capstone AR4 grasp+lift remains **NOT achieved**;
+per this task's own brief, the roll/heading question (tightening
+`ROLL_TOL_DEG` or otherwise redesigning the grasp-orientation search) is
+flagged back rather than decided or attempted unilaterally, since it is
+outside this task's own bounded scope (test the Cartesian-correction
+hypothesis) and would need its own grounding.
+
+**Infra note (a new variant of this project's own recurring Isaac-Sim-
+teardown-hang finding):** the cloud run hit the documented "real work
+already done, hung in Kit shutdown teardown" pattern (0% GPU utilization,
+CPU pinned ~111% - not near-idle this time, suggesting genuine, if
+wasteful, Kit extension-unload CPU work rather than a true infinite-loop
+hang) for 12+ minutes with the log frozen at 901 lines. Recovered via the
+established `kill -TERM` pattern; this triggered a partial stdout flush
+(901→917 lines) that recovered most - but not literally all - of the
+buffered tail (the very last few print statements, including Q2's own
+`VERDICT`/`FINAL MULTI-POINT SUMMARY` lines, were genuinely lost - the
+docker run's own stdout is not `PYTHONUNBUFFERED`-wrapped in this task's
+`_cloud_ar4_cartesian_grasp_confirm.sh`, unlike the exact bug already
+documented and fixed for a DIFFERENT lightweight diagnostic script in the
+2026-07-28 "ar4-joint2-ground-clearance-fix task" UPDATE above - this
+container-pipeline `docker run` invocation was never updated to match,
+and this task did not need to since the lost lines were independently
+reconstructible from earlier-flushed raw phase data, per the verdict table
+above). Flagged, not fixed, since it did not block this task's own
+conclusion - a real gap for whoever next dispatches
+`scripts/_cloud_ar4_*_confirm.sh`-style payloads to fix at the source
+(add `-e PYTHONUNBUFFERED=1` to the `docker run` invocation, matching the
+already-proven fix). Separately: the FIRST dispatch attempt this task made
+(blocking, not `--detach`, `--on-demand --cost-cap 2.50`) was itself killed
+by this session's own ~10-minute tool-call timeout mid-`docker pull`,
+before the job could even start real work - `run_on_cloud_gpu.sh`'s own
+`trap cleanup EXIT` correctly tore the instance down anyway (confirmed via
+`scripts/check_cloud_state.sh` immediately after), so no orphaned resource
+resulted, but this is a real, reproducible tension between this project's
+"run cloud dispatches in blocking foreground mode" convention and this
+specific task's job duration (~23min from dispatch to the teardown-hang
+kill) exceeding a single tool call's own hard timeout ceiling - resolved
+this task by redispatching with `--detach` and manually polling/tearing
+down instead, but the underlying tension is not specific to this task and
+will recur for any AR4 cloud confirm job of similar length.
+
+**Cost:** two on-demand `g2-standard-4`+`nvidia-l4` cloud dispatches
+(the first: ~2min before a stockout-retry-then-tool-timeout kill, torn
+down automatically via the script's own EXIT trap; the second: ~28min
+including the teardown hang, manually torn down after `kill -TERM`),
+both confirmed zero leftover instances/disks/snapshots via
+`scripts/check_cloud_state.sh`. Combined well under the $2.50 cap (rough
+estimate ≈$0.35-0.40 at the ~$0.72/hr on-demand approximation).
+
+**Sources:** this task's own live runs - `scripts/ar4_cartesian_grasp_confirm.py`,
+`tasks/ar4/joint_tracking.py`'s new `settle_to_cartesian_pose`,
+`scripts/_cloud_ar4_cartesian_grasp_confirm.sh` (cloud dispatch payload);
+the synced log `gs://rl-manipulation-hks-runs/ar4-cartesian-grasp-confirm/20260728-121539/cartesian_grasp_confirm.log`;
+`scripts/grasp_demo_v2.py`'s `_ee_point_pos_and_jacobian`/
+`_world_jacobian_to_root_frame` (the Jacobian identity reused, reimplemented
+in pure torch); this article's own 2026-07-28 "ar4-pedestal-ground-
+clearance-fix task" UPDATE immediately above (the 6-7mm gap this task
+tests a fix for, and the roll/heading diagnosis this task's own evidence
+confirms) and "ar4-joint-tracking-closed-loop-fix task" UPDATE (the
+joint_2-hard-stop signature this task observed a variant of on `joint_5`).

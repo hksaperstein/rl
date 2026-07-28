@@ -661,6 +661,26 @@ See `BACKLOG.md` for further-out candidates not yet on this list.
   concrete, fixable gap flagged for the next session.
   `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s 2026-07-27
   UPDATE.
+- **AR4 graspable-roll-constraint — roll/heading hypothesis REFUTED**
+  (2026-07-27) — added the missing jaw-slide-axis heading constraint
+  (`ROLL_TOL_DEG=12°` from parallel to world X/Y) to the FK sweep above,
+  sanity-checked against `grasp_demo_v2.py`'s own known-good heading,
+  re-swept (38,521/144,710 survivors, 26.6% — matching the geometric
+  prediction almost exactly, a clean correctness signal). Live
+  confirmation across 3 independently-chosen points spanning roll offsets
+  1.06°-10.83° all show the SAME ~45-56N open-gripper collision force
+  regardless of roll quality — a clean, 3-point-replicated negative
+  result. **The roll/heading hypothesis is refuted, not just
+  unconfirmed.** Next concrete hypothesis (not yet tested): the jaw
+  COLLISION GEOMETRY itself (convex-hull approximation, already flagged
+  as an unresolved AR4 defect in `CLAUDE.md`'s Franka-pivot rationale) —
+  this task's data is a second, independent corroboration of that
+  candidate. Also surfaced a real infra finding: the prior session's
+  "camera/render-pipeline stall" recurred in a camera-FREE script, mid a
+  sustained jammed-contact state — weakens "render-pipeline-specific" as
+  that stall's explanation. `kb/wiki/concepts/ar4-vs-franka-root-cause-
+  comparison.md`'s 2026-07-27 (later, ar4-graspable-roll-constraint task)
+  UPDATE.
 - **Franka IK dice-line pick-and-place demo** (2026-07-21) — classical
   IK-only pick/line-up/relocate of all 5 dice; 8/10 pick-and-place ops
   succeeded, d4 (this project's well-documented hardest grasp case)

@@ -4116,11 +4116,94 @@ margined on roll specifically), min margin 27.65°; `P2` world `(-0.0508,
 27.47°. Both re-derived their own PREGRASP configs via the same search
 method.
 
-### Live confirmation (cloud GPU)
+### Live confirmation (cloud GPU): the roll fix does NOT eliminate the collision — the roll/heading hypothesis is REFUTED, not merely unconfirmed
 
-TODO — cloud confirmation run in progress at time of writing; this
-section will be filled in with the real numeric result (open-gripper
-contact force before vs. after the fix, close-phase contact force on
-both jaws, real height gain, retreat-hold behavior, across all 3
-validation points) once the run completes. Not leaving this as a
-standing TODO — will be replaced before this task's own commit.
+**Honest verdict up front: this task's own hypothesis was wrong.** Roll
+was genuinely constrained (sanity-checked, geometrically clean re-sweep),
+but live confirmation across 3 independently-chosen points — spanning
+roll offsets from 1.06° (P1, near-perfect alignment) to 10.83° (P2,
+near the tolerance boundary) — shows the SAME open-gripper collision, at
+statistically indistinguishable force magnitudes, regardless of how well
+roll is satisfied:
+
+| Point | Roll offset | Tilt | Open-gripper force (jaw1/jaw2, steady-state) |
+|---|---|---|---|
+| P0 (recommended) | 10.08° | 2.91° | 53.8N / 51.3N |
+| P1 | **1.06°** (near-perfect) | 5.15° | 46.8N / 44.9N |
+| P2 | 10.83° | 6.91° | 51.1N / 45.2N |
+
+If roll heading were the real mechanism, P1's near-perfect alignment
+should have shown dramatically less (ideally ~0N) collision force
+compared to P0/P2. It did not — all three land in the same ~45-54N band,
+a difference of only ~15% across a 10x difference in roll-offset quality.
+**This is a clean, three-point-replicated negative result, not an
+ambiguous one.** Cube never moves during this (`cube_z` exactly `0.0075m`
+throughout for all 3 points, unchanged) despite 45-54N of sustained
+force — consistent with a genuine geometric interference/jam, not a
+one-time bump. All 3 points: `BOTH jaws registered real contact force
+(post-close): True`, `Real height gain: False`, `VERDICT: GRASP+LIFT NOT
+CONFIRMED`.
+
+**Next concrete hypothesis (not yet tested this task, well-evidenced from
+this repo's OWN prior work): the jaw COLLISION GEOMETRY itself, not
+heading, is the real cause.** `scripts/build_asset.py`'s own
+`_fix_jaw2_collision_mesh_asymmetry` (2026-07-24 finding, still active in
+the current asset-build pipeline, confirmed called at the pipeline's main
+call site) documents that each jaw's collision mesh — used via a
+`UsdPhysics.MeshCollisionAPI.approximation == "convexHull"` schema per
+`CLAUDE.md`'s own already-recorded "unresolved AR4-asset-specific defect"
+flag from the Franka-pivot decision — spans a substantial **~34mm along
+its own local-frame axis** (jaw1: `[-0.018475, +0.015825]`), a real,
+sizeable extent that has nothing to do with world-frame heading. If the
+`_EE_OFFSET`/aperture model (`0.036m` pinch-point offset, `0.014m`
+per-jaw "open" travel) doesn't correctly capture where this actual mesh
+geometry sits relative to the assumed pinch point, the jaws' real
+collision hulls could interfere with the cube in a way that is INTRINSIC
+to the jaw's own local geometry — and therefore genuinely
+orientation-independent, exactly matching this task's own 3-point
+result. This is a second, independent piece of evidence for the same
+root-cause candidate the Franka pivot's own rationale already named
+("the jaw collision geometry uses an unverified convex-hull approximation
+that may distort contact-force directions") — not a new finding out of
+nowhere, but this task's own live data corroborating it. **Not tested or
+fixed this task** — confirming/fixing this would mean inspecting/rebuilding
+the actual collision mesh geometry (`scripts/_inspect_jaw_convex_hull.py`
+is the existing extraction tool), a genuine asset-level architectural
+change outside a roll-constraint task's own bounded scope; flagged here
+for whoever picks this up next rather than decided unilaterally.
+
+**A second, real infra finding: the previously-documented "undiagnosed
+rendering-pipeline stall" recurred, this time in the camera-FREE numeric
+script.** The on-demand instance's Vulkan driver reported
+`ERROR_INCOMPATIBLE_DRIVER` at Isaac Sim startup (~24-42s in) — yet PhysX
+compute still produced correct, sensible physics for P0's full 7-phase
+sequence, P1's full 7-phase sequence, and P2 through PHASE3-CLOSE, before
+the process hard-stalled (CPU pinned ~109%, GPU 0% utilization, zero new
+log lines) for 45+ minutes exactly at the P2 PHASE3→PHASE4 transition —
+right after P2's own sustained ~45-51N jammed-contact state, the same
+kind of state this file's prior UPDATE inferred as the trigger for the
+earlier camera-run stall. Since this numeric script has no camera/render
+pipeline at all, "camera/render-pipeline-specific" is now a weaker
+explanation for that earlier stall than "a sustained bad/penetrating
+PhysX contact configuration, independent of rendering" — worth revising
+that prior inference. Recovered via `kill -TERM` on the stuck container
+process (per this repo's own documented safe-recovery pattern for this
+exact CPU-busy/GPU-idle/no-progress signature) — the wrapper script's own
+`check()` error-handling correctly logged the step as FAILED and
+continued to a clean GCS sync + teardown, `scripts/check_cloud_state.sh`
+confirmed zero instances/disks/snapshots remaining afterward.
+
+**Cost:** on-demand `g2-standard-4`+`nvidia-l4`, ~46.5 minutes total
+(18:42:07 to ~02:28:41 UTC teardown) at the established ~$0.722/hr
+on-demand rate (2x the documented $0.361/hr spot rate) ≈ **~$0.58 total**,
+well under the task's $2 cap.
+
+**Sources:** this task's own live run —
+`scripts/ar4_graspable_workspace_confirm_numeric.py` (3-point validation,
+extended this task with `open_gripper_max_force` tracking),
+`scripts/_cloud_ar4_graspable_workspace_confirm_roll.sh` (cloud dispatch
+payload); `scripts/build_asset.py`'s `_fix_jaw2_collision_mesh_asymmetry`
+docstring (2026-07-24 finding, cross-referenced for the collision-geometry
+hypothesis); `CLAUDE.md`'s "Platform pivot" section (the jaw
+collision-geometry defect already flagged there as a candidate AR4 root
+cause prior to this task).

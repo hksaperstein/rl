@@ -18,9 +18,13 @@ ament_target_dependencies(probe_pose rclcpp moveit_ros_planning_interface)
 add_executable(pick_demo src/pick_demo.cpp)
 ament_target_dependencies(pick_demo rclcpp moveit_ros_planning_interface moveit_msgs shape_msgs geometry_msgs)
 
+add_executable(gazebo_pick_demo src/gazebo_pick_demo.cpp)
+ament_target_dependencies(gazebo_pick_demo rclcpp moveit_ros_planning_interface moveit_msgs shape_msgs geometry_msgs)
+
 install(TARGETS
   probe_pose
   pick_demo
+  gazebo_pick_demo
   DESTINATION lib/${PROJECT_NAME})
 
 install(DIRECTORY launch

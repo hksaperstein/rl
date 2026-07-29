@@ -1,4 +1,4 @@
-# AR4 + MoveIt2 collision-aware pick demo (cloud shakedown, 2026-07-28)
+# AR4 + MoveIt2 collision-aware pick demo (cloud shakedown, 2026-07-28; Gazebo physics follow-on, 2026-07-28)
 
 Strategic pivot artifact: after this project's hand-rolled Isaac Sim
 IK/control approach for the AR4 hit a physics/control wall (see
@@ -135,3 +135,146 @@ in (or re-derive by pasting into the container via `cat > file <<'EOF'`,
 the exact mechanism used this session since `gcloud compute scp` had CLI
 flag issues with this project's standard SSH options, worked around with
 `gcloud compute ssh --command "cat > file"` redirection instead).
+
+## Gazebo PHYSICS follow-on (same day, 2026-07-28): real friction-jaw grasp attempt
+
+Direct follow-on task: take the working MoveIt pick above (RViz-only,
+fake/mock hardware, cube "attached" as a planning-scene object -- not a real
+physics grasp) and put it on real Gazebo physics, so the cube is actually
+gripped by jaw contact/friction and lifted under gravity, not teleported by
+a planning-scene bookkeeping trick.
+
+**Result: the arm is genuinely driven by Gazebo physics via
+`ros2_control`/`gz_ros2_control` (MoveIt's `FollowJointTrajectory`/
+`GripperCommand` actions actually move the simulated arm under real
+dynamics -- verified via `/joint_states`, not just planner "SUCCESS" logs).
+Pure friction did NOT hold the cube (honest negative result, live-tested,
+video: `logs/videos/ar4_gazebo_pure_friction_attempt_2026-07-28.mp4`). A
+grasp-assist `DetachableJoint` plugin (Gazebo's standard, widely-used
+fallback for exactly this well-known parallel-jaw-grasp-physics
+finickiness) DOES work and is video-confirmed lifting+carrying the cube:
+`logs/videos/ar4_gazebo_physics_pick_demo_2026-07-28.mp4` (this file
+contains several earlier flaky-IK retries before the successful run near
+the end of its ~8min runtime -- ffmpeg recording was left running
+continuously across retries rather than restarted each time).**
+
+Ground-truth verification (not just eyeballing the video), per this
+project's own standard: `ign topic -e -t /world/default/pose/info -n 1`
+read the cube's real rigid-body pose directly from the physics engine.
+Resting (pre-grasp): `(0.28, 0.0, 0.0475)`. Post-lift/carry (grasp-assist
+run): `(-0.007, -0.308, 0.539)` -- the z-height alone rose from 0.0475m to
+0.539m, conclusively confirming the cube physically followed the gripper
+rather than staying on the pedestal.
+
+### Vendor package used
+
+`annin_ar4_gazebo` (already part of the `ar4_ros_driver` checkout used by
+the cloud-shakedown task above) ships its own ready-made Gazebo Sim
+("Fortress", `gz-sim` 6.18.0 for this container's ROS Humble packages)
+bring-up: `gz_ros2_control/GazeboSimSystem` hardware plugin, a gripper with
+a real prismatic-jaw `<mimic>` joint, `ros_gz_bridge`/`ros_gz_sim`
+integration. This was used as-is per the task's own instruction to prefer
+the vendor's own Gazebo sim over hand-rolling one -- no new Gazebo
+integration was built from scratch, only bugs in the existing one were
+found and patched (below).
+
+### Real bugs found and fixed (all in `vendor_patches/`, beyond the two from the cloud-shakedown task above)
+
+1. **`patch_gripper_jaw_friction.py`** -- the vendor URDF never sets Gazebo
+   surface friction on the jaw links at all (no `<gazebo reference=...>`
+   blocks for them). Added explicit `mu1`/`mu2` = 0.8. Result: still not
+   enough to hold the cube by friction alone (see above) -- friction was
+   ruled OUT, not confirmed, but a real, deliberate parameter rather than
+   an unverified engine default.
+
+2. **`patch_ros2_control_position_only_and_mimic_fix.py`** -- root-caused a
+   real, 100%-reproducible SEGFAULT inside `gz_ros2_control`'s own
+   `GazeboSimSystem::write()`/`::read()`, crashing on the controller
+   manager's very first update cycle. Traced by reading
+   `gz_ros2_control`'s actual shipped source and cross-referencing
+   `github.com/ros-controls/gz_ros2_control/issues/628`: the vendor's
+   `gripper_jaw2_joint` (a `<mimic>` joint) is registered inside the
+   `<ros2_control>` block, and `GazeboSimSystem::write()`'s own manual
+   mimic-mirroring code dereferences an ECM component pointer with no null
+   check. Stripping the mimic joint's own interfaces (the documented fix
+   from that GitHub issue) did NOT resolve it here, because the crashing
+   code path is keyed off the *leader* joint's interfaces, not the
+   follower's. The fix that actually worked: remove `gripper_jaw2_joint`
+   from the `<ros2_control>` block **entirely**. The jaws still mirror
+   correctly via the physics engine's own native handling of the plain
+   URDF `<mimic>` tag (verified live via `tf2_echo` of both jaw links
+   showing a correctly symmetric open pose).
+
+3. **`patch_controllers_yaml_gain_and_interfaces.py`** -- matching
+   controller-side interface change (drop `velocity` command interface),
+   plus the fix for a real, live-measured weak-tracking bug: `gz_ros2_control`
+   reads `position_proportional_gain` as a ROS2 parameter on the
+   `controller_manager` node (via `declare_parameter`), not a URDF
+   `<hardware><param>` (an earlier attempt to set it in the URDF was a
+   silent no-op, confirmed via `ros2 param get`). With the default gain
+   (0.1), a gripper commanded to open 0.014m only reached ~0.0049m of real
+   physical travel (caught by checking `/joint_states` directly, not the
+   action's own claimed result field, which was stale/misleading) before
+   the controller falsely declared `reached_goal`. Gain raised to 50.0 in
+   `controllers.yaml`, confirmed reaching the full commanded target.
+
+4. **`patch_gazebo_launch_default_physics_engine.py`** -- the vendor's
+   `gazebo.launch.py` hardcodes `--physics-engine
+   gz-physics-bullet-featherstone-plugin`. This specific engine choice was
+   the actual trigger for the segfault above -- removing the override
+   (falling back to gz-sim's default DART engine) made the crash disappear
+   across every subsequent launch. Trade-off reported honestly:
+   bullet-featherstone is the engine a GitHub issue identifies as the only
+   one with native `<mimic>` support; DART was empirically verified (not
+   just assumed) to still correctly mirror this specific 1-leader/
+   1-follower gripper mimic joint, but this is not a general claim DART
+   supports `<mimic>` everywhere.
+
+5. **`gazebo_world_physics_pick_scene.world`** (not a patch script -- a
+   full reference copy of the modified world file, since the changes are
+   wholesale content additions rather than small text edits). Replaces
+   `annin_ar4_gazebo/worlds/empty.world`. Changes from vendor default:
+   restored real gravity (vendor's own empty.world ships with `<gravity>0 0
+   0</gravity>`, which would make a friction-grasp test physically
+   meaningless -- the cube has no weight to hold up in zero-g); added a
+   static `ground_plane`, a static `pedestal` (40mm), and a dynamic `cube`
+   (15mm, 5g, mu=0.8) at the exact same pose the reachable-workspace column
+   from the cloud-shakedown task already validated; added the
+   `DetachableJoint` grasp-assist plugin to the **cube** model (not the
+   robot's own URDF) -- a first attempt hosting the plugin on the robot
+   failed at `Configure()` time with "Link ... not found in model mk3" for
+   every link tried (`gripper_base_link`, `ee_link`), root-caused to a
+   real timing/ordering gap: a model spawned dynamically via
+   `ros_gz_sim create` doesn't yet have its own links registered in the
+   ECM when its own plugins `Configure()`. Hosting on the cube (present in
+   the static world file at server start) avoids that race; a further,
+   separate finding was that `gripper_base_link`/`ee_link` don't exist as
+   real physics link entities at all after URDF-to-SDF fixed-joint
+   reduction (SDF lumps fixed-jointed child links into their last
+   non-fixed parent) -- the real, attachable rigid body is `link_6`, used
+   as the plugin's `child_link`.
+
+### `gazebo_pick_demo.cpp` changes vs. the RViz-only `pick_demo.cpp`
+
+New executable (`ar4_pick_demo/src/gazebo_pick_demo.cpp`, launched via
+`gazebo_pick_demo.launch.py`), same step sequence as `pick_demo.cpp` plus:
+a 1.5s settle delay after the approach move before planning the descend
+(a live test hit the descend step's already-documented `kdl_kinematics_plugin`
+flakiness 3/3 in a row before this delay was added -- consistent with the
+next plan's start-state being captured while the arm was still settling
+under real physics, unlike the fake-hardware case where state updates are
+instantaneous); a bounded 4-attempt retry loop around the descend plan
+specifically (this exact step's flakiness was already documented by the
+cloud-shakedown task above); and, right after the gripper-close step, a
+`std::system()` call publishing to the DetachableJoint plugin's
+`attach_topic` via native `ign topic pub` (its topics are NOT ROS2 topics
+-- a plain `ros2 topic pub` finds no subscriber; `std::system()` is a
+pragmatic choice for a demo script, not meant as production practice).
+
+### Cost
+
+This follow-on task ran on the SAME persistent instance provisioned for
+the cloud-shakedown task above (`e2-standard-4`, CPU-only, on-demand),
+roughly 1h30m of additional wall-clock for this specific task's own setup
++ debugging + verification, well under the $5 cost cap. Full teardown
+verified via `scripts/check_cloud_state.sh` at the end of this task too.

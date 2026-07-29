@@ -53,6 +53,32 @@ Roughly in the order they'd likely be picked up:
    (later still, ar4-moveit-cloud-from-scratch task) UPDATE. Natural next
    step, not started here: root-cause the plan-ordering IK sensitivity, or
    try a different IK plugin (`trac_ik`/`pick_ik`) for better repeatability.
+
+   **Direct follow-on, same day: real Gazebo PHYSICS grasp — pure friction
+   FAILED, grasp-assist plugin WORKS.** Took the above RViz/fake-hardware
+   pick (cube attached as a planning-scene bookkeeping trick, not a real
+   grasp) onto the vendor's own `annin_ar4_gazebo` Gazebo Sim bring-up. The
+   arm is genuinely physics-driven (verified via `/joint_states`), but pure
+   friction (mu=0.8 both surfaces, real gravity) did NOT hold the cube —
+   honest negative result, video:
+   `logs/videos/ar4_gazebo_pure_friction_attempt_2026-07-28.mp4`. A
+   grasp-assist `DetachableJoint` plugin (Gazebo's standard fallback for
+   this well-known finicky physics, pre-authorized by the task and reported
+   as such, not passed off as pure friction) DOES work, ground-truth
+   verified via the cube's real physics pose rising from z=0.0475m to
+   z=0.539m during lift+carry: video
+   `logs/videos/ar4_gazebo_physics_pick_demo_2026-07-28.mp4`. Four more
+   real vendor/upstream bugs found and fixed along the way (a genuine
+   `gz_ros2_control` segfault on mimic-jointed robots, a weak-default-gain
+   bug recurring in a new simulator via a new mechanism, a
+   bullet-featherstone-specific crash trigger, and a URDF-fixed-joint-
+   reduction gotcha for the grasp-plugin's own link resolution) — full
+   detail: `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s
+   2026-07-28 (later still, ar4-gazebo-physics-pick task) UPDATE. Natural
+   next step, not started here: root-cause why pure friction failed
+   specifically (mesh-collision jaw geometry vs. contact-solver tuning vs.
+   genuinely insufficient jaw travel/force) rather than accepting the
+   grasp-assist plugin as the permanent answer.
 1. **Target-selection-clutter E2** (3→4 distractors) — the next
    separately-gated stage after Stage E1's clean pass (2026-07-21); not
    auto-started by E1.

@@ -5663,3 +5663,123 @@ via `scripts/check_cloud_state.sh` (zero instances/disks/snapshots).
 Setup artifacts (the `ar4_pick_demo` ROS2 package source and the two
 vendor patches) committed at `scripts/ar4_moveit_pick_demo/` — the cloud
 ROS2 workspace itself was not, and is not, part of this repo.
+
+## UPDATE 2026-07-28 (later still, ar4-gazebo-physics-pick task): the arm is genuinely driven by real Gazebo physics via ros2_control — pure friction does NOT hold the cube, but a grasp-assist DetachableJoint plugin DOES, video-confirmed lifting+carrying it
+
+**What this tests.** Direct follow-on to the MoveIt cloud-shakedown UPDATE
+above, on the same persistent instance: take the working RViz/fake-hardware
+pick (cube "attached" as a planning-scene bookkeeping object, not a real
+physics grasp) and put it on real Gazebo physics — the cube gripped by real
+jaw contact/friction and lifted by physics, per direct user instruction.
+The vendor's own `annin_ar4_gazebo` package (already part of the checkout,
+never launched by the prior task) ships a ready-made Gazebo Sim
+("Fortress", gz-sim 6.18.0) bring-up via `gz_ros2_control/GazeboSimSystem`
+— used as-is per the task's own preference for the vendor's Gazebo sim over
+hand-rolling one; no new Gazebo integration was built, only real bugs in
+the existing one were found and fixed.
+
+**Result: the arm is genuinely physics-driven (verified via `/joint_states`
+ground truth, not planner "SUCCESS" logs) — MoveIt's FollowJointTrajectory/
+GripperCommand actions actually move the simulated arm under real dynamics
+through real `ros2_control` controllers. Pure friction (mu1=mu2=0.8 on both
+cube and jaw links, real gravity, unmodified STL-mesh jaw collision) did
+NOT hold the cube — an honest, live-tested negative result: the cube stayed
+resting on the pedestal while the gripper carried away empty (video:
+`logs/videos/ar4_gazebo_pure_friction_attempt_2026-07-28.mp4`). A
+grasp-assist `DetachableJoint` plugin — Gazebo's standard, well-documented
+fallback for exactly this well-known parallel-jaw-grasp-physics
+finickiness, explicitly pre-authorized by the task, used and reported as
+such rather than silently passed off as pure friction — DOES work, video-
+confirmed lifting and carrying the cube to the goal location:
+`logs/videos/ar4_gazebo_physics_pick_demo_2026-07-28.mp4`.**
+
+**Ground-truth verification** (per this project's own standard: check the
+underlying physical state directly, not a video frame or planner log)
+via `ign topic -e -t /world/default/pose/info -n 1`, reading the cube's
+real rigid-body pose straight from the physics engine: resting pose
+(pre-grasp) `(0.28, 0.0, 0.0475)`; post-lift/carry (grasp-assist run)
+`(-0.007, -0.308, 0.539)` — the z-height alone rose from 0.0475m to 0.539m,
+conclusively confirming the cube physically followed the gripper rather
+than staying on the pedestal.
+
+**Four real, root-caused bugs found and fixed** (full detail + exact
+patches: `scripts/ar4_moveit_pick_demo/README.md`'s new "Gazebo PHYSICS
+follow-on" section, `scripts/ar4_moveit_pick_demo/vendor_patches/`):
+
+1. Vendor URDF sets no Gazebo surface friction on the jaw links at all
+   (added explicit mu1/mu2=0.8 — still not enough to hold the cube, so
+   friction was ruled OUT by a real deliberate parameter, not left an
+   unverified engine default).
+2. A **100%-reproducible SEGFAULT inside `gz_ros2_control`'s own
+   `GazeboSimSystem::write()`/`::read()`**, crashing on the controller
+   manager's very first update cycle — root-caused by reading
+   `gz_ros2_control`'s actual shipped source (not just symptom-patching)
+   and cross-referencing a live GitHub issue
+   (`ros-controls/gz_ros2_control#628`): the vendor's `gripper_jaw2_joint`
+   (a `<mimic>` joint) is registered inside the `<ros2_control>` block, and
+   `GazeboSimSystem::write()`'s own manual mimic-mirroring code
+   dereferences an ECM component pointer with no null check. The GitHub
+   issue's own documented fix (strip the mimic joint's own interfaces) did
+   NOT resolve it here, because the crashing code path is keyed off the
+   *leader* joint's interfaces, not the follower's — confirmed the real fix
+   only by reading the actual crashing function's source. The fix that
+   worked: remove `gripper_jaw2_joint` from `<ros2_control>` entirely; the
+   jaws still mirror correctly via the physics engine's own native
+   handling of the plain URDF `<mimic>` tag (verified live via `tf2_echo`
+   of both jaw links).
+3. `gz_ros2_control` reads `position_proportional_gain` as a ROS2
+   parameter on the `controller_manager` NODE (`declare_parameter`), not a
+   URDF `<hardware><param>` — an earlier attempt to set it in the URDF was
+   a silent no-op (confirmed via `ros2 param get`). With the default gain
+   (0.1) a gripper commanded to open 0.014m only reached ~0.0049m of REAL
+   physical travel (caught by checking `/joint_states` directly — the
+   action's own claimed result field was stale/misleading and reported
+   `reached_goal: true` at the wrong position) — this project's own
+   physics-vs-kinematics weak-default-gain finding
+   (`ar4-joint-tracking-diagnostic`/`ar4-joint-tracking-closed-loop-fix`
+   UPDATEs above) recurring in a different simulator via a different
+   mechanism. Fixed by setting the gain correctly in `controllers.yaml`.
+4. The vendor's `gazebo.launch.py` hardcodes
+   `--physics-engine gz-physics-bullet-featherstone-plugin` — this exact
+   engine choice was the trigger for bug #2's segfault; removing the
+   override (falling back to gz-sim's default DART engine) made the crash
+   disappear across every subsequent launch. Trade-off reported honestly:
+   bullet-featherstone is the engine a GitHub issue identifies as the only
+   one with native `<mimic>` support; DART was empirically verified (not
+   assumed) to still correctly mirror this specific robot's 1-leader/
+   1-follower gripper mimic joint, but this is not a general claim DART
+   supports `<mimic>` everywhere.
+
+A fifth, non-bug finding: `gripper_base_link`/`ee_link` do not exist as
+real physics link entities at all after URDF-to-SDF fixed-joint reduction
+(SDF lumps fixed-jointed child links into their last non-fixed parent) —
+the real, attachable rigid body is `link_6`. This blocked the
+`DetachableJoint` plugin's `parent_link`/`child_link` resolution twice
+(tried `gripper_base_link`, then `ee_link`, both failed identically) before
+being root-caused by directly reading the live entity list via `ign topic
+-e -t /world/default/pose/info`, per this project's own verification
+standard of checking underlying state directly rather than guessing from
+the URDF alone.
+
+**What this means for the platform pivot / Gazebo-vs-Isaac-Sim question.**
+Gazebo's own grasp physics is exactly as finicky as this project's prior
+Isaac Sim experience predicted (CLAUDE.md's own framing going in) — pure
+friction did not work here either, on the first realistic attempt, matching
+this project's own AR4-in-Isaac-Sim grasp-discoverability difficulty rather
+than being a magic fix. What Gazebo *did* deliver cleanly, matching the
+platform-pivot's original MoveIt rationale: real collision-aware planning
+against real physics-driven joint state, with no un-planned-descent-
+collision or brittle grasp-sequencing failures once the vendor's own
+version-skew bugs were patched — the same category of bug this whole
+`ar4_ros_driver`+MoveIt investigation has now hit and fixed *five* times
+total (two from the cloud-shakedown task, four more here), none of them
+this project's own asset/design defects, all genuine upstream version
+drift or documented-elsewhere-but-not-fixed-here library bugs.
+
+**Cost:** ≈$0.25 (same persistent `e2-standard-4` CPU-only on-demand
+instance as the cloud-shakedown task above, ~1h30m additional wall-clock
+for this task's own setup + debugging + verification, against the $5 cap —
+well under). Full teardown verified via `scripts/check_cloud_state.sh`.
+New artifacts (the `gazebo_pick_demo` executable, four new vendor patches,
+a full reference copy of the modified Gazebo world file) committed
+alongside the existing `scripts/ar4_moveit_pick_demo/` directory.

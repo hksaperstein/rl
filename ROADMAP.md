@@ -743,6 +743,33 @@ See `BACKLOG.md` for further-out candidates not yet on this list.
 
 ## Recently landed
 
+- **Native Isaac Sim AR4 pick — trajectory execution WORKS, native
+  grasp-assist BLOCKED in `ManagerBasedRLEnv`** (2026-07-29,
+  ar4-isaacsim-curobo-pick task). Replicated the MoveIt/Gazebo recipe
+  natively: proper multi-step interpolated trajectory execution through
+  the articulation controller drove a collision-free
+  `HOME→PREGRASP→GRASP→LIFT→RETREAT` with precise tracking — confirming
+  (yet again) that planning/control is NOT the AR4 Isaac Sim blocker. cuRobo
+  was a genuine wall (no `nvcc`/CUDA toolkit in the `isaac-lab:2.3.1`
+  container) → Isaac-native fallback per authorization. The real wall: the
+  grasp-HOLD. **Five distinct native grasp-assist configs all failed under
+  Isaac Lab `ManagerBasedRLEnv`** — `SurfaceGripper` manager never registers
+  (subscribes to physics-step events `env.sim.step()` doesn't fire); USD
+  fixed joints don't attach an external `RigidObject` to an articulation link
+  (runtime-create, runtime-toggle, pre-authored-active, GPU and CPU physics).
+  Root cause is the Isaac Lab abstraction (physics views built once at reset,
+  no runtime joint/topology re-read), NOT Isaac Sim physics. A labeled
+  kinematic pose-follow weld demonstrated the full pick visually (cube
+  0.0475→0.464 m, held through retreat; closeup video shows the cube gripped
+  between the jaws), flagged explicitly as pose-driven, not a physics grasp.
+  **Next step:** rebuild on the lower-level Isaac Sim standalone App API
+  (`World`+`SingleArticulation`+`World.step()`, where NVIDIA's own
+  SurfaceGripper example works) or bridge MoveIt over ROS2; bundled Lula RRT
+  is the Isaac-native collision-aware planner. Full detail:
+  `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s 2026-07-29
+  UPDATE; artifact `scripts/ar4_isaacsim_surfacegripper_pick.py`; video
+  `logs/videos/ar4_isaacsim_surfacegripper_pick/` (cost ≈$3.6, instance torn
+  down + verified clean).
 - **ROS2+MoveIt2 collision-aware AR4 pick, from scratch on a fresh cloud
   instance: SUCCEEDED** (2026-07-28, ar4-moveit-cloud-from-scratch task).
   MoveIt planned and executed a full pick (approach → descend → grasp →

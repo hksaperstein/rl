@@ -5783,3 +5783,112 @@ well under). Full teardown verified via `scripts/check_cloud_state.sh`.
 New artifacts (the `gazebo_pick_demo` executable, four new vendor patches,
 a full reference copy of the modified Gazebo world file) committed
 alongside the existing `scripts/ar4_moveit_pick_demo/` directory.
+
+## UPDATE 2026-07-29 (ar4-isaacsim-curobo-pick task): native Isaac Sim replication of the MoveIt/Gazebo pick — trajectory execution WORKS, but no native grasp-assist (SurfaceGripper OR PhysX fixed joint) integrates with Isaac Lab's `ManagerBasedRLEnv`; five configs conclusively tested and failed
+
+**What this tests.** Direct follow-on to the 2026-07-28 ROS2+MoveIt (RViz) and
+Gazebo-physics UPDATEs above. Those proved, in a non-Isaac stack, that the AR4
+pick blocker is planning/control (not the arm/asset) and that pure friction
+fails to hold the 15mm cube in BOTH sims (Gazebo needed a `DetachableJoint`
+grasp-assist). This task's brief: replicate that recipe **natively in Isaac
+Sim** — (1) collision-aware planning via cuRobo, (2) grasp-hold via Isaac Sim's
+native `SurfaceGripper`, (3) proper trajectory execution via the articulation
+controller — reusing this repo's fixed AR4 asset + the pedestal/15mm-cube scene
+(`Ar4PedestalGraspCameraEnvCfg`) and the height-corrected grasp geometry
+(`scripts/ar4_pedestal_grasp_height_corrected_check.py`). Run on cloud
+(NVIDIA `nvcr.io/nvidia/isaac-lab:2.3.1` container, L4 GPU) via
+`scripts/ar4_isaacsim_surfacegripper_pick.py` (new).
+
+**cuRobo: a genuine multi-hour wall on this stack → Isaac-native fallback (per
+the task's explicit authorization).** The `isaac-lab:2.3.1` container ships no
+`nvcc` / CUDA dev toolkit (`CUDA_HOME` empty), so installing cuRobo would mean
+installing the full CUDA 12.8 toolkit + a ~20-min CUDA-kernel compile + resolving
+Isaac Sim 5.1 / torch-2.7 compatibility — over the cost cap. The bundled Lula
+stack (`isaacsim.robot_motion.motion_generation`, incl. a real collision-aware
+RRT path planner `liblula_motion_planning.so`) is the zero-install Isaac-native
+planner analog and is the documented next step; this task prioritized proving the
+grasp+lift core first, so the trajectory here is a smooth multi-waypoint linear
+interpolation through the articulation controller (collision-free for this
+scene) rather than an RRT plan.
+
+**What WORKS (confirms the pivot's thesis).** Proper multi-step trajectory
+execution through Isaac Lab's articulation controller — `set_joint_position_target`
+per physics step across an interpolated waypoint sequence, arm gains boosted
+(stiffness 4000 / damping 200), NOT the single-shot PD set that was the
+hand-rolled failure mode — drove the full `HOME → PREGRASP → GRASP → LIFT →
+RETREAT` sequence with the arm tracking precisely and a collision-free descent
+to the height-corrected grasp pose (real fingertip lands inside the cube's
+vertical span). So the *motion/control* half of the pick is not the blocker in
+Isaac Sim either — matching the whole investigation's conclusion.
+
+**The WALL: native grasp-assist under Isaac Lab `ManagerBasedRLEnv`.** The
+15mm-cube hold is the confirmed cross-sim hard part, and in Isaac Lab's
+`ManagerBasedRLEnv` GPU/PhysX pipeline **every native runtime grasp-assist
+mechanism failed** — five distinct configurations, each live-tested with
+direct ground-truth checks (cube physics `root_pos_w[z]`, the SurfaceGripper
+manager's own USD `status`/`grippedObjects`, the attachment joint's `body1`):
+
+1. **Native `SurfaceGripper`** (`isaacsim.robot.surface_gripper`, created via
+   `robot_schema.CreateSurfaceGripper` + a D6 `IsaacAttachmentPointAPI`
+   attachment joint on `link_6`, geometry verified: cube sits at +0.063 along
+   `link_6` local +Z, `forwardAxis="Z"`, origin placed at the cube, grip
+   distance 0.03–0.06m, jaws closed, fabric OFF): the C++ manager **never
+   registers the gripper** — its USD `isaac:physics:status` attr stays `None`
+   and the attachment joint's `body1` never binds to the cube. `GripperView`'s
+   own status cycled Open→Closing→Open (retry timeout) but no object was ever
+   gripped. Root cause: the manager subscribes to physics-step / stage-update
+   events that `ManagerBasedRLEnv`'s manual `env.sim.step()` does not fire, so
+   it never takes ownership of the gripper (NVIDIA's own working example uses
+   the low-level `World` + `timeline.play()` + `subscribe_physics_step_events`).
+2. **Runtime-created USD `FixedJoint`** (`link_6`↔cube, authored at grasp
+   time): never injects into the already-running PhysX scene — cube stayed at
+   0.0475m while the arm lifted to 0.45m.
+3. **Pre-authored joint, runtime `jointEnabled` toggle** (parsed disabled at
+   reset, flipped True at grasp): test-lift gain 0.0mm — a runtime USD-attr
+   enable on a pre-parsed joint is not honored by the running sim.
+4. **Pre-authored joint ACTIVE from init** (enabled at authoring, so PhysX
+   parses a live constraint at reset; arm started at the grasp config with the
+   cube placed at `link_6`'s baked grasp-relative pose so no snap): cube still
+   frozen (0.0410m) while the arm lifted — the maximal fixed joint attaching an
+   external `RigidObject` to an articulation link (authored at `/World/...`,
+   outside the env namespace) is not wired into the env's physics.
+5. **Same as #4 on CPU physics** (`--device cpu`, ruling out a PhysX-GPU
+   maximal-joint limitation): identical failure.
+
+Common root cause: `ManagerBasedRLEnv` builds its PhysX simulation views once at
+`reset()` and does not re-read USD joint topology/enabled changes afterward, and
+does not provide a supported path to attach a scene `RigidObject` to an
+articulation link. This is an **Isaac-Lab-abstraction** limitation, not an Isaac
+Sim physics limitation.
+
+**What was demonstrated instead (honest, labeled).** A **kinematic pose-follow
+weld** — during the held phases, the cube's root pose is driven each step to
+`link_6 · (baked grasp-relative transform)` with zeroed velocity — produced the
+full pick: cube z rose 0.0475 m → 0.464 m and was held through the retreat to
+HOME (closeup video shows the red cube gripped between the AR4 jaws and carried
+up: `logs/videos/ar4_isaacsim_surfacegripper_pick/closeup.mp4` +
+`closeup_grasp_frame.png`; also `gs://rl-manipulation-hks-runs/ar4-isaacsim-surfacegripper-pick/weld/`).
+This is **pose-driven, NOT a contact/joint physics grasp** — flagged explicitly
+per this repo's verification standard (it is the "bookkeeping-trick" class the
+Gazebo task deliberately avoided); it demonstrates the intended full motion +
+grasp-assist *effect* but is not evidence of a physics hold.
+
+**Verdict / recommendation.** The AR4 Isaac Sim pick blocker is confirmed to be
+the **grasp-assist integration**, not planning/control — trajectory execution
+and the collision-free approach both work natively. A genuine native physics
+grasp-assist could **not** be achieved within `ManagerBasedRLEnv` in this task's
+budget. Recommended next step (out of budget here): build the pick on the
+**lower-level Isaac Sim standalone App API** (`isaacsim.core.api.World` +
+`SingleArticulation` + `World.step()`), where NVIDIA's own `SurfaceGripper`
+interactive example runs the manager correctly and runtime grasp joints engage;
+alternatively bridge the already-working MoveIt stack over the ROS2 bridge. The
+bundled Lula RRT remains the Isaac-native collision-aware planner for whichever
+path is chosen.
+
+**Cost:** ≈$3.6 (adopted the orphaned `rl-ar4-isaacsim-curobo-pick`
+`g2-standard-4`+L4 instance — its Isaac Lab container pull + AR4 GCS asset were
+already done, saving the cold-provision cost; most runtime went to the
+five-config grasp-assist investigation, aided by a warm shader cache making
+reruns ~2 min). Instance explicitly torn down and verified clean via
+`scripts/check_cloud_state.sh` (0 instances / 0 disks / 0 snapshots). Artifact:
+`scripts/ar4_isaacsim_surfacegripper_pick.py`.

@@ -91,8 +91,11 @@ parser.add_argument("--max_grip_distance", type=float, default=0.10)
 parser.add_argument("--cpu", action="store_true", help="run PhysX on CPU (avoids first-time GPU-pipeline init stall)")
 parser.add_argument("--stage", choices=["ground", "scene", "robot_noxform", "full"], default="full",
                     help="diagnostic: build scene incrementally to isolate a reset hang")
-parser.add_argument("--grasp_depth_extra", type=float, default=0.225,
-                    help="extrapolate GRASP_Q further past PREGRASP_Q by this fraction of the "
+parser.add_argument("--grasp_depth_extra", type=float, default=0.0,
+                    help="OPTIONAL extra VERTICAL descent past the IK grasp pose, in units of "
+                         "VERT_DESCENT_DIR (1.0 == 11.1mm straight down). Default 0 (the IK pose "
+                         "already targets cube center); the in-run closed loop handles residual. "
+                         "[legacy help follows] extrapolate GRASP_Q further past PREGRASP_Q by this fraction of the "
                          "PREGRASP->GRASP joint-space vector (e.g. 0.3 = 30%% deeper than GRASP_Q) "
                          "-- a bounded numeric tuning knob for the measured jaw/cube height gap, "
                          "reusing the SAME validated descent direction rather than a fresh IK solve. "
@@ -268,19 +271,30 @@ PREGRASP_Q_DEG = [-6.486502296738718, 46.38313360110892, 13.354865607777075,
 HOME_Q = [0.0] * 6
 GRASP_Q_BASE = [math.radians(d) for d in GRASP_Q_DEG]
 PREGRASP_Q = [math.radians(d) for d in PREGRASP_Q_DEG]
-# PREGRASP->GRASP joint-space direction == the validated descent direction.
-# Used both for the static --grasp_depth_extra pre-offset AND the in-run
-# CLOSED-LOOP descent (see main()): the live d=0.18 run showed the arm tracks
-# the BASE GRASP_Q accurately but UNDER-tracks an extrapolated deeper pose
-# (~20% of commanded descent -- joint_2 drooping under gravity), so a static
-# depth guess can't reliably land the fingertip on the cube. The closed loop
-# deepens along this direction until the MEASURED fingertip actually reaches
-# the cube's center Z, robust to whatever the tracking does.
-DESCENT_DIR = [g - p for g, p in zip(GRASP_Q_BASE, PREGRASP_Q)]
-GRASP_Q = list(GRASP_Q_BASE)
-if args_cli.grasp_depth_extra != 0.0:
+
+# VERTICAL-DESCENT IK GRASP POSE. At the base GRASP_Q the gripper sits directly
+# above the cube (fingertip X,Y dead-on the cube) but ~11mm too HIGH. The
+# earlier fix extrapolated GRASP_Q along the PREGRASP->GRASP direction to
+# descend -- but that direction is DIAGONAL: live 2026-07-30 showed it lowered
+# the fingertip ~8mm while shoving it ~15-18mm FORWARD in Y, PAST the cube, so
+# the cube ended up beside (not between) the jaws (0 contact, scoop artifact).
+# IK_GRASP_Q_DEG is instead a LOCAL DLS-IK solution (derived offline via the
+# standing pure-Python FK framework tasks/ar4/fk_verification.py, converged to
+# 0.002mm) that lowers the fingertip 11.1mm STRAIGHT DOWN to the cube's center
+# Z while holding X,Y fixed on the cube (drift 0.00mm) -- a tiny perturbation
+# of GRASP_Q (joint_2 +2.09deg, joint_3 -0.74deg, joint_5 -0.38deg), so it
+# stays well within reach. VERT_DESCENT_DIR (IK - base) is that pure-vertical
+# 11.1mm descent direction in joint space, reused by the in-run closed loop to
+# correct any residual gravity-droop under-tracking WITHOUT drifting off the
+# cube horizontally.
+IK_GRASP_Q_DEG = [-6.4875, 57.1201, 12.7372, 0.9256, 21.4778, 96.1841]
+IK_GRASP_Q = [math.radians(d) for d in IK_GRASP_Q_DEG]
+VERT_DESCENT_DIR = [ik - b for ik, b in zip(IK_GRASP_Q, GRASP_Q_BASE)]  # ~11.1mm world descent
+VERT_DESCENT_M = 0.0111  # world-meters of fingertip descent for +1.0 of VERT_DESCENT_DIR
+GRASP_Q = list(IK_GRASP_Q)  # grasp target = vertical-descent-to-cube-center pose
+if args_cli.grasp_depth_extra != 0.0:  # optional extra vertical nudge (same dir)
     _k = args_cli.grasp_depth_extra
-    GRASP_Q = [g + _k * d for g, d in zip(GRASP_Q_BASE, DESCENT_DIR)]
+    GRASP_Q = [g + _k * d for g, d in zip(IK_GRASP_Q, VERT_DESCENT_DIR)]
 
 ARM_JOINTS = ["joint_1", "joint_2", "joint_3", "joint_4", "joint_5", "joint_6"]
 GRIP_JOINTS = ["gripper_jaw1_joint", "gripper_jaw2_joint"]
@@ -292,7 +306,14 @@ GRIP_CLOSED = 0.0
 # and let the closed-loop descent + longer settle absorb the residual droop
 # rather than fighting it with stiffness alone.
 ARM_KP, ARM_KD = 7000.0, 350.0
-GRIP_KP, GRIP_KD = 10000.0, 200.0
+# GRIP_KP sets the closing/squeeze force: force = GRIP_KP * jaw position error.
+# At cube contact each jaw sits ~0.0065m short of its 0-target, so 5000*0.0065
+# ~= 33N squeeze -- firm, well above the ~0.12N needed for the 10g cube, but
+# far from the 500N that risks penetrating the small cube. The squeeze is
+# delivered by this PD drive directly (a proven closing path -- the prior task
+# closed the jaws this way); the earlier RUNTIME DriveAPI maxForce mutation is
+# removed (it desynced the articulation drive and left the jaws stuck open).
+GRIP_KP, GRIP_KD = 5000.0, 200.0
 
 JAW1_LOWER_EXTENT = 0.018475  # fingertip offset below jaw link origin
 
@@ -643,16 +664,14 @@ def main():
             log(f"[SQUEEZE] effort mode: jaw position gains zeroed; applying constant closing "
                 f"effort {squeeze['eff']:.3f} N/jaw (kd=30 damping for stability)")
         else:
-            # position mode: cap the drive maxForce to squeeze_force and target
-            # PAST the cube (GRIP_CLOSED) -> the drive pushes with exactly
-            # squeeze_force once it stalls against cube contact.
-            for _jname in GRIP_JOINTS:
-                _jp = find_prim_by_name(stage, AR4_ROOT, _jname)
-                _d = UsdPhysics.DriveAPI.Get(_jp, "linear")
-                if _d:
-                    _d.GetMaxForceAttr().Set(float(args_cli.squeeze_force))
-            log(f"[SQUEEZE] position mode: jaw drive maxForce capped to {args_cli.squeeze_force:.3f} N; "
-                f"target -> GRIP_CLOSED (past cube). Constant squeeze = the capped force.")
+            # position mode: simply drive the jaw target PAST the cube
+            # (GRIP_CLOSED). The squeeze force comes from the PD drive itself
+            # (GRIP_KP * contact error ~= 33N at the cube faces) -- NO runtime
+            # DriveAPI mutation (that desynced the articulation drive last run
+            # and left the jaws stuck open). This is the proven closing path.
+            log(f"[SQUEEZE] position mode: jaw target -> GRIP_CLOSED (past cube); squeeze delivered by the "
+                f"jaw PD drive (GRIP_KP={GRIP_KP:.0f} -> ~{GRIP_KP*0.0065:.0f}N at cube contact). No runtime "
+                f"maxForce mutation.")
 
     if args_cli.mechanism == "surface_gripper":
         gripper_view = GripperView(paths="/World/SurfaceGripper")
@@ -857,32 +876,33 @@ def main():
     report("at GRASP (open)")
     jaw_geometry("P2_GRASP(open, before descent)")
 
-    # ---- CLOSED-LOOP DESCENT ---------------------------------------------
-    # Deepen the grasp pose along the validated descent direction until the
-    # MEASURED fingertip midpoint reaches the cube's center Z. Static depth
-    # can't do this reliably: the live d=0.18 run showed the arm under-tracks
-    # an extrapolated deeper pose (gravity droop on joint_2), leaving the
-    # fingertip ~9.5mm ABOVE the cube. Jaws stay OPEN (28mm > 15mm cube) so
-    # they straddle the cube as they descend; the loop stops on convergence or
-    # a no-improvement tracking wall.
-    def fingertip_mid_z():
+    # ---- CLOSED-LOOP VERTICAL DESCENT ------------------------------------
+    # The grasp target is already the IK vertical-descent pose (fingertip at
+    # cube center, X,Y held). This loop only corrects residual gravity-droop
+    # under-tracking by nudging further along VERT_DESCENT_DIR -- the LOCAL
+    # pure-vertical direction -- so any correction descends straight down and
+    # does NOT drift the gripper off the cube horizontally (the failure of the
+    # earlier diagonal descent). Jaws stay OPEN (28mm > 15mm cube) so they
+    # straddle the cube. Stops on convergence or a genuine tracking wall.
+    def fingertip_mid_xyz():
         p1, _ = link_world_pose(stage, GRIP1_PATH)
         p2, _ = link_world_pose(stage, GRIP2_PATH)
-        return float(((p1[2] - JAW1_LOWER_EXTENT) + (p2[2] - JAW1_LOWER_EXTENT)) / 2.0)
+        m = (p1 + p2) / 2.0
+        return np.array([m[0], m[1], m[2] - JAW1_LOWER_EXTENT])
 
     target_z = cube_rest_z  # cube CENTER (measured resting z of the dynamic cube)
+    cube_xy = cube_pose()[0][:2]
     grasp_q_use = list(GRASP_Q)
     best_q = list(grasp_q_use)
-    _sens = 0.035  # ~m fingertip descent per unit-k (empirical; deliberately
-                   # conservative so each step is gentle -- the arm under-tracks
-                   # AND over-stiff/big steps oscillate; patience > aggression)
     _best_abs = 1.0e9
     _stall = 0
-    for _it in range(16):
-        drive(grasp_q_use, GRIP_OPEN, 50, render=(not args_cli.no_video))  # longer settle
-        ftz = fingertip_mid_z()
-        err = ftz - target_z  # >0 => fingertip ABOVE cube center -> must descend
-        log(f"[DESCENT it{_it}] fingertip_z={ftz:.4f}m target(cube_center)={target_z:.4f}m err={err*1000:+.2f}mm")
+    for _it in range(14):
+        drive(grasp_q_use, GRIP_OPEN, 50, render=(not args_cli.no_video))  # settle
+        ft = fingertip_mid_xyz()
+        err = ft[2] - target_z  # >0 => fingertip ABOVE cube center -> descend more
+        hxy = float(np.linalg.norm(ft[:2] - cube_xy) * 1000.0)  # horizontal miss (mm)
+        log(f"[DESCENT it{_it}] fingertip_z={ft[2]:.4f}m target={target_z:.4f}m err={err*1000:+.2f}mm "
+            f"horiz_off={hxy:.2f}mm")
         if abs(err) < _best_abs - 0.0002:
             _best_abs = abs(err); best_q = list(grasp_q_use); _stall = 0
         else:
@@ -890,12 +910,14 @@ def main():
         if abs(err) <= 0.0015:
             log(f"[DESCENT] converged within 1.5mm of cube center after {_it} refinement(s)")
             break
-        if _stall >= 2:  # two consecutive non-improvements -> genuine tracking wall
-            log(f"[DESCENT] tracking wall: best fingertip err {_best_abs*1000:.2f}mm above cube center "
+        if _stall >= 2:
+            log(f"[DESCENT] tracking wall: best fingertip err {_best_abs*1000:.2f}mm from cube center "
                 f"-- arm cannot descend further; using best-reachable pose")
             break
-        dk = max(-0.10, min(err / _sens, 0.30))  # bounded per-iteration deepening
-        grasp_q_use = [q + dk * d for q, d in zip(grasp_q_use, DESCENT_DIR)]
+        # nudge along the PURE-VERTICAL joint direction; err/VERT_DESCENT_M is
+        # the fraction of the 11.1mm unit descent needed, bounded per step.
+        frac = max(-0.30, min(err / VERT_DESCENT_M, 0.60))
+        grasp_q_use = [q + frac * v for q, v in zip(grasp_q_use, VERT_DESCENT_DIR)]
     grasp_q_use = best_q  # commit the deepest STABLY-reached pose
     report("at GRASP (open, after descent)")
     jaw_open_sep, jaw_open_off = jaw_geometry("P2_GRASP(open, after descent)")

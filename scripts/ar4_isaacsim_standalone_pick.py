@@ -63,6 +63,11 @@ parser.add_argument("--max_grip_distance", type=float, default=0.10)
 parser.add_argument("--cpu", action="store_true", help="run PhysX on CPU (avoids first-time GPU-pipeline init stall)")
 parser.add_argument("--stage", choices=["ground", "scene", "robot_noxform", "full"], default="full",
                     help="diagnostic: build scene incrementally to isolate a reset hang")
+parser.add_argument("--grasp_depth_extra", type=float, default=0.0,
+                    help="extrapolate GRASP_Q further past PREGRASP_Q by this fraction of the "
+                         "PREGRASP->GRASP joint-space vector (e.g. 0.3 = 30%% deeper than GRASP_Q) "
+                         "-- a bounded numeric tuning knob for the measured jaw/cube height gap, "
+                         "reusing the SAME validated descent direction rather than a fresh IK solve.")
 args_cli = parser.parse_args()
 
 # enable_cameras (and thus the RTX render pipeline) ONLY when capturing video.
@@ -211,6 +216,9 @@ PREGRASP_Q_DEG = [-6.486502296738718, 46.38313360110892, 13.354865607777075,
 HOME_Q = [0.0] * 6
 GRASP_Q = [math.radians(d) for d in GRASP_Q_DEG]
 PREGRASP_Q = [math.radians(d) for d in PREGRASP_Q_DEG]
+if args_cli.grasp_depth_extra != 0.0:
+    _k = args_cli.grasp_depth_extra
+    GRASP_Q = [g + _k * (g - p) for g, p in zip(GRASP_Q, PREGRASP_Q)]
 
 ARM_JOINTS = ["joint_1", "joint_2", "joint_3", "joint_4", "joint_5", "joint_6"]
 GRIP_JOINTS = ["gripper_jaw1_joint", "gripper_jaw2_joint"]
@@ -650,7 +658,21 @@ def main():
         """WORLD-frame jaw separation + cube-vs-jaw-midpoint offset -- the
         direct proof (or disproof) that the jaws are genuinely closing onto
         the cube rather than commanding a target that never takes physical
-        effect (this task's central defect to catch)."""
+        effect (this task's central defect to catch).
+
+        Reports BOTH the raw jaw-LINK-origin separation/offset (for
+        continuity with the module's other diagnostics) AND a
+        fingertip-corrected version, since `report()`'s own pre-existing
+        `fingertip_z = j1[2] - JAW1_LOWER_EXTENT` formula (already trusted
+        by this repo's prior height-fix work) establishes that the actual
+        gripping surface sits JAW1_LOWER_EXTENT=18.475mm below each jaw
+        LINK's own world-Z, not at the link origin itself -- using the raw
+        link origin alone overstates any real cube-to-fingertip gap by
+        that same ~18.5mm. Applying the identical world-Z correction to
+        BOTH jaws (matching the existing, already-validated convention,
+        rather than inventing a new per-jaw local-frame rotation that could
+        introduce a fresh sign bug) gives the fingertip-corrected numbers
+        that should be trusted for judging real contact."""
         p1, _ = link_world_pose(stage, GRIP1_PATH)
         p2, _ = link_world_pose(stage, GRIP2_PATH)
         sep_mm = float(np.linalg.norm(p1 - p2) * 1000.0)
@@ -658,11 +680,21 @@ def main():
         cp = cube_pose()[0]
         off_vec_mm = (cp - mid) * 1000.0
         off_mm = float(np.linalg.norm(off_vec_mm))
+
+        ext = np.array([0.0, 0.0, JAW1_LOWER_EXTENT])
+        f1, f2 = p1 - ext, p2 - ext
+        fsep_mm = float(np.linalg.norm(f1 - f2) * 1000.0)
+        fmid = (f1 + f2) / 2.0
+        foff_vec_mm = (cp - fmid) * 1000.0
+        foff_mm = float(np.linalg.norm(foff_vec_mm))
+
         dof_grip = np.array(robot.get_joint_positions())[grip_idx]
-        log(f"[JAW {label}] sep={sep_mm:.2f}mm cube_vs_jaw_mid_offset={off_mm:.2f}mm "
-            f"(dxyz_mm=[{off_vec_mm[0]:.2f},{off_vec_mm[1]:.2f},{off_vec_mm[2]:.2f}]) "
+        log(f"[JAW {label}] RAW: sep={sep_mm:.2f}mm cube_vs_jaw_mid_offset={off_mm:.2f}mm "
+            f"(dxyz_mm=[{off_vec_mm[0]:.2f},{off_vec_mm[1]:.2f},{off_vec_mm[2]:.2f}]) | "
+            f"FINGERTIP-CORRECTED: sep={fsep_mm:.2f}mm cube_vs_fingertip_mid_offset={foff_mm:.2f}mm "
+            f"(dxyz_mm=[{foff_vec_mm[0]:.2f},{foff_vec_mm[1]:.2f},{foff_vec_mm[2]:.2f}]) | "
             f"grip_dof={dof_grip.tolist()} jaw1_pos_m={p1.tolist()} jaw2_pos_m={p2.tolist()}")
-        return sep_mm, off_mm
+        return fsep_mm, foff_mm
 
     # ---- execute the pick -------------------------------------------------
     drive(HOME_Q, GRIP_OPEN, 40, render=False)

@@ -41,15 +41,29 @@ if ! grep -q "SETUP_READY_MARKER" "$HOME/friction_setup.log"; then
 fi
 
 # --- [2/4] physics-only ground-truth run (position squeeze, 5N) -----------
-step "[2/4] physics-only: --squeeze_mode position --squeeze_force 5.0 --no_video"
-run_pick --no_video --squeeze_mode position --squeeze_force 5.0
+step "[2/4] physics-only: --squeeze_mode position --squeeze_force 40.0 --no_video"
+run_pick --no_video --squeeze_mode position --squeeze_force 40.0
 cp -f "$FRICTION_RESULT" "$HOME/rl/logs/standalone_pick_result_friction_physicsonly.txt" 2>/dev/null
 echo "----- physics-only result tail -----"; tail -40 "$FRICTION_RESULT" 2>/dev/null || echo "no result file"
 
-# --- [3/4] ONE video run (same config) ------------------------------------
-step "[3/4] video capture: --squeeze_mode position --squeeze_force 5.0"
-run_pick --squeeze_mode position --squeeze_force 5.0
-echo "----- video result tail -----"; tail -20 "$FRICTION_RESULT" 2>/dev/null || echo "no result file"
+# --- [3/4] ONE video run, GATED on the jaws actually CLOSING --------------
+# The discriminator vs a scoop/wedge artifact is jaw CLOSURE: a real face grasp
+# closes the jaws onto the ~15mm cube (closed_sep well under the 28mm open).
+# If the jaws did NOT close, skip the expensive RTX video (a scoop artifact is
+# not the deliverable) and report the blocker instead.
+CLOSED_SEP="$(grep '\[JAW SUMMARY\]' "$HOME/rl/logs/standalone_pick_result_friction_physicsonly.txt" 2>/dev/null | tail -1 | grep -oP 'closed_sep=\K[0-9.]+')"
+echo ">>> physics-only closed_sep=${CLOSED_SEP:-N/A}mm (open=28mm; real grip << 28mm)"
+DO_VIDEO=0
+if [ -n "${CLOSED_SEP:-}" ] && [ "$(awk -v s="$CLOSED_SEP" 'BEGIN{print (s<20.0)?1:0}')" = "1" ]; then
+  DO_VIDEO=1
+fi
+if [ "$DO_VIDEO" = "1" ]; then
+  step "[3/4] jaws CLOSED (${CLOSED_SEP}mm) -- video capture: --squeeze_mode position --squeeze_force 40.0"
+  run_pick --squeeze_mode position --squeeze_force 40.0
+  echo "----- video result tail -----"; tail -20 "$FRICTION_RESULT" 2>/dev/null || echo "no result file"
+else
+  echo ">>> JAWS DID NOT CLOSE (closed_sep=${CLOSED_SEP:-N/A}mm) -- skipping video (scoop artifact, not a face grasp). Reporting blocker."
+fi
 
 # --- [4/4] GCS sync -------------------------------------------------------
 step "[4/4] GCS sync -> ${GCS_DEST}"

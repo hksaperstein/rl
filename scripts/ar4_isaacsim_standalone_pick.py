@@ -287,10 +287,11 @@ GRIP_JOINTS = ["gripper_jaw1_joint", "gripper_jaw2_joint"]
 GRIP_OPEN = 0.014
 GRIP_CLOSED = 0.0
 
-# Arm gains boosted (from 4000/200) to push harder against the gravitational
-# droop that made the extrapolated grasp pose under-track; the closed-loop
-# descent then handles any residual.
-ARM_KP, ARM_KD = 12000.0, 600.0
+# Arm gains: moderately boosted from the original 4000/200. 12000/600 was tried
+# and OSCILLATED at the deep grasp pose (live 2026-07-30), so keep it moderate
+# and let the closed-loop descent + longer settle absorb the residual droop
+# rather than fighting it with stiffness alone.
+ARM_KP, ARM_KD = 7000.0, 350.0
 GRIP_KP, GRIP_KD = 10000.0, 200.0
 
 JAW1_LOWER_EXTENT = 0.018475  # fingertip offset below jaw link origin
@@ -871,23 +872,31 @@ def main():
 
     target_z = cube_rest_z  # cube CENTER (measured resting z of the dynamic cube)
     grasp_q_use = list(GRASP_Q)
-    _sens = 0.020  # ~m fingertip descent per unit-k (empirical; loop self-corrects)
+    best_q = list(grasp_q_use)
+    _sens = 0.035  # ~m fingertip descent per unit-k (empirical; deliberately
+                   # conservative so each step is gentle -- the arm under-tracks
+                   # AND over-stiff/big steps oscillate; patience > aggression)
     _best_abs = 1.0e9
-    for _it in range(12):
-        drive(grasp_q_use, GRIP_OPEN, 30, render=(not args_cli.no_video))
+    _stall = 0
+    for _it in range(16):
+        drive(grasp_q_use, GRIP_OPEN, 50, render=(not args_cli.no_video))  # longer settle
         ftz = fingertip_mid_z()
         err = ftz - target_z  # >0 => fingertip ABOVE cube center -> must descend
         log(f"[DESCENT it{_it}] fingertip_z={ftz:.4f}m target(cube_center)={target_z:.4f}m err={err*1000:+.2f}mm")
+        if abs(err) < _best_abs - 0.0002:
+            _best_abs = abs(err); best_q = list(grasp_q_use); _stall = 0
+        else:
+            _stall += 1
         if abs(err) <= 0.0015:
-            log(f"[DESCENT] converged: fingertip within 1.5mm of cube center after {_it} refinement(s)")
+            log(f"[DESCENT] converged within 1.5mm of cube center after {_it} refinement(s)")
             break
-        if abs(err) >= _best_abs - 0.0003:
-            log(f"[DESCENT] no further improvement (err {err*1000:+.2f}mm vs best {_best_abs*1000:.2f}mm) "
-                f"-- arm tracking wall; proceeding with best-reachable pose")
+        if _stall >= 2:  # two consecutive non-improvements -> genuine tracking wall
+            log(f"[DESCENT] tracking wall: best fingertip err {_best_abs*1000:.2f}mm above cube center "
+                f"-- arm cannot descend further; using best-reachable pose")
             break
-        _best_abs = min(_best_abs, abs(err))
         dk = max(-0.10, min(err / _sens, 0.30))  # bounded per-iteration deepening
         grasp_q_use = [q + dk * d for q, d in zip(grasp_q_use, DESCENT_DIR)]
+    grasp_q_use = best_q  # commit the deepest STABLY-reached pose
     report("at GRASP (open, after descent)")
     jaw_open_sep, jaw_open_off = jaw_geometry("P2_GRASP(open, after descent)")
 

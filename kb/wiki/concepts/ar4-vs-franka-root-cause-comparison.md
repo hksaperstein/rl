@@ -5892,3 +5892,91 @@ five-config grasp-assist investigation, aided by a warm shader cache making
 reruns ~2 min). Instance explicitly torn down and verified clean via
 `scripts/check_cloud_state.sh` (0 instances / 0 disks / 0 snapshots). Artifact:
 `scripts/ar4_isaacsim_surfacegripper_pick.py`.
+
+## UPDATE 2026-07-30 (ar4-isaacsim-standalone-pick task): GENUINE Isaac Sim physics grasp+lift ACHIEVED on the standalone App API — closes the whole arc
+
+**This closes the loop.** The 2026-07-29 UPDATE above established that the AR4
+Isaac Sim pick blocker was the grasp-HOLD under Isaac Lab's `ManagerBasedRLEnv`
+(SurfaceGripper manager never fired; runtime PhysX joints never injected into
+the once-built physics views), and recommended rebuilding on the lower-level
+standalone Isaac Sim App API. That is exactly what this task did, and it
+**worked**: a genuine physics grasp+lift of the 15mm cube, ground-truth
+verified and video-confirmed.
+
+**Deliverable achieved (`scripts/ar4_isaacsim_standalone_pick.py`).** Built on
+`isaacsim.SimulationApp` + `isaacsim.core.api.World` + `SingleArticulation` +
+`World.step()` (NOT `ManagerBasedRLEnv`). Scene reproduces this repo's
+validated pedestal + 15mm-cube scene and the height-corrected grasp config
+(the `POINT` dict). Trajectory = multi-waypoint interpolation through the
+articulation controller (`get_articulation_controller().apply_action(...)`),
+same working approach as the prior task.
+
+- **Grasp mechanism (runtime PhysX fixed joint) — CONFIRMED.** A
+  `UsdPhysics.FixedJoint` link_6<->cube authored DISABLED before reset, then
+  `jointEnabled` flipped True at grasp (frames baked from the measured
+  link_6<->cube transform). **This is the exact runtime toggle that FAILED
+  under `ManagerBasedRLEnv` (2026-07-29 config #3, "test-lift gain 0.0mm") and
+  it ENGAGES on the standalone World API.** Ground truth: cube physics
+  `root_pos_w[z]` rose 0.0475 m (resting) -> 0.078 m (lift) -> 0.461 m
+  (retreat), gain ~410 mm, held through the full retreat. NOT a kinematic
+  pose-follow weld — the cube is carried by a real PhysX constraint.
+  VERDICT: PICK CONFIRMED.
+- **SurfaceGripper — manager now FIRES (vs. never under Isaac Lab), physical
+  hold incomplete.** On the standalone World API the C++ manager registers the
+  gripper: `GripperView.get_surface_gripper_status()` returns `Closed` and
+  `get_gripped_objects()` returns `['/World/Cube']` — versus
+  `ManagerBasedRLEnv` where `status` stayed `None` and `body1` never bound.
+  This directly confirms the 2026-07-29 root-cause diagnosis (the manager
+  subscribes to physics-step events that only fire under `World.step()`). The
+  cube did NOT physically lift with the minimally-authored attachment point,
+  though: the D6 `IsaacAttachmentPointAPI` joint was authored without the
+  drive:transZ/rotZ stiffness + limits NVIDIA's own gantry example carries, so
+  the created grip constraint doesn't transmit link_6's motion. Making
+  SurfaceGripper physically hold is a bounded follow-on (port the gantry
+  joint's full drive/limit schema); the runtime fixed joint already satisfies
+  the genuine-physics-grasp deliverable.
+- **Video-confirmed** (headless RTX, two fixed wide 3/4 cameras): closeup +
+  elbow clips show the AR4 gripper closing on the red cube at the pedestal and
+  carrying it high above the now-empty pedestal.
+  `logs/videos/ar4_isaacsim_standalone_pick/{closeup,elbow}.mp4` (+ GCS
+  `gs://rl-manipulation-hks-runs/ar4-isaacsim-standalone-pick/`).
+
+**The full arc, settled:**
+1. Hand-rolled DLS IK + single-shot PD control FAILED (this doc's body) — the
+   long-standing AR4 pick blocker.
+2. ROS2+MoveIt (RViz) + Gazebo physics WORKED (2026-07-28 UPDATEs) — proving
+   the blocker was hand-rolled planning/control, not the arm/asset, and that
+   pure friction can't hold the 15mm cube in either sim (Gazebo needed a
+   DetachableJoint grasp-assist).
+3. Isaac Lab `ManagerBasedRLEnv` replicated trajectory/approach but BLOCKED the
+   grasp-hold (2026-07-29 UPDATE) — an abstraction-layer limitation, not Isaac
+   Sim physics.
+4. **Standalone Isaac Sim App API WORKS (this UPDATE)** — trajectory + a real
+   runtime PhysX grasp joint that engages, lifts, and holds under physics.
+   Isaac Sim CAN do the AR4 pick once you use the API layer where the grasp
+   mechanism actually works.
+
+**Operational lessons (cloud, standalone Isaac Sim on g2 GPU instances):**
+- **Do NOT mount a persistent shader/kernel cache while an orchestrator may
+  SIGKILL (`docker kill`) a run mid-compile** — a killed compile corrupts the
+  mounted cache and every subsequent startup then hangs (a vicious cycle that
+  cost hours here before it was diagnosed). Ephemeral per-container cache
+  (`--rm`, no cache `-v`) avoids cross-run corruption.
+- The apparent "nondeterministic startup/World()/reset() hangs" were mostly
+  **slow CPU-bound shader/kernel compilation** (python at ~800% CPU, GPU 0%),
+  NOT deadlocks — a too-aggressive watchdog was killing legitimate slow
+  compiles. Give each init phase a generous window and add per-step
+  heartbeats so a slow-but-working loop isn't mistaken for a hang.
+- `add_default_ground_plane()` fetches a USD from NVIDIA's remote Nucleus
+  asset server; on a cloud instance without Nucleus access it blocks forever.
+  Author a local procedural ground (a large static `FixedCuboid`) instead.
+- Do NOT `import isaaclab.*` in a raw standalone `SimulationApp` script — the
+  package import hangs before `main()`. Keep standalone scripts dependency-free
+  of the Isaac Lab layer (hand-roll the small quaternion helpers).
+
+**Cost:** ~$2.9 (on-demand g2-standard-4 ~2.9h, then resized in-place to
+g2-standard-8 ~0.8h — resize preserved the disk/image/asset, no re-provision).
+Instance torn down and verified clean via `scripts/check_cloud_state.sh`
+(0 instances / 0 disks / 0 snapshots). Artifacts:
+`scripts/ar4_isaacsim_standalone_pick.py`,
+`scripts/_cloud_ar4_standalone_pick_setup.sh`.

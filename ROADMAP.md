@@ -27,6 +27,27 @@ direction, not a scoped backlog.
 
 Roughly in the order they'd likely be picked up:
 
+00. **AR4 GENUINE Isaac Sim physics grasp+lift — ACHIEVED 2026-07-30
+   (ar4-isaacsim-standalone-pick task).** Closes the whole AR4-pick arc.
+   Rebuilt the pick on the lower-level standalone Isaac Sim App API
+   (`SimulationApp` + `isaacsim.core.api.World` + `SingleArticulation` +
+   `World.step()`, NOT `ManagerBasedRLEnv`) — the layer the prior task
+   (2026-07-29) identified as where the grasp mechanism actually works. A
+   runtime PhysX fixed joint (link_6<->cube, `jointEnabled` flipped True at
+   grasp — the EXACT toggle that failed under `ManagerBasedRLEnv`) engages
+   and holds: cube physics z rose 0.0475→0.461 m and was held through the
+   full retreat (ground-truth verified, NOT a kinematic weld). SurfaceGripper's
+   manager also FIRES on this API (`status=Closed`, `grippedObjects=[Cube]`
+   — vs. never under Isaac Lab), though a minimally-authored attachment point
+   didn't physically hold (bounded follow-on: port the gantry example's full
+   drive/limit schema). Video-confirmed
+   (`logs/videos/ar4_isaacsim_standalone_pick/{closeup,elbow}.mp4`, also GCS
+   `gs://rl-manipulation-hks-runs/ar4-isaacsim-standalone-pick/`). Script:
+   `scripts/ar4_isaacsim_standalone_pick.py`. Cost ~$2.9, instance torn down
+   clean. Full detail + the settled 4-stage arc + cloud/standalone-Isaac-Sim
+   operational lessons: `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s
+   2026-07-30 UPDATE.
+
 0. **ROS2 + MoveIt pivot for AR4 grasping — RESOLVED POSITIVE 2026-07-28,
    from-scratch cloud path.** After the desktop hosting the vendor
    `ar4_ros_driver`/MoveIt stack was found unreachable (see the prior

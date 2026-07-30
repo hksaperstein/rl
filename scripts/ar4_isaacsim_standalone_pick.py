@@ -104,17 +104,20 @@ parser.add_argument("--grasp_depth_extra", type=float, default=0.225,
                          "opposing FLAT faces at mid-height instead of catching the top edge. "
                          "The prior run's d=0 (11mm too high) and the earlier 0.4/0.7 sweep (too "
                          "deep, into the pedestal) both missed the cube -- see the FK derivation.")
-parser.add_argument("--squeeze_mode", choices=["effort", "position"], default="effort",
-                    help="How the jaws apply CLOSING force onto the cube. 'effort' (default, per user "
-                         "directive): zero the jaw position gains and apply a CONSTANT closing joint "
-                         "EFFORT (force) every physics step -- direct force control. 'position': hold "
-                         "a position target PAST the cube surface (toward 0 aperture) but with the "
-                         "drive's maxForce CAPPED at --squeeze_force, which physically delivers the "
-                         "same constant squeeze force via the drive's force limit (robust fallback).")
-parser.add_argument("--squeeze_force", type=float, default=3.0,
+parser.add_argument("--squeeze_mode", choices=["effort", "position"], default="position",
+                    help="How the jaws apply CLOSING force onto the cube. 'position' (default): hold a "
+                         "position target PAST the cube surface (toward 0 aperture) with the drive's "
+                         "maxForce CAPPED at --squeeze_force, which physically delivers a CONSTANT "
+                         "squeeze force = that force limit once the jaws stall against cube contact "
+                         "(genuine force control via the drive force limit). 'effort': zero the jaw "
+                         "position gains and apply a constant closing joint EFFORT each step -- tried "
+                         "first per user directive but found NOT to move these prismatic jaws on the "
+                         "standalone App API (live 2026-07-30: jaw sep stayed 28mm, contact 0N), the "
+                         "API snag the directive anticipated -- so 'position' is the working default.")
+parser.add_argument("--squeeze_force", type=float, default=5.0,
                     help="Constant inward (closing) squeeze force per jaw, Newtons. The 10g (0.098N) "
                          "cube needs only ~0.12N of grip normal force to hold at mu=0.8, so a few N "
-                         "is a large safety margin; kept modest (default 3N, NOT the old 500N which "
+                         "is a large safety margin; kept modest (default 5N, NOT the old 500N which "
                          "would eject/penetrate a 10g cube) so the small cube is squeezed, not "
                          "launched. Measured contact normal force is logged as the proof it is real.")
 args_cli = parser.parse_args()
@@ -263,18 +266,31 @@ GRASP_Q_DEG = [-6.486502296738718, 55.02598117736985, 13.479564958718077,
 PREGRASP_Q_DEG = [-6.486502296738718, 46.38313360110892, 13.354865607777075,
                   1.3196911944959482, 30.254696468370202, 95.82074708404251]
 HOME_Q = [0.0] * 6
-GRASP_Q = [math.radians(d) for d in GRASP_Q_DEG]
+GRASP_Q_BASE = [math.radians(d) for d in GRASP_Q_DEG]
 PREGRASP_Q = [math.radians(d) for d in PREGRASP_Q_DEG]
+# PREGRASP->GRASP joint-space direction == the validated descent direction.
+# Used both for the static --grasp_depth_extra pre-offset AND the in-run
+# CLOSED-LOOP descent (see main()): the live d=0.18 run showed the arm tracks
+# the BASE GRASP_Q accurately but UNDER-tracks an extrapolated deeper pose
+# (~20% of commanded descent -- joint_2 drooping under gravity), so a static
+# depth guess can't reliably land the fingertip on the cube. The closed loop
+# deepens along this direction until the MEASURED fingertip actually reaches
+# the cube's center Z, robust to whatever the tracking does.
+DESCENT_DIR = [g - p for g, p in zip(GRASP_Q_BASE, PREGRASP_Q)]
+GRASP_Q = list(GRASP_Q_BASE)
 if args_cli.grasp_depth_extra != 0.0:
     _k = args_cli.grasp_depth_extra
-    GRASP_Q = [g + _k * (g - p) for g, p in zip(GRASP_Q, PREGRASP_Q)]
+    GRASP_Q = [g + _k * d for g, d in zip(GRASP_Q_BASE, DESCENT_DIR)]
 
 ARM_JOINTS = ["joint_1", "joint_2", "joint_3", "joint_4", "joint_5", "joint_6"]
 GRIP_JOINTS = ["gripper_jaw1_joint", "gripper_jaw2_joint"]
 GRIP_OPEN = 0.014
 GRIP_CLOSED = 0.0
 
-ARM_KP, ARM_KD = 4000.0, 200.0
+# Arm gains boosted (from 4000/200) to push harder against the gravitational
+# droop that made the extrapolated grasp pose under-track; the closed-loop
+# descent then handles any residual.
+ARM_KP, ARM_KD = 12000.0, 600.0
 GRIP_KP, GRIP_KD = 10000.0, 200.0
 
 JAW1_LOWER_EXTENT = 0.018475  # fingertip offset below jaw link origin
@@ -838,7 +854,42 @@ def main():
         position_cameras()
     cz["P2_GRASP"] = traj(PREGRASP_Q, GRASP_Q, GRIP_OPEN, 60, "PREGRASP->GRASP")
     report("at GRASP (open)")
-    jaw_open_sep, jaw_open_off = jaw_geometry("P2_GRASP(open, before close)")
+    jaw_geometry("P2_GRASP(open, before descent)")
+
+    # ---- CLOSED-LOOP DESCENT ---------------------------------------------
+    # Deepen the grasp pose along the validated descent direction until the
+    # MEASURED fingertip midpoint reaches the cube's center Z. Static depth
+    # can't do this reliably: the live d=0.18 run showed the arm under-tracks
+    # an extrapolated deeper pose (gravity droop on joint_2), leaving the
+    # fingertip ~9.5mm ABOVE the cube. Jaws stay OPEN (28mm > 15mm cube) so
+    # they straddle the cube as they descend; the loop stops on convergence or
+    # a no-improvement tracking wall.
+    def fingertip_mid_z():
+        p1, _ = link_world_pose(stage, GRIP1_PATH)
+        p2, _ = link_world_pose(stage, GRIP2_PATH)
+        return float(((p1[2] - JAW1_LOWER_EXTENT) + (p2[2] - JAW1_LOWER_EXTENT)) / 2.0)
+
+    target_z = cube_rest_z  # cube CENTER (measured resting z of the dynamic cube)
+    grasp_q_use = list(GRASP_Q)
+    _sens = 0.020  # ~m fingertip descent per unit-k (empirical; loop self-corrects)
+    _best_abs = 1.0e9
+    for _it in range(12):
+        drive(grasp_q_use, GRIP_OPEN, 30, render=(not args_cli.no_video))
+        ftz = fingertip_mid_z()
+        err = ftz - target_z  # >0 => fingertip ABOVE cube center -> must descend
+        log(f"[DESCENT it{_it}] fingertip_z={ftz:.4f}m target(cube_center)={target_z:.4f}m err={err*1000:+.2f}mm")
+        if abs(err) <= 0.0015:
+            log(f"[DESCENT] converged: fingertip within 1.5mm of cube center after {_it} refinement(s)")
+            break
+        if abs(err) >= _best_abs - 0.0003:
+            log(f"[DESCENT] no further improvement (err {err*1000:+.2f}mm vs best {_best_abs*1000:.2f}mm) "
+                f"-- arm tracking wall; proceeding with best-reachable pose")
+            break
+        _best_abs = min(_best_abs, abs(err))
+        dk = max(-0.10, min(err / _sens, 0.30))  # bounded per-iteration deepening
+        grasp_q_use = [q + dk * d for q, d in zip(grasp_q_use, DESCENT_DIR)]
+    report("at GRASP (open, after descent)")
+    jaw_open_sep, jaw_open_off = jaw_geometry("P2_GRASP(open, after descent)")
 
     # ---- CLOSE the jaws onto the cube with a REAL squeeze force ----------
     contact_report("P2_before_close(open)")
@@ -847,7 +898,7 @@ def main():
         # home. Every step goes through drive() so the closing effort is
         # re-applied continuously (a bare world.step() would NOT re-assert it).
         start_squeeze()
-        drive(GRASP_Q, GRIP_CLOSED, 40, render=True)
+        drive(grasp_q_use, GRIP_CLOSED, 40, render=True)
         sep_mid, _ = jaw_geometry("P3a_mid_close")
         contact_report("P3a_mid_close")
         # effort-mode sign self-check: a genuine CLOSE must DECREASE jaw
@@ -856,12 +907,12 @@ def main():
             squeeze["eff"] = -squeeze["eff"]
             log(f"[SQUEEZE] jaw sep did not decrease ({jaw_open_sep:.2f}->{sep_mid:.2f}mm); "
                 f"flipping closing-effort sign to {squeeze['eff']:.3f} N/jaw and re-driving")
-            drive(GRASP_Q, GRIP_CLOSED, 40, render=True)
+            drive(grasp_q_use, GRIP_CLOSED, 40, render=True)
         # settle the squeeze firmly against the two faces
-        drive(GRASP_Q, GRIP_CLOSED, 40, render=True)
+        drive(grasp_q_use, GRIP_CLOSED, 40, render=True)
     else:
         # legacy diagnostics only (NOT the deliverable): plain position close.
-        drive(GRASP_Q, GRIP_CLOSED, 80, render=True)
+        drive(grasp_q_use, GRIP_CLOSED, 80, render=True)
     l6p, l6q = link_world_pose(stage, LINK6_PATH)
     cp = cube_pose()[0]
     log(f"[GEO] link_6 pos={['%.4f'%v for v in l6p]} quat={['%.4f'%v for v in l6q]} cube={['%.4f'%v for v in cp]}")
@@ -909,7 +960,7 @@ def main():
         # drive() so the closing squeeze keeps being re-applied every step.
         grasp_state["engaged"] = True
         grasp_state["mechanism"] = f"PureFriction(squeeze={args_cli.squeeze_mode},{args_cli.squeeze_force}N)"
-        drive(GRASP_Q, GRIP_CLOSED, 30, render=True)
+        drive(grasp_q_use, GRIP_CLOSED, 30, render=True)
         log("[friction] PURE contact-friction grasp -- jaws squeezing cube faces, NO joint/weld")
 
     report("after engage")
@@ -922,7 +973,7 @@ def main():
     # grip_hold is only used by the legacy position path; in friction mode the
     # squeeze (effort or capped-force) persists via drive() regardless.
     grip_hold = GRIP_CLOSED
-    cz["P4_LIFT"] = traj(GRASP_Q, PREGRASP_Q, grip_hold, 60, "LIFT")
+    cz["P4_LIFT"] = traj(grasp_q_use, PREGRASP_Q, grip_hold, 60, "LIFT")
     report("after LIFT")
     jaw_geometry("P4_after_LIFT")
     contact_report("P4_after_LIFT")

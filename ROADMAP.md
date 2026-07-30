@@ -27,6 +27,28 @@ direction, not a scoped backlog.
 
 Roughly in the order they'd likely be picked up:
 
+0a. **AR4 PURE-FRICTION grasp — BLOCKED by a measured kinematic reach limit
+   (2026-07-30, ar4-isaacsim-standalone-pick pure-friction follow-on).**
+   Pushed the standalone pick toward a genuine contact-friction hold (jaws
+   squeezing the cube, NO joint/weld). Two real fixes landed: (1) replaced the
+   broken 1-D "vertical descent" (which drooped ~18mm off the cube in Y) with a
+   closed-loop **empirical-Jacobian + Broyden pose servo** that centers the
+   horizontal plane to ~3mm; (2) found and corrected a wrong standing constant —
+   the true jaw-pad offset is **12.5mm along the jaw link's local −Y**, not
+   18.5mm along −Z (measured via new `scripts/_inspect_jaw_geometry.py`; the old
+   world-Z assumption is invalid because this grasp holds the gripper ~79° from
+   vertical). BUT even with correct geometry, contact stayed **0N, cube unmoved
+   (ground-truth)**: the jaw links bottom out at z≈0.069m at the cube's XY, ~21mm
+   above the cube center, so the jaws close ABOVE the cube. The cube at Y=0.39 is
+   near the AR4's full forward reach — this is **geometric/reach-limited, not a
+   squeeze/friction/stiffness problem** (higher gains didn't lower the floor).
+   **Escalated to Principal:** a friction pick here needs a different IK
+   branch/grasp configuration (reachability study via `tasks/ar4/fk_verification.py`),
+   a closer cube placement, or a side approach — a grasp-mechanism/scene redesign,
+   not a servo tweak. Cost ~$1.7, instance torn down clean. Full detail:
+   `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s 2026-07-30
+   pure-friction UPDATE.
+
 00. **AR4 GENUINE Isaac Sim physics grasp+lift — ACHIEVED 2026-07-30
    (ar4-isaacsim-standalone-pick task).** Closes the whole AR4-pick arc.
    Rebuilt the pick on the lower-level standalone Isaac Sim App API

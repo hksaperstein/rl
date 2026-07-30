@@ -5980,3 +5980,83 @@ Instance torn down and verified clean via `scripts/check_cloud_state.sh`
 (0 instances / 0 disks / 0 snapshots). Artifacts:
 `scripts/ar4_isaacsim_standalone_pick.py`,
 `scripts/_cloud_ar4_standalone_pick_setup.sh`.
+
+---
+
+## UPDATE (2026-07-30, PURE-FRICTION grasp attempt — ground-truth reach-limit blocker found)
+
+Per direct user directive, the standalone pick was pushed from the runtime
+PhysX-joint hold (above) toward a GENUINE contact-friction grasp: jaws
+visibly squeezing the cube's two faces, NO joint/weld of any kind, contact
+force measured. Across **11 physics runs** on one adopted g2-standard-4 / L4
+cloud instance (~2h, ~$1.7; torn down clean) this did NOT achieve a friction
+hold — and the reason is now **ground-truth measured**, not guessed. It is a
+hard kinematic **reach limitation at this cube's forward position, not a
+squeeze/friction/solver problem.**
+
+**What was genuinely fixed (real progress, committed):**
+- The prior version's **1-D "vertical descent"** nudge (along a precomputed
+  `VERT_DESCENT_DIR` joint vector) was the original root cause of the jaws
+  closing on empty air: under gravity droop that joint direction is NOT
+  vertical in the achieved frame — measured live, it improved fingertip Z by
+  ~5mm but dragged the fingertip ~12mm sideways, ending **18mm off the cube in
+  Y**. Replaced with a **closed-loop empirical-Jacobian pose servo**: probe a
+  world-frame Jacobian `d(pad_mid)/d(arm_q)` live in the sim (droop baked into
+  the measurement), refine it online via a **Broyden** rank-1 update, and
+  DLS-solve the arm-joint correction. This reliably centers the horizontal
+  plane to **~3mm** (was 18mm) — the servo works.
+- **A wrong standing geometry constant was found and corrected.** The trusted
+  `JAW1_LOWER_EXTENT = 18.475mm` "fingertip offset below the jaw link" was
+  being applied as a **world-Z** subtraction. Measured live, this AR4 grasp
+  pose holds the gripper **~79° from vertical** (near-horizontal approach), so
+  a world-Z offset targets a phantom point ~15mm off the real pads — the cause
+  of the first ~9 zero-contact runs. A pxr-only asset inspection
+  (`scripts/_inspect_jaw_geometry.py`) measured the **true** jaw-pad collision
+  centroid at **(0, −0.0125, 0) in the jaw LINK's own local frame — 12.5mm
+  along local −Y, NOT 18.5mm along −Z.** Rotating that measured offset by each
+  jaw's live orientation gives the correct world pad centers; with it the servo
+  centered the pad midpoint to **X −3mm, Y +1.4mm** (horiz 3.4mm).
+
+**The ground-truth blocker (measured, run 11, with correct geometry):**
+Even perfectly centered in the horizontal plane, contact stayed **0N at every
+phase** and the cube's physics z never moved (gain 0.0mm). Ground truth: the
+**jaw LINK origins bottom out at z ≈ 0.0686 m** at the cube's XY — ~21mm above
+the cube center (0.0477) and ~13mm above the cube's top face (0.0552). The
+12.5mm pad offset cannot bridge that gap, so the jaws **close (sep 28mm → 0mm,
+pads passing THROUGH each other) entirely above the cube**, never touching its
+faces. Higher arm stiffness does not lower this floor (run 6: 11000 gains left
+the same ~0.069 link floor and only added oscillation) — it is **geometric /
+reach-limited, not a droop-torque wall you can stiffen through.** The cube at
+**Y = 0.39 sits near the AR4's full forward extension**, where this specific
+GRASP_Q IK branch cannot get the gripper low enough to straddle a 15mm object.
+
+**Squeeze/friction were never the limiting factor** and are correctly
+configured for when a pose does allow contact: μ 0.8/0.9 combine-mode `max`
+(never `min`), 32 solver-position iterations, 1mm contact / 0.2mm rest offsets
+for the 15mm cube, and a position-target-past-cube squeeze delivering ~33–40N
+(the 10g cube needs only ~0.12N) — all in `scripts/ar4_isaacsim_standalone_pick.py`.
+
+**Escalation (architecture-level, flagged to Principal not decided unilaterally):**
+A friction pick of THIS cube at THIS location needs one of: (a) a **different
+IK branch / grasp configuration** (elbow-up, flipped wrist) that reaches the
+cube's mid-height — a reachability study using the standing FK framework
+(`tasks/ar4/fk_verification.py`) rather than the single hand-tuned GRASP_Q; (b)
+a **closer cube placement** inside the arm's dexterous (non-droop-limited)
+envelope; or (c) accepting that a top-down friction grasp of this pose is out
+of reach and using a side/horizontal approach. Each is a grasp-mechanism/scene
+redesign, not a servo tweak. The servo + measured-pad-geometry fixes are real
+and should carry forward into whichever configuration is chosen.
+
+**Method note that saved the investigation:** the standing "check contact
+forces / ground-truth object pose, never trust a shaped scalar or an eyeballed
+frame" rule (this doc's own Experiment-16 lesson) is exactly what exposed each
+false lead — the servo's own `pad_mid` metric read "3.4mm, graspable" while the
+ground-truth jaw positions and 0N contact showed the pads closing 21mm above
+the cube. Instrument the physical state directly.
+
+**Cost:** ~$1.7 (adopted an already-provisioned g2-standard-4/L4 left running
+by a prior agent; ~2h of 11 short physics runs). Instance + disk torn down,
+verified clean via `scripts/check_cloud_state.sh` (0/0/0). Artifacts:
+`scripts/ar4_isaacsim_standalone_pick.py` (empirical-Jacobian/Broyden servo +
+corrected pad geometry), `scripts/_inspect_jaw_geometry.py` (pad-offset
+measurement), `logs/ar4_standalone_pick_2026-07-30/`.

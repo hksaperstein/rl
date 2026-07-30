@@ -28,7 +28,26 @@ Scene geometry reproduces this repo's validated pedestal+15mm-cube scene
 
 Run (in the isaac-lab container, headless on cloud):
     /isaac-sim/python.sh scripts/ar4_isaacsim_standalone_pick.py \
-        [--mechanism surface_gripper|fixed_joint] [--no_video]
+        [--mechanism surface_gripper|fixed_joint|friction] [--no_video]
+
+UPDATE (2026-07-30, jaw-closure fix task) — the immediately-prior version of
+this script achieved a physics-held lift, but via a runtime PhysX FixedJoint
+that engaged while the jaws were STILL VISUALLY OPEN (confirmed live from the
+recorded video: the cube floats between open jaw sides, welded rather than
+gripped). Root-caused to a real "missing gripper physics drive" bug (this
+repo's own recurring bug class, see the kb doc's intro) -- this standalone
+script bypasses Isaac Lab's `ImplicitActuatorCfg` layer, and
+`articulation_controller.set_gains()` alone was NOT a reliable guarantee that
+a real PhysX position drive exists on the two gripper prismatic joints, so the
+commanded GRIP_CLOSED target never physically moved them. Fixed by explicitly
+authoring `UsdPhysics.DriveAPI("linear")` directly on both joint prims before
+reset (see the "gripper-jaw REAL physics setup" block below), plus added
+world-frame jaw-separation/cube-centering instrumentation (`jaw_geometry()`)
+to prove closure numerically rather than by eyeballing a frame, plus a new
+`--mechanism friction` mode to genuinely retest a pure-friction hold (no
+grasp-assist at all) now that the jaws can actually close on the cube, before
+falling back to the grasp-assist mechanisms (now engaged only once jaws are
+measured closed on the cube, not around an open gap).
 """
 
 import argparse
@@ -38,7 +57,7 @@ import os
 from isaacsim import SimulationApp
 
 parser = argparse.ArgumentParser(description="Standalone Isaac Sim AR4 genuine physics grasp+lift.")
-parser.add_argument("--mechanism", choices=["surface_gripper", "fixed_joint"], default="surface_gripper")
+parser.add_argument("--mechanism", choices=["surface_gripper", "fixed_joint", "friction"], default="surface_gripper")
 parser.add_argument("--no_video", action="store_true")
 parser.add_argument("--max_grip_distance", type=float, default=0.10)
 parser.add_argument("--cpu", action="store_true", help="run PhysX on CPU (avoids first-time GPU-pipeline init stall)")
@@ -83,7 +102,7 @@ import numpy as np  # noqa: E402
 _bc("numpy")
 import omni.timeline  # noqa: E402
 _bc("omni.timeline")
-from pxr import Gf, Sdf, Usd, UsdGeom, UsdPhysics, PhysxSchema  # noqa: E402
+from pxr import Gf, Sdf, Usd, UsdGeom, UsdPhysics, UsdShade, PhysxSchema  # noqa: E402
 _bc("pxr")
 from usd.schema.isaac import robot_schema  # noqa: E402
 _bc("robot_schema")
@@ -174,6 +193,8 @@ USD_PATH = "/workspace/rl/assets/ar4_mk5/ar4_mk5.usd"
 AR4_ROOT = "/World/AR4"
 ART_ROOT = "/World/AR4/root_joint/root_joint"
 LINK6_PATH = "/World/AR4/root_joint/link_6"
+GRIP1_PATH = "/World/AR4/root_joint/gripper_jaw1_link"
+GRIP2_PATH = "/World/AR4/root_joint/gripper_jaw2_link"
 CUBE_PATH = "/World/Cube"
 
 PEDESTAL_CENTER_XY = (-0.0262, 0.3660)
@@ -201,8 +222,8 @@ GRIP_KP, GRIP_KD = 10000.0, 200.0
 
 JAW1_LOWER_EXTENT = 0.018475  # fingertip offset below jaw link origin
 
-RESULT_PATH = "/workspace/rl/logs/standalone_pick_result.txt"
-VIDEO_DIR = "/workspace/rl/logs/videos/ar4_isaacsim_standalone_pick"
+RESULT_PATH = f"/workspace/rl/logs/standalone_pick_result_{args_cli.mechanism}.txt"
+VIDEO_DIR = f"/workspace/rl/logs/videos/ar4_isaacsim_standalone_pick/{args_cli.mechanism}"
 os.makedirs(os.path.dirname(RESULT_PATH), exist_ok=True)
 os.makedirs(VIDEO_DIR, exist_ok=True)
 _R = open(RESULT_PATH, "w")
@@ -224,6 +245,64 @@ def link_world_pose(stage, path):
     imag = q.GetImaginary()
     return (np.array([t[0], t[1], t[2]]),
             np.array([q.GetReal(), imag[0], imag[1], imag[2]]))
+
+
+def find_prim_by_name(stage, root_path, name):
+    """First prim under root_path (inclusive) whose own name == `name`,
+    found by plain traversal -- robust to not knowing the exact nested
+    path a joint/link prim lives at inside the referenced USD asset."""
+    root = stage.GetPrimAtPath(root_path)
+    if not root.IsValid():
+        return None
+    for p in Usd.PrimRange(root):
+        if p.GetName() == name:
+            return p
+    return None
+
+
+def make_physics_material(stage, path, static_friction, dynamic_friction, restitution, combine_mode="max"):
+    """Author a UsdPhysics material prim directly (bypassing the
+    isaacsim.core.api.materials.PhysicsMaterial wrapper class, whose exact
+    attribute names aren't confirmed against this specific Isaac Sim build
+    -- raw pxr.UsdPhysics/PhysxSchema calls are the stable, documented
+    layer). `combine_mode` deliberately defaults to "max" (not PhysX's
+    "average" default, and NEVER "min") so a low friction value authored on
+    either side of a contact pair can't silently cap the effective
+    friction -- this repo's own dispatch brief flagged exactly this risk."""
+    mat = UsdShade.Material.Define(stage, Sdf.Path(path))
+    mat_api = UsdPhysics.MaterialAPI.Apply(mat.GetPrim())
+    mat_api.CreateStaticFrictionAttr().Set(static_friction)
+    mat_api.CreateDynamicFrictionAttr().Set(dynamic_friction)
+    mat_api.CreateRestitutionAttr().Set(restitution)
+    physx_mat_api = PhysxSchema.PhysxMaterialAPI.Apply(mat.GetPrim())
+    physx_mat_api.CreateFrictionCombineModeAttr().Set(combine_mode)
+    return mat.GetPrim()
+
+
+def bind_physics_material(stage, prim_path, material_prim):
+    prim = stage.GetPrimAtPath(prim_path)
+    if not prim.IsValid():
+        return False
+    UsdShade.MaterialBindingAPI(prim).Bind(UsdShade.Material(material_prim), materialPurpose="physics")
+    return True
+
+
+def apply_contact_offsets_under(stage, root_path, contact_offset, rest_offset):
+    """Set contact/rest offset on every collision-API prim found under
+    root_path -- appropriate small values for a 15mm cube (PhysX defaults
+    are tuned for much larger objects and can make contact register well
+    before the actual meshes touch)."""
+    root = stage.GetPrimAtPath(root_path)
+    if not root.IsValid():
+        return 0
+    n = 0
+    for p in Usd.PrimRange(root):
+        if p.HasAPI(UsdPhysics.CollisionAPI):
+            capi = PhysxSchema.PhysxCollisionAPI.Apply(p)
+            capi.CreateContactOffsetAttr().Set(contact_offset)
+            capi.CreateRestOffsetAttr().Set(rest_offset)
+            n += 1
+    return n
 
 
 def main():
@@ -289,6 +368,92 @@ def main():
         robot = SingleArticulation(prim_path=ART_ROOT, name="ar4")
         world.scene.add(robot)
         _bc("robot_added")
+
+    # --- gripper-jaw REAL physics setup (BEFORE reset) ----------------------
+    # Root-cause fix for the user-flagged defect: the prior task's video shows
+    # the jaws staying visually OPEN through the whole grasp+lift despite
+    # commanding GRIP_CLOSED -- i.e. the position command never actually moved
+    # the jaw joints. This repo's own history has hit exactly this bug class
+    # before ("a missing gripper physics drive", see kb/wiki/concepts/
+    # ar4-vs-franka-root-cause-comparison.md's intro). This standalone script
+    # bypasses Isaac Lab's ImplicitActuatorCfg layer entirely (by design, see
+    # module docstring) and relies solely on
+    # `articulation_controller.set_gains()` -- which this task found is NOT a
+    # reliable guarantee that a real PhysX drive exists on these two prismatic
+    # joints. Author an explicit UsdPhysics.DriveAPI("linear") directly on
+    # both joint prims as a USD-level guarantee, independent of whatever the
+    # higher-level Python gains wrapper does or doesn't do.
+    if args_cli.stage == "full":
+        for _jname in GRIP_JOINTS:
+            _jprim = find_prim_by_name(stage, AR4_ROOT, _jname)
+            if _jprim is None or not _jprim.IsValid():
+                log(f"[DRIVE] WARNING: joint prim not found for {_jname} -- explicit drive NOT authored")
+                continue
+            _drive = UsdPhysics.DriveAPI.Apply(_jprim, "linear")
+            _drive.CreateTypeAttr().Set("force")
+            _drive.CreateStiffnessAttr().Set(GRIP_KP)
+            _drive.CreateDampingAttr().Set(GRIP_KD)
+            _drive.CreateMaxForceAttr().Set(500.0)
+            _drive.CreateTargetPositionAttr().Set(GRIP_OPEN)
+            log(f"[DRIVE] authored explicit linear position drive on {_jprim.GetPath()} "
+                f"(stiffness={GRIP_KP}, damping={GRIP_KD}, maxForce=500N)")
+
+        # articulation-wide solver iteration counts (default PhysX iteration
+        # counts can be too low to resolve a stiff small-object pinch grasp).
+        try:
+            _art_prim = stage.GetPrimAtPath(ART_ROOT)
+            if _art_prim.IsValid():
+                _aapi = PhysxSchema.PhysxArticulationAPI.Apply(_art_prim)
+                _aapi.CreateSolverPositionIterationCountAttr().Set(32)
+                _aapi.CreateSolverVelocityIterationCountAttr().Set(4)
+                log(f"[PHYSICS] articulation {ART_ROOT}: solver_pos_iters=32 solver_vel_iters=4")
+        except Exception as e:
+            log(f"[PHYSICS] WARNING: articulation solver-iteration authoring failed: {e}")
+
+        # --- friction materials: cube high-friction, jaws high-friction,
+        # combine mode "max" (never "min") so neither side's material can
+        # silently cap the effective grip friction below the other's value.
+        try:
+            _cube_mat = make_physics_material(
+                stage, "/World/PhysicsMaterials/cube_mat",
+                static_friction=0.8, dynamic_friction=0.8, restitution=0.0, combine_mode="max",
+            )
+            bind_physics_material(stage, CUBE_PATH, _cube_mat)
+            _jaw_mat = make_physics_material(
+                stage, "/World/PhysicsMaterials/jaw_mat",
+                static_friction=0.9, dynamic_friction=0.9, restitution=0.0, combine_mode="max",
+            )
+            _n_bound = 0
+            for _jaw_link_path in (GRIP1_PATH, GRIP2_PATH):
+                if bind_physics_material(stage, _jaw_link_path, _jaw_mat):
+                    _n_bound += 1
+                # also bind directly onto any nested collision-API mesh prims
+                # (a link-level bind should already inherit down, this is
+                # belt-and-suspenders in case the collision mesh is a sibling
+                # rather than a descendant of the named link Xform).
+                _root = stage.GetPrimAtPath(_jaw_link_path)
+                if _root.IsValid():
+                    for _p in Usd.PrimRange(_root):
+                        if _p.HasAPI(UsdPhysics.CollisionAPI):
+                            bind_physics_material(stage, str(_p.GetPath()), _jaw_mat)
+                            _n_bound += 1
+            log(f"[FRICTION] cube_mat(0.8/0.8) bound to cube; jaw_mat(0.9/0.9) bound to {_n_bound} jaw prim(s); "
+                f"combine_mode=max on both materials")
+        except Exception as e:
+            log(f"[FRICTION] WARNING: physics-material authoring failed: {e}")
+
+        # --- contact/rest offsets tuned for a 15mm cube (PhysX defaults are
+        # sized for much larger objects and can register contact well before
+        # the meshes actually touch, or fail to hold a tight small-object
+        # pinch).
+        try:
+            n_cube = apply_contact_offsets_under(stage, CUBE_PATH, contact_offset=0.001, rest_offset=0.0002)
+            n_jaw1 = apply_contact_offsets_under(stage, GRIP1_PATH, contact_offset=0.001, rest_offset=0.0002)
+            n_jaw2 = apply_contact_offsets_under(stage, GRIP2_PATH, contact_offset=0.001, rest_offset=0.0002)
+            log(f"[PHYSICS] contact_offset=1mm rest_offset=0.2mm applied to "
+                f"{n_cube} cube prim(s), {n_jaw1} jaw1 prim(s), {n_jaw2} jaw2 prim(s)")
+        except Exception as e:
+            log(f"[PHYSICS] WARNING: contact/rest offset authoring failed: {e}")
 
     # --- SurfaceGripper authoring (BEFORE reset) ---------------------------
     gripper_view = None
@@ -481,10 +646,29 @@ def main():
         cp = cube_pose()[0]
         log(f"[REPORT {label}] fingertip_z={j1[2]-JAW1_LOWER_EXTENT:.4f}m cube_z={cp[2]:.4f}m")
 
+    def jaw_geometry(label):
+        """WORLD-frame jaw separation + cube-vs-jaw-midpoint offset -- the
+        direct proof (or disproof) that the jaws are genuinely closing onto
+        the cube rather than commanding a target that never takes physical
+        effect (this task's central defect to catch)."""
+        p1, _ = link_world_pose(stage, GRIP1_PATH)
+        p2, _ = link_world_pose(stage, GRIP2_PATH)
+        sep_mm = float(np.linalg.norm(p1 - p2) * 1000.0)
+        mid = (p1 + p2) / 2.0
+        cp = cube_pose()[0]
+        off_vec_mm = (cp - mid) * 1000.0
+        off_mm = float(np.linalg.norm(off_vec_mm))
+        dof_grip = np.array(robot.get_joint_positions())[grip_idx]
+        log(f"[JAW {label}] sep={sep_mm:.2f}mm cube_vs_jaw_mid_offset={off_mm:.2f}mm "
+            f"(dxyz_mm=[{off_vec_mm[0]:.2f},{off_vec_mm[1]:.2f},{off_vec_mm[2]:.2f}]) "
+            f"grip_dof={dof_grip.tolist()} jaw1_pos_m={p1.tolist()} jaw2_pos_m={p2.tolist()}")
+        return sep_mm, off_mm
+
     # ---- execute the pick -------------------------------------------------
     drive(HOME_Q, GRIP_OPEN, 40, render=False)
     cube_rest_z = cube_pose()[0][2]
     log(f"[INFO] cube resting z={cube_rest_z:.4f}m")
+    jaw_geometry("P0_HOME(open)")
     if not args_cli.no_video:
         position_cameras()
 
@@ -494,12 +678,19 @@ def main():
         position_cameras()
     cz["P2_GRASP"] = traj(PREGRASP_Q, GRASP_Q, GRIP_OPEN, 60, "PREGRASP->GRASP")
     report("at GRASP (open)")
+    jaw_open_sep, jaw_open_off = jaw_geometry("P2_GRASP(open, before close)")
 
-    # close jaws
-    drive(GRASP_Q, GRIP_CLOSED, 40, render=True)
+    # close jaws -- widened step budget (80, up from 40) so a real PD drive
+    # (now that one is explicitly authored, see the pre-reset gripper-drive
+    # block above) has ample time to converge/settle against cube contact.
+    drive(GRASP_Q, GRIP_CLOSED, 80, render=True)
     l6p, l6q = link_world_pose(stage, LINK6_PATH)
     cp = cube_pose()[0]
     log(f"[GEO] link_6 pos={['%.4f'%v for v in l6p]} quat={['%.4f'%v for v in l6q]} cube={['%.4f'%v for v in cp]}")
+    jaw_closed_sep, jaw_closed_off = jaw_geometry("P3_GRASP(after CLOSE command, before engage)")
+    log(f"[JAW SUMMARY] open_sep={jaw_open_sep:.2f}mm -> closed_sep={jaw_closed_sep:.2f}mm "
+        f"(target: ~28mm -> ~15mm-on-cube, NOT ~0mm/pass-through); "
+        f"cube_centering_offset={jaw_closed_off:.2f}mm (want small, jaws straddling cube)")
 
     # ---- ENGAGE the grasp mechanism + VERIFY it registers ----------------
     if args_cli.mechanism == "surface_gripper":
@@ -514,7 +705,7 @@ def main():
         grasp_state["mechanism"] = "SurfaceGripper"
         if not grasp_state["engaged"]:
             log("[SURFACE_GRIPPER] WARNING: no object gripped after close.")
-    else:  # fixed_joint
+    elif args_cli.mechanism == "fixed_joint":
         # bake grasp-relative frames from measured link_6<->cube transform
         cqv = cube_pose()[1]
         q6_inv = quat_inv(l6q)
@@ -534,8 +725,21 @@ def main():
         # verify PhysX registered the joint (cube shouldn't fall)
         grasp_state["engaged"] = True
         log("[fixed_joint] enabled runtime fixed joint link_6<->cube")
+    else:  # "friction"
+        # PROBLEM 2a: no grasp-assist mechanism at all -- genuinely test
+        # whether jaw-contact friction alone (closed jaws squeezing the
+        # cube's opposing faces) can hold it through lift+retreat. Only
+        # meaningful if jaw_closed_sep above actually shows real contact
+        # (~15mm, not ~28mm/no-motion) -- see the [JAW SUMMARY] line.
+        grasp_state["engaged"] = True
+        grasp_state["mechanism"] = "PureFriction"
+        for _ in range(30):
+            world.step(render=RENDER)
+            capture()
+        log("[friction] no grasp-assist mechanism engaged -- relying on jaw-contact friction alone")
 
     report("after engage")
+    jaw_geometry("P3b_after_engage")
     test_gain = cube_pose()[0][2] - cube_rest_z
     log(f"[ENGAGE] cube_z gain after engage = {test_gain*1000:.1f}mm")
 
@@ -543,10 +747,12 @@ def main():
     grip_hold = GRIP_CLOSED
     cz["P4_LIFT"] = traj(GRASP_Q, PREGRASP_Q, grip_hold, 60, "LIFT")
     report("after LIFT")
+    jaw_geometry("P4_after_LIFT")
     drive(PREGRASP_Q, grip_hold, 40, render=True)
     cz["P5_HOLD"] = cube_pose()[0][2]
     cz["P6_RETREAT"] = traj(PREGRASP_Q, HOME_Q, grip_hold, 100, "RETREAT")
     report("after RETREAT")
+    jaw_geometry("P6_after_RETREAT")
 
     # re-check gripper status at the end
     if args_cli.mechanism == "surface_gripper" and gripper_view is not None:

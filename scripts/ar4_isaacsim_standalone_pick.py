@@ -28,7 +28,31 @@ Scene geometry reproduces this repo's validated pedestal+15mm-cube scene
 
 Run (in the isaac-lab container, headless on cloud):
     /isaac-sim/python.sh scripts/ar4_isaacsim_standalone_pick.py \
-        [--mechanism surface_gripper|fixed_joint|friction] [--no_video]
+        [--mechanism friction] [--squeeze_mode effort|position] \
+        [--squeeze_force 3.0] [--grasp_depth_extra 0.225] [--no_video]
+
+UPDATE 2 (2026-07-30, jaw-closure-fix continued — PURE-FRICTION mandate): per
+direct user directive, the grasp MUST be a genuine contact-friction hold with
+NO joint/weld of ANY kind, not even as a fallback. Three coupled fixes make
+that real (default `--mechanism friction`):
+  1. GRASP HEIGHT. The prior run's jaws closed ~11mm ABOVE the cube center
+     (fingertip world-z 0.0588 vs cube center 0.0475), catching the top edge,
+     so the cube never moved (ground-truth gain 0.0mm). `--grasp_depth_extra`
+     now defaults to 0.225, derived OFFLINE from the standing pure-Python FK
+     framework (tasks/ar4/fk_verification.py) calibrated to that live d=0
+     ground truth: it lands the fingertip midpoint at world-z=0.0475 == the
+     cube's vertical CENTER (FK err 0.03mm), jaws straddling the two flat faces.
+  2. REAL SQUEEZE FORCE. The jaws apply a genuine, KNOWN closing force via
+     `--squeeze_mode effort` (zero the jaw position gains, apply a constant
+     closing joint EFFORT every step) or `position` (drive target past the
+     cube with maxForce capped to `--squeeze_force`). Default 3N -- the old
+     500N maxForce would eject a 10g (0.098N) cube, which needs only ~0.12N of
+     grip normal force to hold at mu=0.8.
+  3. MEASURED PROOF. `contact_report()` reads the actual jaw<->cube contact
+     normal force each phase (ContactSensor per jaw) -- nonzero + symmetric +
+     stable through lift+retreat is the proof the squeeze is real, alongside
+     the ground-truth cube pose rising with the gripper. NO SurfaceGripper /
+     FixedJoint is authored or engaged in friction mode.
 
 UPDATE (2026-07-30, jaw-closure fix task) — the immediately-prior version of
 this script achieved a physics-held lift, but via a runtime PhysX FixedJoint
@@ -57,17 +81,42 @@ import os
 from isaacsim import SimulationApp
 
 parser = argparse.ArgumentParser(description="Standalone Isaac Sim AR4 genuine physics grasp+lift.")
-parser.add_argument("--mechanism", choices=["surface_gripper", "fixed_joint", "friction"], default="surface_gripper")
+parser.add_argument("--mechanism", choices=["surface_gripper", "fixed_joint", "friction"], default="friction",
+                    help="GRASP HOLD mechanism. Default is 'friction': a GENUINE contact-friction "
+                         "grasp (jaws squeezing the cube's two faces) with NO joint/weld of any "
+                         "kind -- per direct user directive (2026-07-30). surface_gripper/fixed_joint "
+                         "are retained only as historical diagnostics, NOT to be used for the deliverable.")
 parser.add_argument("--no_video", action="store_true")
 parser.add_argument("--max_grip_distance", type=float, default=0.10)
 parser.add_argument("--cpu", action="store_true", help="run PhysX on CPU (avoids first-time GPU-pipeline init stall)")
 parser.add_argument("--stage", choices=["ground", "scene", "robot_noxform", "full"], default="full",
                     help="diagnostic: build scene incrementally to isolate a reset hang")
-parser.add_argument("--grasp_depth_extra", type=float, default=0.0,
+parser.add_argument("--grasp_depth_extra", type=float, default=0.225,
                     help="extrapolate GRASP_Q further past PREGRASP_Q by this fraction of the "
                          "PREGRASP->GRASP joint-space vector (e.g. 0.3 = 30%% deeper than GRASP_Q) "
                          "-- a bounded numeric tuning knob for the measured jaw/cube height gap, "
-                         "reusing the SAME validated descent direction rather than a fresh IK solve.")
+                         "reusing the SAME validated descent direction rather than a fresh IK solve. "
+                         "DEFAULT 0.225 is derived offline from the standing pure-Python FK framework "
+                         "(tasks/ar4/fk_verification.py), CALIBRATED to the live d=0 ground truth "
+                         "(achieved fingertip world-z=0.0588m at GRASP_Q): d=0.225 lands the "
+                         "fingertip midpoint at world-z=0.0475m == the 15mm cube's vertical CENTER "
+                         "(FK err 0.03mm), <2mm horizontal shift, so the jaws straddle the two "
+                         "opposing FLAT faces at mid-height instead of catching the top edge. "
+                         "The prior run's d=0 (11mm too high) and the earlier 0.4/0.7 sweep (too "
+                         "deep, into the pedestal) both missed the cube -- see the FK derivation.")
+parser.add_argument("--squeeze_mode", choices=["effort", "position"], default="effort",
+                    help="How the jaws apply CLOSING force onto the cube. 'effort' (default, per user "
+                         "directive): zero the jaw position gains and apply a CONSTANT closing joint "
+                         "EFFORT (force) every physics step -- direct force control. 'position': hold "
+                         "a position target PAST the cube surface (toward 0 aperture) but with the "
+                         "drive's maxForce CAPPED at --squeeze_force, which physically delivers the "
+                         "same constant squeeze force via the drive's force limit (robust fallback).")
+parser.add_argument("--squeeze_force", type=float, default=3.0,
+                    help="Constant inward (closing) squeeze force per jaw, Newtons. The 10g (0.098N) "
+                         "cube needs only ~0.12N of grip normal force to hold at mu=0.8, so a few N "
+                         "is a large safety margin; kept modest (default 3N, NOT the old 500N which "
+                         "would eject/penetrate a 10g cube) so the small cube is squeezed, not "
+                         "launched. Measured contact normal force is logged as the proof it is real.")
 args_cli = parser.parse_args()
 
 # enable_cameras (and thus the RTX render pipeline) ONLY when capturing video.
@@ -401,10 +450,16 @@ def main():
             _drive.CreateTypeAttr().Set("force")
             _drive.CreateStiffnessAttr().Set(GRIP_KP)
             _drive.CreateDampingAttr().Set(GRIP_KD)
-            _drive.CreateMaxForceAttr().Set(500.0)
+            # maxForce is a generous CEILING for the approach/open phase only.
+            # The actual squeeze force is set later, at the grasp phase, either
+            # by capping this same maxForce to --squeeze_force (position mode)
+            # or by zeroing the position gains and applying a direct joint
+            # effort (effort mode). The old 500N here would eject a 10g cube.
+            _drive.CreateMaxForceAttr().Set(50.0)
             _drive.CreateTargetPositionAttr().Set(GRIP_OPEN)
-            log(f"[DRIVE] authored explicit linear position drive on {_jprim.GetPath()} "
-                f"(stiffness={GRIP_KP}, damping={GRIP_KD}, maxForce=500N)")
+            log(f"[DRIVE] authored explicit linear force-type drive on {_jprim.GetPath()} "
+                f"(stiffness={GRIP_KP}, damping={GRIP_KD}, maxForce ceiling=50N; "
+                f"squeeze force set at grasp per --squeeze_mode/--squeeze_force)")
 
         # articulation-wide solver iteration counts (default PhysX iteration
         # counts can be too low to resolve a stiff small-object pinch grasp).
@@ -524,6 +579,64 @@ def main():
     controller = robot.get_articulation_controller()
     controller.set_gains(kps=kps, kds=kds)
 
+    # --- contact-force instrumentation on each jaw (the squeeze PROOF) ------
+    # Direct measurement of the normal force the jaws transmit onto the cube's
+    # two faces -- the number that proves a real squeeze (per user directive).
+    contact_sensors = {}
+    try:
+        from isaacsim.sensors.physics import ContactSensor
+        for _cn, _cp in (("jaw1", GRIP1_PATH), ("jaw2", GRIP2_PATH)):
+            _cs = ContactSensor(prim_path=_cp + "/grip_contact_sensor",
+                                name=f"{_cn}_contact", min_threshold=0.0,
+                                max_threshold=1.0e8, radius=-1.0)
+            _cs.initialize()
+            contact_sensors[_cn] = _cs
+        log(f"[CONTACT] ContactSensor initialized on jaws: {list(contact_sensors)}")
+    except Exception as e:
+        log(f"[CONTACT] ContactSensor unavailable ({e}); relying on measured joint forces")
+
+    def contact_report(label):
+        cs_out = {}
+        for _cn, _cs in contact_sensors.items():
+            try:
+                fr = _cs.get_current_frame()
+                cs_out[_cn] = round(float(fr.get("force", 0.0)), 4)
+            except Exception as _e:
+                cs_out[_cn] = f"err:{_e}"
+        # measured actuation efforts on the gripper DOFs (backup squeeze signal)
+        me = None
+        try:
+            me = [round(float(v), 4) for v in np.asarray(robot.get_measured_joint_efforts())[grip_idx]]
+        except Exception:
+            me = None
+        log(f"[CONTACT {label}] jaw_normal_force_N={cs_out} measured_grip_efforts_N={me}")
+        return cs_out
+
+    # --- squeeze machinery: a REAL closing force on the jaws (no joint/weld) -
+    squeeze = {"active": False, "eff": -abs(args_cli.squeeze_force)}
+
+    def start_squeeze():
+        squeeze["active"] = True
+        if args_cli.squeeze_mode == "effort":
+            # zero the jaw POSITION gains so the applied joint effort is the
+            # ONLY force the jaws exert -> genuine direct force control.
+            for i in grip_idx:
+                kps[i], kds[i] = 0.0, 30.0
+            controller.set_gains(kps=kps, kds=kds)
+            log(f"[SQUEEZE] effort mode: jaw position gains zeroed; applying constant closing "
+                f"effort {squeeze['eff']:.3f} N/jaw (kd=30 damping for stability)")
+        else:
+            # position mode: cap the drive maxForce to squeeze_force and target
+            # PAST the cube (GRIP_CLOSED) -> the drive pushes with exactly
+            # squeeze_force once it stalls against cube contact.
+            for _jname in GRIP_JOINTS:
+                _jp = find_prim_by_name(stage, AR4_ROOT, _jname)
+                _d = UsdPhysics.DriveAPI.Get(_jp, "linear")
+                if _d:
+                    _d.GetMaxForceAttr().Set(float(args_cli.squeeze_force))
+            log(f"[SQUEEZE] position mode: jaw drive maxForce capped to {args_cli.squeeze_force:.3f} N; "
+                f"target -> GRIP_CLOSED (past cube). Constant squeeze = the capped force.")
+
     if args_cli.mechanism == "surface_gripper":
         gripper_view = GripperView(paths="/World/SurfaceGripper")
         gripper_view.set_surface_gripper_properties(
@@ -629,11 +742,26 @@ def main():
 
     step_ctr = {"n": 0}
 
+    _arm_idx_np = np.array(arm_idx, dtype=np.int32)
+    _grip_idx_np = np.array(grip_idx, dtype=np.int32)
+
     def drive(q_arm, grip_val, steps, render=True):
         do_render = render and RENDER
-        tgt = full_targets(q_arm, grip_val)
         for _ in range(steps):
-            controller.apply_action(ArticulationAction(joint_positions=tgt))
+            if squeeze["active"] and args_cli.squeeze_mode == "effort":
+                # arm on position control (arm DOFs only); jaws on pure EFFORT
+                controller.apply_action(ArticulationAction(
+                    joint_positions=np.array(q_arm, dtype=np.float32),
+                    joint_indices=_arm_idx_np))
+                controller.apply_action(ArticulationAction(
+                    joint_efforts=np.full(len(grip_idx), squeeze["eff"], dtype=np.float32),
+                    joint_indices=_grip_idx_np))
+            else:
+                # position control on all DOFs. Once squeezing in position mode,
+                # force the jaw target CLOSED (past the cube) regardless of the
+                # grip_val the caller passed, so the capped-force squeeze holds.
+                gv = GRIP_CLOSED if (squeeze["active"] and args_cli.squeeze_mode == "position") else grip_val
+                controller.apply_action(ArticulationAction(joint_positions=full_targets(q_arm, gv)))
             world.step(render=do_render)
             step_ctr["n"] += 1
             if step_ctr["n"] % 10 == 0:
@@ -712,10 +840,28 @@ def main():
     report("at GRASP (open)")
     jaw_open_sep, jaw_open_off = jaw_geometry("P2_GRASP(open, before close)")
 
-    # close jaws -- widened step budget (80, up from 40) so a real PD drive
-    # (now that one is explicitly authored, see the pre-reset gripper-drive
-    # block above) has ample time to converge/settle against cube contact.
-    drive(GRASP_Q, GRIP_CLOSED, 80, render=True)
+    # ---- CLOSE the jaws onto the cube with a REAL squeeze force ----------
+    contact_report("P2_before_close(open)")
+    if args_cli.mechanism == "friction":
+        # engage the genuine squeeze (effort or capped-position), then drive it
+        # home. Every step goes through drive() so the closing effort is
+        # re-applied continuously (a bare world.step() would NOT re-assert it).
+        start_squeeze()
+        drive(GRASP_Q, GRIP_CLOSED, 40, render=True)
+        sep_mid, _ = jaw_geometry("P3a_mid_close")
+        contact_report("P3a_mid_close")
+        # effort-mode sign self-check: a genuine CLOSE must DECREASE jaw
+        # separation. If it didn't, the closing-force sign is wrong -- flip it.
+        if args_cli.squeeze_mode == "effort" and sep_mid > jaw_open_sep - 1.0:
+            squeeze["eff"] = -squeeze["eff"]
+            log(f"[SQUEEZE] jaw sep did not decrease ({jaw_open_sep:.2f}->{sep_mid:.2f}mm); "
+                f"flipping closing-effort sign to {squeeze['eff']:.3f} N/jaw and re-driving")
+            drive(GRASP_Q, GRIP_CLOSED, 40, render=True)
+        # settle the squeeze firmly against the two faces
+        drive(GRASP_Q, GRIP_CLOSED, 40, render=True)
+    else:
+        # legacy diagnostics only (NOT the deliverable): plain position close.
+        drive(GRASP_Q, GRIP_CLOSED, 80, render=True)
     l6p, l6q = link_world_pose(stage, LINK6_PATH)
     cp = cube_pose()[0]
     log(f"[GEO] link_6 pos={['%.4f'%v for v in l6p]} quat={['%.4f'%v for v in l6q]} cube={['%.4f'%v for v in cp]}")
@@ -723,6 +869,7 @@ def main():
     log(f"[JAW SUMMARY] open_sep={jaw_open_sep:.2f}mm -> closed_sep={jaw_closed_sep:.2f}mm "
         f"(target: ~28mm -> ~15mm-on-cube, NOT ~0mm/pass-through); "
         f"cube_centering_offset={jaw_closed_off:.2f}mm (want small, jaws straddling cube)")
+    contact_report("P3_after_close(squeezing)")
 
     # ---- ENGAGE the grasp mechanism + VERIFY it registers ----------------
     if args_cli.mechanism == "surface_gripper":
@@ -757,34 +904,34 @@ def main():
         # verify PhysX registered the joint (cube shouldn't fall)
         grasp_state["engaged"] = True
         log("[fixed_joint] enabled runtime fixed joint link_6<->cube")
-    else:  # "friction"
-        # PROBLEM 2a: no grasp-assist mechanism at all -- genuinely test
-        # whether jaw-contact friction alone (closed jaws squeezing the
-        # cube's opposing faces) can hold it through lift+retreat. Only
-        # meaningful if jaw_closed_sep above actually shows real contact
-        # (~15mm, not ~28mm/no-motion) -- see the [JAW SUMMARY] line.
+    else:  # "friction" (the deliverable): NO joint/weld of any kind. The cube
+        # is held ONLY by the jaws squeezing its two opposing faces. Settle via
+        # drive() so the closing squeeze keeps being re-applied every step.
         grasp_state["engaged"] = True
-        grasp_state["mechanism"] = "PureFriction"
-        for _ in range(30):
-            world.step(render=RENDER)
-            capture()
-        log("[friction] no grasp-assist mechanism engaged -- relying on jaw-contact friction alone")
+        grasp_state["mechanism"] = f"PureFriction(squeeze={args_cli.squeeze_mode},{args_cli.squeeze_force}N)"
+        drive(GRASP_Q, GRIP_CLOSED, 30, render=True)
+        log("[friction] PURE contact-friction grasp -- jaws squeezing cube faces, NO joint/weld")
 
     report("after engage")
     jaw_geometry("P3b_after_engage")
+    contact_report("P3b_after_engage")
     test_gain = cube_pose()[0][2] - cube_rest_z
     log(f"[ENGAGE] cube_z gain after engage = {test_gain*1000:.1f}mm")
 
-    # ---- LIFT + HOLD + RETREAT (grip stays closed) -----------------------
+    # ---- LIFT + HOLD + RETREAT (jaws keep squeezing throughout) ----------
+    # grip_hold is only used by the legacy position path; in friction mode the
+    # squeeze (effort or capped-force) persists via drive() regardless.
     grip_hold = GRIP_CLOSED
     cz["P4_LIFT"] = traj(GRASP_Q, PREGRASP_Q, grip_hold, 60, "LIFT")
     report("after LIFT")
     jaw_geometry("P4_after_LIFT")
+    contact_report("P4_after_LIFT")
     drive(PREGRASP_Q, grip_hold, 40, render=True)
     cz["P5_HOLD"] = cube_pose()[0][2]
     cz["P6_RETREAT"] = traj(PREGRASP_Q, HOME_Q, grip_hold, 100, "RETREAT")
     report("after RETREAT")
     jaw_geometry("P6_after_RETREAT")
+    contact_report("P6_after_RETREAT")
 
     # re-check gripper status at the end
     if args_cli.mechanism == "surface_gripper" and gripper_view is not None:

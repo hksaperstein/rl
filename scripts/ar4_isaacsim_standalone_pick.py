@@ -142,8 +142,13 @@ parser.add_argument("--gravity_comp", action="store_true",
                          "DOWN toward the cube center). This is the fix for the droop that resisted "
                          "60x drive maxForce -- feedforward injects the holding torque directly rather "
                          "than relying on drive stiffness/force headroom.")
-parser.add_argument("--assist_mode", choices=["integral", "gravity"], default="integral",
-                    help="What the --gravity_comp tracking assist actually does. 'integral' (default, "
+parser.add_argument("--assist_mode", choices=["cmd_integral", "integral", "gravity"], default="cmd_integral",
+                    help="Tracking assist. 'cmd_integral' (default, RUN-7 fix): accumulate a per-arm-"
+                         "joint COMMAND offset each step so achieved -> commanded FK pose, via the STABLE "
+                         "position drive (the effort 'integral' ran away -- the wrist has no effective "
+                         "drive to stabilize applied effort). 'integral': PI on applied EFFORT (UNSTABLE "
+                         "here, kept only for the record). 'gravity': feedforward G(q) (proved a no-op -- "
+                         "the gap is non-gravitational). "
                          "RUN-5 fix): a PI integrator on per-arm-joint (commanded-achieved) error, "
                          "applied as additive joint effort, ramping until the steady-state joint "
                          "tracking offset is nulled -- the cause-agnostic fix for the measured "
@@ -158,6 +163,15 @@ parser.add_argument("--integral_ki", type=float, default=6.0,
 parser.add_argument("--integral_clamp", type=float, default=400.0,
                     help="Anti-windup clamp (N*m) on each arm joint's integral effort -- well below "
                          "the 1500 N*m drive maxForce, generous vs the few-N*m loads involved.")
+parser.add_argument("--cmd_kc", type=float, default=0.35,
+                    help="cmd_integral gain: command_offset += kc*(commanded-achieved) each step. "
+                         "Drives achieved -> commanded via the position drive. 0.35 converges in "
+                         "~tens of steps without overshoot given the position drive's own damping.")
+parser.add_argument("--cmd_clamp_deg", type=float, default=25.0,
+                    help="Clamp (deg) on each arm joint's accumulated command offset -- bounds the "
+                         "offset for a non-responsive joint (e.g. wrist roll) so it can't wind up "
+                         "unboundedly, while easily covering the few-deg tracking errors on the "
+                         "pad-controlling joints.")
 parser.add_argument("--arm_armature", type=float, default=0.0,
                     help="RUN-6 fix: joint ARMATURE (reflected actuator inertia, PhysxJointAxisAPI) "
                          "authored on each arm joint before reset. The diagnostic proved the AR4 wrist "
@@ -985,10 +999,41 @@ def main():
     # feedforward is retained as an option but is NOT the operative mechanism.
     grav = {"active": False, "sign": 1.0, "api": None,
             "mode": args_cli.assist_mode, "integ": np.zeros(robot.num_dof, dtype=np.float64),
-            "ki": args_cli.integral_ki, "clamp": args_cli.integral_clamp}
+            "ki": args_cli.integral_ki, "clamp": args_cli.integral_clamp,
+            # RUN-7 (2026-07-31): joint-space COMMAND pre-compensation. The +9mm
+            # pad-Z gap is a repeatable joint TRACKING error (achieved != command)
+            # on joints 2,3,5 (which DO respond to commands). Accumulate a per-arm-
+            # joint command OFFSET each step so achieved -> the commanded FK pose,
+            # using the STABLE position drive (the effort-integral ran away because
+            # the wrist has no effective drive to stabilize applied effort; adding a
+            # command offset instead rides the position drive, which IS stable).
+            "cmd_off": np.zeros(robot.num_dof, dtype=np.float64),
+            "kc": args_cli.cmd_kc, "cmd_clamp": math.radians(args_cli.cmd_clamp_deg)}
 
     def _reset_integrator():
         grav["integ"][:] = 0.0
+
+    def _reset_cmd_off():
+        grav["cmd_off"][:] = 0.0
+
+    def _apply_cmd_offset(q_arm):
+        """Return arm-target array = q_arm + accumulated per-joint command offset,
+        and advance the offset by kc*(q_arm - achieved) (clamped). Drives achieved
+        -> q_arm via the stable position drive. Active only in 'cmd_integral' mode."""
+        out = np.array(q_arm, dtype=np.float32)
+        if not (grav["active"] and grav["mode"] == "cmd_integral"):
+            return out
+        ach = np.array(robot.get_joint_positions())
+        cc = grav["cmd_clamp"]
+        for k, i in enumerate(arm_idx):
+            err = float(q_arm[k]) - float(ach[i])       # want achieved == q_arm
+            grav["cmd_off"][i] += grav["kc"] * err
+            if grav["cmd_off"][i] > cc:
+                grav["cmd_off"][i] = cc
+            elif grav["cmd_off"][i] < -cc:
+                grav["cmd_off"][i] = -cc
+            out[k] = float(q_arm[k]) + grav["cmd_off"][i]
+        return out
 
     def _query_gravity_forces():
         """Return the generalized gravity force vector G(q) over all DOFs, or
@@ -1028,8 +1073,8 @@ def main():
         offset. 'gravity': feedforward sign*G(q) (retained; NOT operative --
         the droop was measured to be non-gravitational). Grip DOFs stay 0 here
         (their effort is handled by the squeeze path)."""
-        if not grav["active"]:
-            return None
+        if not grav["active"] or grav["mode"] == "cmd_integral":
+            return None  # cmd_integral adjusts position TARGETS, not effort
         eff = np.zeros(robot.num_dof, dtype=np.float32)
         if grav["mode"] == "gravity":
             g = _query_gravity_forces()
@@ -1054,19 +1099,17 @@ def main():
     def drive(q_arm, grip_val, steps, render=True):
         do_render = render and RENDER
         for _ in range(steps):
-            gff = _assist_effort(q_arm)  # None unless a tracking assist is active
+            gff = _assist_effort(q_arm)          # effort assist (gravity/integral modes)
+            q_cmd = _apply_cmd_offset(q_arm)     # cmd_integral: tracking-compensated arm targets
             if squeeze["active"] and args_cli.squeeze_mode == "effort":
                 # arm on position control (arm DOFs only); jaws on pure EFFORT.
-                # Gravity feedforward (if active) rides on the arm apply_action.
                 if gff is not None:
                     controller.apply_action(ArticulationAction(
-                        joint_positions=np.array(q_arm, dtype=np.float32),
-                        joint_efforts=gff[_arm_idx_np],
+                        joint_positions=q_cmd, joint_efforts=gff[_arm_idx_np],
                         joint_indices=_arm_idx_np))
                 else:
                     controller.apply_action(ArticulationAction(
-                        joint_positions=np.array(q_arm, dtype=np.float32),
-                        joint_indices=_arm_idx_np))
+                        joint_positions=q_cmd, joint_indices=_arm_idx_np))
                 controller.apply_action(ArticulationAction(
                     joint_efforts=np.full(len(grip_idx), squeeze["eff"], dtype=np.float32),
                     joint_indices=_grip_idx_np))
@@ -1075,11 +1118,11 @@ def main():
                 # force the jaw target CLOSED (past the cube) regardless of the
                 # grip_val the caller passed, so the capped-force squeeze holds.
                 gv = GRIP_CLOSED if (squeeze["active"] and args_cli.squeeze_mode == "position") else grip_val
+                tgt = full_targets(q_cmd, gv)  # q_cmd already has the arm cmd-offset applied
                 if gff is not None:
-                    controller.apply_action(ArticulationAction(
-                        joint_positions=full_targets(q_arm, gv), joint_efforts=gff))
+                    controller.apply_action(ArticulationAction(joint_positions=tgt, joint_efforts=gff))
                 else:
-                    controller.apply_action(ArticulationAction(joint_positions=full_targets(q_arm, gv)))
+                    controller.apply_action(ArticulationAction(joint_positions=tgt))
             world.step(render=do_render)
             step_ctr["n"] += 1
             if step_ctr["n"] % 10 == 0:
@@ -1197,22 +1240,24 @@ def main():
         pad_base, meff_base = _per_joint_report("A_grav_on")
 
         if args_cli.quick:
-            # QUICK mode: just A (per-joint tracking at GRASP_Q) + per-joint +5deg
-            # command-tracking probe, then exit. Used to validate the armature fix
-            # cheaply (does the wrist now track?) without the full A-E battery.
-            log(f"[DIAG QUICK] arm_armature={args_cli.arm_armature}: per-joint +5deg tracking probe")
-            drive(GRASP_Q, GRIP_OPEN, 150, render=False)
-            base_ach = np.array(robot.get_joint_positions())
-            for k, i in enumerate(arm_idx):
-                qtest = list(GRASP_Q); qtest[k] += math.radians(5.0)
-                drive(qtest, GRIP_OPEN, 200, render=False)
-                moved = math.degrees(float(np.array(robot.get_joint_positions())[i] - base_ach[i]))
-                log(f"[DIAG QUICK] {ARM_JOINTS[k]:8s} +5.00deg cmd -> moved {moved:+6.2f}deg "
-                    f"({'TRACKS' if abs(moved-5.0)<1.5 else 'WEAK/DEAD'})")
-                drive(GRASP_Q, GRIP_OPEN, 150, render=False)
-            pad_q, _ = _per_joint_report("QUICK_final")
-            log(f"[DIAG QUICK] pad_z residual_vs_cube_center={(pad_q[2]-cube_center_z)*1000:+.2f}mm "
-                f"({'REACHES center (armature fix works)' if abs(pad_q[2]-cube_center_z)<0.003 else 'still off'})")
+            # QUICK mode: validate the cmd_integral tracking assist cheaply. Report
+            # baseline joint errors (section A above), then activate cmd_integral,
+            # settle, and report whether the per-joint errors are nulled and the pad
+            # reaches cube-center Z.
+            log(f"[DIAG QUICK] activating cmd_integral (kc={grav['kc']} clamp_deg="
+                f"{math.degrees(grav['cmd_clamp']):.0f}) at GRASP_Q")
+            grav["mode"] = "cmd_integral"
+            _reset_cmd_off()
+            grav["active"] = True
+            for _w in (100, 100, 100, 100, 100, 100):
+                drive(GRASP_Q, GRIP_OPEN, _w, render=False)
+                pad_q, _ = _per_joint_report(f"QUICK_cmdint_{step_ctr['n']}")
+                log(f"[DIAG QUICK] pad_z residual_vs_cube_center={(pad_q[2]-cube_center_z)*1000:+.2f}mm "
+                    f"cmd_off_deg={[round(math.degrees(float(grav['cmd_off'][i])),2) for i in arm_idx]}")
+            log(f"[DIAG QUICK] VERDICT: baseline pad_z {(pad_base[2]-cube_center_z)*1000:+.2f}mm -> "
+                f"after cmd_integral {(pad_q[2]-cube_center_z)*1000:+.2f}mm "
+                f"({'NULLED (cmd_integral fix works)' if abs(pad_q[2]-cube_center_z)<0.003 else 'residual remains'})")
+            grav["active"] = False
             log("\n[DIAG] DIAGNOSTIC COMPLETE (VERDICT: DROOP_DIAG_DONE)")
             _R.close(); simulation_app.close(); return
 
@@ -1421,19 +1466,31 @@ def main():
                 drive(GRASP_Q, GRIP_OPEN, 200, render=False)
                 log(f"[ASSIST gravity] chose sign={grav['sign']:+.0f}; residual_vs_center="
                     f"{(_pad_mid_xyz()[2]-cube_center_z)*1000:+.2f}mm (no-comp {(z_none-cube_center_z)*1000:+.2f}mm)")
+        elif grav["mode"] == "cmd_integral":
+            # CMD_INTEGRAL assist (default, RUN-7 fix): accumulate a per-joint
+            # command offset so achieved -> GRASP_Q (pad at FK cube center), via the
+            # stable position drive. Reset, activate, settle. Stays ON for the whole
+            # pick so every commanded pose (servo targets, lift) is tracking-comped.
+            drive(GRASP_Q, GRIP_OPEN, 100, render=False)
+            z_none = _pad_mid_xyz()[2]
+            _reset_cmd_off()
+            grav["active"] = True
+            drive(GRASP_Q, GRIP_OPEN, 600, render=False)  # converge the command offset
+            z_final = _pad_mid_xyz()[2]
+            log(f"[ASSIST cmd_integral] kc={grav['kc']}: pad_z no-assist={z_none:.5f} "
+                f"-> after={z_final:.5f} cube_center={cube_center_z:.5f}; "
+                f"residual_vs_center={(z_final-cube_center_z)*1000:+.2f}mm "
+                f"(no-assist gap was {(z_none-cube_center_z)*1000:+.2f}mm); "
+                f"cmd_off_deg={[round(math.degrees(float(grav['cmd_off'][i])),2) for i in arm_idx]}")
         else:
-            # INTEGRAL assist (default, the fix): reset integrator, activate, settle
+            # INTEGRAL (effort) assist -- retained for the record; UNSTABLE here.
             drive(GRASP_Q, GRIP_OPEN, 100, render=False)
             z_none = _pad_mid_xyz()[2]
             _reset_integrator()
             grav["active"] = True
-            drive(GRASP_Q, GRIP_OPEN, 500, render=False)  # let the integrator null the joint errors
-            z_final = _pad_mid_xyz()[2]
-            log(f"[ASSIST integral] ki={grav['ki']} clamp={grav['clamp']}: pad_z no-assist={z_none:.5f} "
-                f"-> after-integral={z_final:.5f} cube_center={cube_center_z:.5f}; "
-                f"residual_vs_center={(z_final-cube_center_z)*1000:+.2f}mm "
-                f"(no-assist gap was {(z_none-cube_center_z)*1000:+.2f}mm); "
-                f"integ_arm={[round(float(grav['integ'][i]),2) for i in arm_idx]}")
+            drive(GRASP_Q, GRIP_OPEN, 500, render=False)
+            log(f"[ASSIST integral] residual_vs_center="
+                f"{(_pad_mid_xyz()[2]-cube_center_z)*1000:+.2f}mm (no-assist {(z_none-cube_center_z)*1000:+.2f}mm)")
 
     # ---- 3-AXIS EMPIRICAL-JACOBIAN SERVO TO CUBE CENTER ------------------
     # ROOT CAUSE this replaces (measured live 2026-07-30): the prior 1-D

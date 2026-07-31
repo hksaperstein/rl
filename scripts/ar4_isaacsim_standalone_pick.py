@@ -316,7 +316,20 @@ CUBE_XY = (-0.12246154740662964, 0.37247094274942993)
 CUBE_SIZE = 0.015
 CUBE_REST_Z = PEDESTAL_HEIGHT + CUBE_SIZE / 2.0  # 0.05621 == FK pad-midpoint z
 
-GRASP_Q_DEG = [-19.4595, 53.2382, 14.9828, -14.9277, 21.9517, 114.6585]
+# DROOP PRE-COMPENSATION (2026-07-30 run-1 measured fix). Run 1 (cube at this
+# reachable near-vertical config) measured that at the FK-cube-center GRASP_Q the
+# live pad was HORIZONTALLY centered (X 1.4mm, Y 3.7mm -- inside the 6mm box) but
+# 16.3mm too HIGH in Z: the arm gravity-UNDER-TRACKS the commanded descent (live
+# pad Z=0.0725 vs commanded-FK 0.0562). The 6-DOF servo (orientation-hold off)
+# then failed to descend that 16mm -- it traded Z for X, wandered 12-29mm off,
+# and bumped the cube; jaws closed on empty air (0N, 0mm gain). Fix: command a
+# GRASP_Q whose FK pad_mid is 16.3mm BELOW cube center, so the sagged live pad
+# lands AT cube center at the nominal pose (X/Y already land centered), making
+# the grasp near servo-INDEPENDENT (the servo then converges on iter 0 with the
+# pad pre-positioned in the box, instead of wandering). Derived offline via the
+# standing FK framework (scratchpad deep_config.py): 16.1mm deeper, 0.00006mm XY
+# drift, joint_2 margin still 33.7deg.
+GRASP_Q_DEG = [-19.428, 56.3077, 13.9074, -14.9532, 21.3373, 114.6585]
 PREGRASP_Q_DEG = [-19.5117, 47.5355, 16.5996, -14.892, 22.9696, 114.6585]
 HOME_Q = [0.0] * 6
 GRASP_Q_BASE = [math.radians(d) for d in GRASP_Q_DEG]
@@ -1094,9 +1107,15 @@ def main():
     # orientation drifted 25deg). Strong DLS damping, small bounded steps,
     # moderate quiet gains, and a periodic Jacobian RE-PROBE so a bad Broyden
     # update can't compound.
+    # GENTLER/BOUNDED (2026-07-30 run-1 fix): run 1's servo (maxstep 1.8deg, 52
+    # iters) WANDERED 12-29mm off and bumped the cube when it couldn't descend.
+    # With the droop-pre-compensated GRASP_Q above the pad now starts already in
+    # the box, so the servo should converge on iteration 0; keep it small-step
+    # and short so that if the pad lands slightly off it can only fine-trim, not
+    # wander far enough to knock the cube.
     lam = 0.004
-    maxstep = math.radians(1.8)
-    for _it in range(52):
+    maxstep = math.radians(0.8)
+    for _it in range(26):
         drive(q_arm_cur.tolist(), GRIP_OPEN, 32, render=(not args_cli.no_video))
         m6 = measure6()
         # Broyden good-update from the LAST actually-observed move.

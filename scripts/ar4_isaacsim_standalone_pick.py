@@ -1028,13 +1028,14 @@ def main():
         # cube+jaws directly. Closeup from +X+Y (looks -X at the cube's +X face,
         # sees the two jaws close along Y); wide from -X-Y (over the incoming
         # gripper's shoulder, sees the full approach + straight-up lift).
-        # RUN-1/2 cameras looked DOWN at the low (z~0.09) scene -> black ground
-        # filled the frame. Fix: NEAR-LEVEL framing so the gripper is silhouetted
-        # against the bright gray dome (horizon), only a thin ground band at the
-        # bottom. Closeup from +X near cube height; wide from -X-Y elevated.
-        CAM_A_EYE = [0.22, 0.30, 0.115]   # +X near-level closeup (~0.35m)
-        CAM_B_EYE = [-0.34, -0.06, 0.26]  # -X -Y elevated over incoming gripper (~0.45m)
-        CAM_TGT = [-0.13, 0.28, 0.100]
+        # RUN-1/2/3 cameras looked DOWN/level at the low (z~0.09) scene, so the
+        # DARK gripper was silhouetted against the DARK ground and vanished. Fix:
+        # place cameras LOW (z~0.04, just above the ground) looking UP at the
+        # gripper, so the dark gripper is framed against the BRIGHT dome. Closeup
+        # from +X-Y low; wide from -X-Y low over the incoming gripper.
+        CAM_A_EYE = [0.10, 0.18, 0.045]   # +X -Y low, looking up (~0.33m)
+        CAM_B_EYE = [-0.40, -0.05, 0.045] # -X -Y low, looking up over incoming gripper (~0.50m)
+        CAM_TGT = [-0.14, 0.29, 0.120]
     else:
         CAM_A_EYE = [0.9, 1.0, 0.85]      # +X +Y high 3/4
         CAM_B_EYE = [-1.1, 1.0, 0.85]     # -X +Y high 3/4

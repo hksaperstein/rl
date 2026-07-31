@@ -309,28 +309,25 @@ CUBE_PATH = "/World/Cube"
 # nominal grasp pose (FK err 0.000mm x/y/z), leaving the in-run servo only
 # residual gravity-droop to trim. See scratchpad verify_config.py derivation
 # recorded in the kb 2026-07-30 reachable-config UPDATE.
-# RUN-3 STRATEGY (2026-07-30, "place the cube at the arm's natural DROOPED pad
-# pose"). Runs 1-2 proved the blocker is NOT reachability-in-principle (FK says
-# reachable) but GRAVITY-TORQUE-LIMITED tracking: at GRASP_Q the position drive
-# (8000 stiffness) sags, so the pad floats at a live floor z~0.069-0.072 and
-# CANNOT be driven down to a cube center at 0.0564 -- run 2 commanded 16mm deeper
-# and the pad descended only 3.4mm (0.0725->0.0691), and stiffening the drive
-# destabilizes the servo (kb run 6). Rather than fight the droop, place the cube
-# exactly where the gripper NATURALLY floats at GRASP_Q: the live-MEASURED
-# drooped pad midpoint (-0.1236, 0.3763, 0.0725) (run-1 [SERVO] start, arm
-# settled at nominal GRASP_Q). Cube XY = that pad XY; pedestal raised to 65mm so
-# the cube CENTER (pedestal+7.5mm) == the pad's live floating z 0.0725. The arm
-# then reaches GRASP_Q, droops to its natural pose, and the pads are at the cube
-# center in ALL THREE axes with ZERO commanded descent -- the servo starts at
-# ~0 error (converges immediately, no wandering/bump) and the jaws close+squeeze
-# straight onto the cube faces. Droop is a fixed function of the arm config, not
-# the cube/pedestal, so this placement is robust.
-PEDESTAL_CENTER_XY = (-0.1236, 0.3763)
+# RUN-4 STRATEGY (2026-07-30, "fix the DROOP at the actuator, not the scene").
+# Runs 1-3 all failed at PLACEMENT (0N contact every time): the live pad floats
+# ~10-16mm ABOVE the commanded descent and ~9mm off in Y, and neither commanding
+# deeper (run 2, pad moved only 3.4mm of 16mm) nor raising the cube to the
+# drooped pose (run 3, the taller cube propped the gripper 12mm HIGHER) helped.
+# KEY PHYSICS INSIGHT: a 16mm origin-level droop is FAR larger than steady-state
+# PD error should give for this small arm's gravity torque at KP=8000 (that
+# predicts sub-mm) -- the arm joints' drive FORCE/EFFORT LIMIT is saturating, so
+# the drive physically cannot hold the arm against gravity at this pose. Fix at
+# the actuator: author high-maxForce angular drives on the ARM joints (+ firmer
+# gains) so the arm actually HOLDS its commanded descent, and return the cube to
+# the FK-cube-center low-pedestal scene so a now-tracking arm lands the pad at
+# the cube center (FK 0.05621). See the arm-drive authoring block below.
+PEDESTAL_CENTER_XY = (-0.12246, 0.37247)
 PEDESTAL_FOOTPRINT = (0.30, 0.14)
-PEDESTAL_HEIGHT = 0.065
-CUBE_XY = (-0.1236, 0.3763)
+PEDESTAL_HEIGHT = 0.04871
+CUBE_XY = (-0.12246154740662964, 0.37247094274942993)
 CUBE_SIZE = 0.015
-CUBE_REST_Z = PEDESTAL_HEIGHT + CUBE_SIZE / 2.0  # 0.0725 == live drooped pad z at GRASP_Q
+CUBE_REST_Z = PEDESTAL_HEIGHT + CUBE_SIZE / 2.0  # 0.05621 == FK pad-midpoint z
 
 # NOMINAL near-vertical GRASP_Q (the FK-reachable config; the cube is now placed
 # at THIS pose's live drooped pad position -- see the SCENE block above). Run-2's
@@ -387,7 +384,10 @@ GRIP_CLOSED = 0.0
 # orientation-HOLDING servo below (vertical descent), which works best with a
 # MODERATE, well-damped gain: keep stiffness clean so the fingertip/orientation
 # measurements feeding the Broyden update are quiet. 8000/600 (KD/KP=0.075).
-ARM_KP, ARM_KD = 8000.0, 600.0
+# RUN-4: firmer arm gains + high-maxForce arm drives (see the arm-drive
+# authoring block) to eliminate the ~16mm gravity droop that blocked runs 1-3.
+ARM_KP, ARM_KD = 20000.0, 1000.0
+ARM_MAX_FORCE = 3000.0  # N*m per arm joint drive -- must exceed gravity holding torque
 # GRIP_KP sets the closing/squeeze force: force = GRIP_KP * jaw position error.
 # At cube contact each jaw sits ~0.0065m short of its 0-target, so 5000*0.0065
 # ~= 33N squeeze -- firm, well above the ~0.12N needed for the 10g cube, but
@@ -561,6 +561,27 @@ def main():
     # both joint prims as a USD-level guarantee, independent of whatever the
     # higher-level Python gains wrapper does or doesn't do.
     if args_cli.stage == "full":
+        # RUN-4 arm-drive authoring: raise the ARM joints' drive force/effort
+        # ceiling so the drive can actually HOLD the arm against gravity at the
+        # grasp pose (runs 1-3's ~16mm droop is drive-force saturation, not a
+        # stiffness deficit -- see the SCENE comment block above). Author an
+        # explicit angular force-type drive on each arm joint with a high
+        # maxForce (ARM_MAX_FORCE), stiffness ARM_KP, damping ARM_KD. The
+        # per-step controller.apply_action(joint_positions=...) still sets the
+        # live target each step (same pattern proven on the gripper joints).
+        for _ajname in ARM_JOINTS:
+            _ajprim = find_prim_by_name(stage, AR4_ROOT, _ajname)
+            if _ajprim is None or not _ajprim.IsValid():
+                log(f"[ARM DRIVE] WARNING: joint prim not found for {_ajname} -- explicit drive NOT authored")
+                continue
+            _adrive = UsdPhysics.DriveAPI.Apply(_ajprim, "angular")
+            _adrive.CreateTypeAttr().Set("force")
+            _adrive.CreateStiffnessAttr().Set(ARM_KP)
+            _adrive.CreateDampingAttr().Set(ARM_KD)
+            _adrive.CreateMaxForceAttr().Set(ARM_MAX_FORCE)
+            log(f"[ARM DRIVE] authored angular force-type drive on {_ajprim.GetPath()} "
+                f"(stiffness={ARM_KP}, damping={ARM_KD}, maxForce={ARM_MAX_FORCE} N*m)")
+
         for _jname in GRIP_JOINTS:
             _jprim = find_prim_by_name(stage, AR4_ROOT, _jname)
             if _jprim is None or not _jprim.IsValid():

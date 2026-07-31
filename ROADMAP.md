@@ -27,27 +27,32 @@ direction, not a scoped backlog.
 
 Roughly in the order they'd likely be picked up:
 
-0a. **AR4 PURE-FRICTION grasp — BLOCKED by a measured kinematic reach limit
-   (2026-07-30, ar4-isaacsim-standalone-pick pure-friction follow-on).**
-   Pushed the standalone pick toward a genuine contact-friction hold (jaws
-   squeezing the cube, NO joint/weld). Two real fixes landed: (1) replaced the
-   broken 1-D "vertical descent" (which drooped ~18mm off the cube in Y) with a
-   closed-loop **empirical-Jacobian + Broyden pose servo** that centers the
-   horizontal plane to ~3mm; (2) found and corrected a wrong standing constant —
-   the true jaw-pad offset is **12.5mm along the jaw link's local −Y**, not
-   18.5mm along −Z (measured via new `scripts/_inspect_jaw_geometry.py`; the old
-   world-Z assumption is invalid because this grasp holds the gripper ~79° from
-   vertical). BUT even with correct geometry, contact stayed **0N, cube unmoved
-   (ground-truth)**: the jaw links bottom out at z≈0.069m at the cube's XY, ~21mm
-   above the cube center, so the jaws close ABOVE the cube. The cube at Y=0.39 is
-   near the AR4's full forward reach — this is **geometric/reach-limited, not a
-   squeeze/friction/stiffness problem** (higher gains didn't lower the floor).
-   **Escalated to Principal:** a friction pick here needs a different IK
-   branch/grasp configuration (reachability study via `tasks/ar4/fk_verification.py`),
-   a closer cube placement, or a side approach — a grasp-mechanism/scene redesign,
-   not a servo tweak. Cost ~$1.7, instance torn down clean. Full detail:
-   `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s 2026-07-30
-   pure-friction UPDATE.
+0a. **AR4 PURE-FRICTION grasp — reach limit SOLVED, now BLOCKED by a persistent
+   vertical-tracking (gravity-droop) gap (2026-07-30, ar4-reachable-friction-grasp
+   task; supersedes the earlier reach-limit entry).**
+   Fixed the prior blocker: found a genuinely-reachable **near-vertical** grasp
+   config (tilt 5.55°, 36°+ margin on every joint) via the pure-FK
+   `scripts/ar4_graspable_workspace.py` sweep, re-verified with the corrected
+   12.5mm-local−Y pad geometry to put the pad **at the cube center 0.000mm in all
+   3 axes (FK)**, and re-ran the pure-friction grasp there. **Reach limit gone —
+   but a deeper blocker replaced it, pick still NOT achieved across 4 cloud
+   runs.** Live, the empirical-Jacobian servo centers the HORIZONTAL plane well
+   (X/Y to 1.8–3.7mm) but the pad **cannot be driven down to the cube's
+   mid-height — it floats 11–16mm too high in Z every time**, so the jaws close
+   on empty air and pure-friction contact is never established (**0N normal force
+   every phase, all 4 runs; cube ground-truth never rises**). The vertical gap
+   RESISTED every counter-measure: Cartesian pre-compensation (deeper target just
+   droops more — 3.4mm achieved of 16 commanded), raising the cube (taller cube
+   props the gripper up), and **60× arm-drive maxForce + 2.5× stiffness (cut droop
+   only ~30%)**. That insensitivity to 60× force means it is **NOT simple drive
+   saturation nor a stiffness deficit** — mechanism still open. **Escalated to
+   Principal:** next step is a **joint-level tracking diagnostic** (commanded-vs-
+   achieved per-joint angle + measured effort vs maxForce, gravity-off control) —
+   NOT another end-to-end pick run — before choosing a fix (gravity-feedforward/
+   integral joint control, a validated stiffer actuator model, or a grasp-assist).
+   Cost ~$2.7 (4 runs), all instances torn down clean. Full detail + the 4-run
+   measured table: `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s
+   2026-07-30 "ar4-reachable-friction-grasp" UPDATE.
 
 00. **AR4 GENUINE Isaac Sim physics grasp+lift — ACHIEVED 2026-07-30
    (ar4-isaacsim-standalone-pick task).** Closes the whole AR4-pick arc.

@@ -6060,3 +6060,103 @@ verified clean via `scripts/check_cloud_state.sh` (0/0/0). Artifacts:
 `scripts/ar4_isaacsim_standalone_pick.py` (empirical-Jacobian/Broyden servo +
 corrected pad geometry), `scripts/_inspect_jaw_geometry.py` (pad-offset
 measurement), `logs/ar4_standalone_pick_2026-07-30/`.
+
+---
+
+## UPDATE (2026-07-30 later, ar4-reachable-friction-grasp task): the reach limit was FIXED, but a deeper VERTICAL-PLACEMENT blocker replaced it — 4 runs, pure-friction pick still NOT achieved
+
+Direct follow-on to the pure-friction reach-limit blocker above. The prior task
+escalated that a friction pick needed either a different IK branch that reaches
+the cube's mid-height or a closer/re-placed cube. This task did exactly the
+first: found a genuinely-reachable **near-vertical** grasp configuration via the
+standing pure-FK graspable-workspace sweep and re-ran the (already-working)
+pure-friction grasp there. **The reach limit was genuinely eliminated — but a
+different, deeper blocker took its place, and the pick was still NOT achieved
+across 4 cloud runs.** The blocker is now precisely: the AR4 cannot place its
+gripper pads at the 15mm cube's vertical CENTER in the live standalone Isaac Sim
+because of a persistent, actuator-authority-resistant **~11–16 mm vertical
+gravity-droop/tracking gap** — so pure-friction contact (the deliverable) is
+NEVER established (0 N normal force at every phase, all 4 runs; ground-truth
+cube z never rises).
+
+**The reachable config (pure-FK, Pi-local — the reach limit IS solved):**
+`scripts/ar4_graspable_workspace.py`'s 8M-sample sweep returns a near-vertical
+graspable config at radius 0.392 m, bearing 108°, **tilt 5.55° from vertical**,
+with **36°+ joint-limit margin on EVERY joint** (vs the prior hand-tuned pose's
+~79°-from-vertical near-HORIZONTAL branch that bottomed out 21 mm above the
+cube). Re-verified offline with the CORRECTED pad geometry (12.5 mm along each
+jaw link's local −Y): at this config the true jaw-pad **midpoint** lands at world
+(−0.12246, 0.37247, 0.05621), and placing the cube XY = that pad XY + choosing
+the pedestal so the cube center = that pad z gives **FK pad-at-cube-center of
+0.000 mm in ALL THREE axes** (scratchpad `verify_config.py`). FK reachability is
+real and margined — this is not a joint-limit problem.
+
+**Why FK-reachable was necessary but NOT sufficient — the 4 runs (all
+`--mechanism friction`, pure friction, no joint/weld; each a fresh on-demand
+g2-standard-4/L4 container run, all torn down clean):**
+
+| Run | Strategy | Live pad vs cube center (mm) | Contact | Cube gain |
+|-----|----------|------------------------------|---------|-----------|
+| 1 | Cube at FK-cube-center (48.7 mm pedestal), nominal GRASP_Q | X **1.4**, Y **3.7** (centered), Z **−16.1 (too high)** | 0 N | 0.0 mm |
+| 2 | Droop-pre-compensated GRASP_Q (FK pad 16 mm deeper) | pad descended only **3.4 mm** of the commanded 16; Z **−12.7**, Y drifted **−9.6** | 0 N | 0.2 mm |
+| 3 | Cube raised to 65 mm pedestal at run-1's live drooped pose | taller cube **propped the gripper 12 mm HIGHER** (pad z 0.0846); Z **−11.9**, Y **−8.8** | 0 N | 0.0 mm |
+| 4 | High arm-joint drive maxForce (3000 N·m, 60×) + KP 8000→20000 + FK-cube-center | best horizontal yet (X **2.5**, Y **1.8**) but Z **STILL −11.1**; 60× maxForce cut droop only ~30% | 0 N | −0.1 mm |
+
+**The through-line (measured, not inferred):** the empirical-Jacobian servo
+reliably centers the HORIZONTAL plane (X/Y to 1.8–3.7 mm — the servo works), but
+the pad **cannot be driven down to the cube's mid-height**: it floats 11–16 mm
+too high in Z at every attempt. The jaws then close (or, run 4, fail to close)
+around empty air beside/above the cube, so the friction squeeze — correctly
+configured (μ 0.8/0.9, combine `max`, 32 solver-pos iters, ~33 N via GRIP_KP,
+vs the ~0.12 N a 10 g cube needs) — is never actually applied to the cube.
+
+**The surprising, escalation-worthy part:** the vertical gap resisted every
+counter-measure. Cartesian pre-compensation (run 2) failed because commanding a
+deeper joint target just droops more (the target moves away as you chase it —
+3.4 mm achieved of 16 commanded). Raising the cube to meet the drooped pad (run
+3) backfired — the taller cube physically props the descending gripper up. And
+**60× more drive force + 2.5× stiffness (run 4) cut the droop only ~30 %** and
+introduced a new gripper-won't-close solver artifact from the now-very-stiff
+arm. That a 16 mm origin-level droop (a) exists at KP=8000 where steady-state PD
+error should be sub-mm for this small arm's gravity torque, and (b) barely
+responds to 60× maxForce, means it is **NOT simple drive saturation nor a plain
+stiffness deficit** — the mechanism is still open. Leading hypotheses for
+whoever picks this up: the multi-waypoint trajectory + short settle never
+reaches true steady state at the loaded pose; a drive-configuration subtlety in
+how the standalone `SingleArticulation` + authored `UsdPhysics.DriveAPI` layer
+actually applies arm-joint force; or an unmodeled compliance/gravity-scale in the
+built USD. This wants a **direct joint-level diagnostic** (command a single
+static pose, log commanded-vs-achieved per-joint angle and measured joint effort
+vs the drive's own maxForce, with a gravity-off control) rather than another
+end-to-end pick attempt — 4 end-to-end runs have localized the failure to
+vertical tracking; the next step is to instrument that tracking directly.
+
+**What is solid and should carry forward:** (1) the near-vertical reachable
+config + its FK derivation (`ar4_graspable_workspace.py` + `verify_config.py`
+method); (2) the horizontal empirical-Jacobian servo (X/Y to <4 mm); (3) the
+corrected 12.5 mm-local−Y pad geometry; (4) the whole standing "instrument the
+physical state" discipline — every run's `[SERVO] start` pos_err + 0 N contact
++ ground-truth cube pose is exactly what kept 4 plausible-looking configs
+honest. What did NOT work and should not be retried blindly: scene-side fixes
+(pre-comp, pedestal height) for what is an actuator/tracking problem.
+
+**Verdict:** VERDICT: PICK NOT CONFIRMED at a genuinely-reachable config — a
+new, specific, measured blocker (persistent 11–16 mm vertical droop the arm
+drive cannot close), distinct from and downstream of the now-solved reach limit.
+Escalated to Principal: the next move is a joint-level tracking diagnostic (not
+another pick run) to explain the droop's insensitivity to 60× drive force,
+before choosing a mechanism (gravity-feedforward/integral joint control, a
+stiffer validated actuator model, or accepting a grasp-assist for the friction
+deliverable).
+
+**Cost:** ~$2.7 total across 4 on-demand g2-standard-4/L4 container runs
+(zone-fallback hit several us-central1-a/b + us-east1-b stockouts on run 2); all
+4 instances torn down and verified clean via `scripts/check_cloud_state.sh`
+(0 instances / 0 disks / 0 snapshots). Artifacts:
+`scripts/ar4_isaacsim_standalone_pick.py` (final = run-4 config: reachable
+near-vertical GRASP_Q, high-maxForce arm drives, bounded servo),
+`scripts/ar4_graspable_workspace.py` (reachable-config sweep),
+`scripts/_cloud_ar4_reachable_grasp_run.sh` (cloud dispatch payload),
+`logs/ar4_reachable_grasp_2026-07-30/result_run{1..4}.txt` (per-run measured
+pos_err + contact + cube-pose), `logs/videos/ar4_reachable_friction_grasp/`
+(run-1 closeup+elbow), GCS `gs://rl-manipulation-hks-runs/ar4-reachable-friction-grasp/`.

@@ -6259,3 +6259,106 @@ Instance deleted, verified clean via `scripts/check_cloud_state.sh` (0 instances
 integral assists, retained with their measured verdicts documented inline),
 `logs/ar4_gravity_droop_2026-07-31/` (droop_diagnostic v3/v4, cmdint/limits/
 empty_scene quick logs), GCS `gs://rl-manipulation-hks-runs/ar4-gravity-droop/`.
+
+## UPDATE (2026-07-31, ar4-side-grasp task): the SIDE/HORIZONTAL grasp is also collision-blocked — the gripper collision-envelope ENGULFS a 15mm cube, so no rigid support can hold the cube without intersecting the gripper
+
+Following the prior 2026-07-31 finding (top-down grasp is palm-vs-cube-top
+collision-blocked; arm/drives/tracking flawless in free space), this task
+implemented and tested the recommended fix: a **horizontal side grasp** —
+gripper oriented so the jaw-slide/closing axis is horizontal (world Y, gripping
+the cube's two vertical +Y/-Y faces at mid-height) and the approach axis is
+horizontal (world +X, palm on the -X SIDE of the cube, never above it). New
+`--side_grasp` mode in `scripts/ar4_isaacsim_standalone_pick.py`; poses FK/IK-
+derived offline via the new `scripts/_design_ar4_side_grasp.py` (reuses
+`tasks/ar4/fk_verification.py`'s vendor-URDF chain + the measured 12.5mm local-Y
+pad centroid). **Result: also blocked — but by a different, deeper, and now
+fully-quantified geometric limit, definitively established across 3 cloud runs
+(~$1-1.5 total, all instances torn down, `check_cloud_state.sh` 0/0/0).**
+
+**Palm-to-fingertip depth (the requested measurement):** 48.5mm (link_6 origin
+to pad midpoint along the approach axis), pad separation 28mm open. For a
+top-down grasp the palm sits 48.5mm above the pads, so reaching a 15mm cube's
+7.5mm-half mid-height would put the palm 41mm above the cube top — the top-down
+shortfall, restated.
+
+**The side-grasp POSE is perfectly reachable (free-space control).** The
+horizontal GRASP_Q (`[-36.81, 62.13, 23.79, -53.29, 92.44, -3.24]` deg,
+joint-limit margins: tightest joint_5 12.6deg at grasp) drives the pad midpoint
+to **(-0.11998, 0.27998, 0.08992)** — dead-on the cube center target
+(-0.12, 0.28, 0.09) — with **all six joints tracking to <0.02deg** (joint_5 err
+-0.002deg) in an `--empty_scene` control. Same flawless-in-free-space signature
+as the top-down pose.
+
+**With the cube+support present it jams.** Free-space vs obstacles A/B
+(`--droop_diagnostic --quick`): obstacles-present, joint_5 settles **28deg short**
+(64deg achieved vs 92deg commanded), joint_1/2/3 pushing 88-138 N*m against the
+obstruction, pad 40mm low. Replacing the tall 82.5mm ground-rooted pedestal with
+a thin (10mm) floating support plate helped only ~5mm (pad z 0.050 -> 0.061),
+confirming the blocker is NOT the pedestal height.
+
+**Root cause (definitive, measured):** the `--dump_gripper_aabb` mode measured
+the gripper's world collision-mesh AABBs at the grasp pose (pad dead-on cube
+center, free space):
+- `gripper_base_link`: z_min = **0.0670** — 22.9mm BELOW the pad plane (0.09),
+  15.5mm below the cube bottom/support top (0.0825); XY spans -0.169..-0.122 (X),
+  0.244..0.316 (Y).
+- both jaw links: z_min ~ **0.074** (15.7mm below pads); X -0.136..-0.104
+  (the full cube X-range PLUS margin), Y 0.25..0.31.
+- link_6: z_min 0.074.
+
+The gripper collision envelope (X ~81mm, Y ~72mm, hanging 15-23mm BELOW the pad
+plane) **completely surrounds a 15mm cube during grasp.** Every direction one
+could support the cube from — below (jaws/body occupy z down to 0.067 over the
+cube footprint), +X (jaws extend to X=-0.104, past the cube's +X face -0.1125),
+-X (palm/link_6 to X=-0.186), or a cantilever threaded in from +Y (jaw1 reaches
+Y=0.309) — passes through the gripper's own volume. A rigid support at the cube's
+underside (which must sit at <=0.0825 to hold it) is inside the jaw z-band
+(0.074-0.108) -> collision. This is the SAME gripper-vs-tiny-object size mismatch
+as the top-down palm collision, just manifesting on the underside/sides: **the
+AR4 gripper is simply too large/deep for a 15mm cube resting on (or attached to)
+any support.** Top-down the palm hits the cube top; side-on the jaws/body hit the
+support. Controller, drives, tracking, servo, pad geometry, friction params are
+all fine — the blocker is object/gripper scale.
+
+**Escalation (architecture-level, not a Senior's unilateral call — flagged to
+Principal per START_HERE):** a pure-friction grasp of a 15mm cube with this
+gripper on a work surface is geometrically infeasible in BOTH top-down and
+side-on approaches. Genuine options, each a task/scene redesign:
+(a) **a bigger object** (e.g. a 30-45mm cube/torus the gripper can actually
+straddle with support clearance) — lowest-risk, reuses everything;
+(b) a **smaller / deeper-fingered gripper** (asset change);
+(c) an object presented **free of any support in the grasp region** — e.g.
+cantilevered fully into open space on a thin stalk attached to a face the gripper
+doesn't touch, or dropped/tossed and caught (dynamic) — complex to author and
+partly conflicts with a static pre-grasp;
+(d) accept the characterized blocker and pivot the anchor task's object size.
+The FK-reachability + empirical-Jacobian servo + pad-geometry + friction-param
+work all carry forward to whichever object/gripper is chosen.
+
+**What is proven solid + reusable:** the horizontal side-grasp pose + its FK/IK
+derivation (`scripts/_design_ar4_side_grasp.py`); the arm's free-space tracking
+(bit-perfect at the horizontal pose too); the new diagnostic tooling
+(`--side_grasp`, `--dump_gripper_aabb`, the thin-floating-plate scene, the
+free-space-vs-obstacles A/B recipe). Method lesson reinforced (again): the
+`--empty_scene` free-space control is the decisive first move — it immediately
+separated "pose unreachable" (false) from "scene collision" (true), and the AABB
+dump then pinned the exact geometry rather than another round of scene-tuning
+guesses.
+
+**Video (per the standing 2026-07-31 directive to render+sync a watchable video
+of EVERY attempt, success or not — the "gate video on closure" safeguard was
+removed):** `logs/videos/ar4_side_grasp_2026-07-31/side_grasp_closeup.mp4`
+(gripper approaching horizontally + the cube, clearly framed) and
+`side_grasp_elbow.mp4`. Verdict PICK NOT CONFIRMED (0N jaw contact, cube_z gain
+0.0mm) — the video documents the jaws unable to reach the cube faces because the
+gripper body jams against the support. Camera note: this low (z~0.09) small-cube
+scene needed an elevated-3/4 ~0.8m camera (RUN-1's `CAM_B_EYE=[-0.75,0.62,0.42]`
+style) to frame the dark gripper legibly; near-level and look-up variants lost it
+against the ground/dome (see the isaac-sim-video-capture skill).
+
+**Cost:** ~$1-1.5 across the side-grasp + A/B-diagnostic + AABB-dump + video runs
+(on-demand g2-standard-4/L4, each torn down; one transient on-demand instance was
+killed mid-setup by `run_on_cloud_gpu.sh`'s monitor treating a transient `gcloud
+describe` UNKNOWN as a preemption — mitigated by dispatching subsequent runs with
+`--detach` and owning teardown directly). All artifacts under GCS
+`gs://rl-manipulation-hks-runs/ar4-side-grasp/`.

@@ -27,6 +27,41 @@ direction, not a scoped backlog.
 
 Roughly in the order they'd likely be picked up:
 
+0aa. **AR4 SIDE/HORIZONTAL grasp ALSO collision-blocked — the gripper envelope
+   ENGULFS a 15mm cube; a pure-friction grasp of this object with this gripper is
+   geometrically infeasible top-down AND side-on (2026-07-31, ar4-side-grasp task;
+   ESCALATED architecture decision).** Implemented + tested the recommended side
+   grasp (horizontal gripper: closing axis world Y onto the cube's vertical faces,
+   approach axis world +X, palm on the -X SIDE — never above the cube). New
+   `--side_grasp` mode + the FK/IK design tool `scripts/_design_ar4_side_grasp.py`.
+   Findings (cloud, ~$1-1.5, all torn down clean):
+   - **Palm-to-fingertip depth = 48.5mm** (the requested measurement).
+   - **Side-grasp pose is perfectly reachable in free space**: pad midpoint lands
+     at (-0.11998, 0.27998, 0.08992) = dead-on the cube center, all joints <0.02°
+     (`--empty_scene` control). Same flawless-in-free-space signature as top-down.
+   - **But it jams with the support present** (joint_5 28° short, joint_1/2/3 at
+     88-138 N·m, pad 40mm low). A thin (10mm) floating support plate instead of
+     the tall pedestal helped only ~5mm — so it's NOT the pedestal height.
+   - **Definitive root cause (`--dump_gripper_aabb` measurement):** the gripper
+     collision envelope (X ~81mm, Y ~72mm, hanging **15-23mm BELOW the pad plane**:
+     gripper_base_link z_min 0.067, jaws z_min 0.074, vs cube bottom 0.0825)
+     **completely surrounds the 15mm cube during grasp** — every direction a rigid
+     support could hold the cube from passes through the gripper's own volume.
+     Same gripper-vs-tiny-object size mismatch as the top-down palm collision, now
+     on the underside/sides. **The AR4 gripper is simply too large/deep for a 15mm
+     cube on a work surface.**
+   - **Escalation options** (task/scene redesign, not a Senior's call): (a) a
+     BIGGER object (~30-45mm) — lowest risk, reuses everything; (b) a smaller/
+     deeper-fingered gripper; (c) present the object free of any support in the
+     grasp region; (d) pivot the anchor-task object size. FK-reachability + servo +
+     pad-geometry + friction work all carry forward.
+   - **Video** (per the standing directive — render+sync EVERY attempt, gate
+     removed): `logs/videos/ar4_side_grasp_2026-07-31/side_grasp_{closeup,elbow}.mp4`
+     (verdict PICK NOT CONFIRMED — jaws can't reach the cube faces; the gripper
+     body jams on the support). Full detail:
+     `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s 2026-07-31
+     ar4-side-grasp UPDATE. GCS `gs://rl-manipulation-hks-runs/ar4-side-grasp/`.
+
 0a. **AR4 PURE-FRICTION grasp — the "vertical droop" was a PHANTOM; real blocker
    is a GRIPPER↔CUBE COLLISION during top-down descent (2026-07-31,
    ar4-gravity-droop task; supersedes the gravity-droop framing entirely).**

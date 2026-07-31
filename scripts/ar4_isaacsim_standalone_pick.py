@@ -182,6 +182,10 @@ parser.add_argument("--quick", action="store_true",
                     help="Quick diagnostic: only section A (per-joint tracking at GRASP_Q) + a +5deg "
                          "per-joint command-tracking probe, then exit -- to validate the armature fix "
                          "cheaply without the full A-E battery.")
+parser.add_argument("--empty_scene", action="store_true",
+                    help="Place pedestal+cube 5m out of reach so nothing collides with the arm -- the "
+                         "decisive test for whether GRASP_Q is blocked by an EXTERNAL scene collision "
+                         "(the arm should then reach the FK pad z ~0.0562 freely) vs a self-collision.")
 args_cli = parser.parse_args()
 
 # enable_cameras (and thus the RTX render pipeline) ONLY when capturing video.
@@ -581,22 +585,28 @@ def main():
 
     cube = None
     robot = None
+    # --empty_scene: place pedestal+cube FAR out of reach so nothing can collide
+    # with the arm -- the decisive test for whether GRASP_Q is blocked by an
+    # EXTERNAL scene collision (cube/pedestal) vs a self-collision/arm issue.
+    _obs_dx = 5.0 if args_cli.empty_scene else 0.0
     if args_cli.stage in ("scene", "robot_noxform", "full"):
         # pedestal (static collider)
         FixedCuboid(
             prim_path="/World/Pedestal",
-            position=np.array([PEDESTAL_CENTER_XY[0], PEDESTAL_CENTER_XY[1], PEDESTAL_HEIGHT / 2.0]),
+            position=np.array([PEDESTAL_CENTER_XY[0] + _obs_dx, PEDESTAL_CENTER_XY[1], PEDESTAL_HEIGHT / 2.0]),
             scale=np.array([PEDESTAL_FOOTPRINT[0], PEDESTAL_FOOTPRINT[1], PEDESTAL_HEIGHT]),
             color=np.array([0.45, 0.32, 0.22]),
         )
         # cube (dynamic, 15mm)
         cube = DynamicCuboid(
             prim_path=CUBE_PATH,
-            position=np.array([CUBE_XY[0], CUBE_XY[1], CUBE_REST_Z]),
+            position=np.array([CUBE_XY[0] + _obs_dx, CUBE_XY[1], CUBE_REST_Z]),
             scale=np.array([CUBE_SIZE, CUBE_SIZE, CUBE_SIZE]),
             color=np.array([0.8, 0.1, 0.1]),
             mass=0.01,
         )
+        if args_cli.empty_scene:
+            log(f"[EMPTY_SCENE] pedestal+cube shifted +{_obs_dx}m in X (out of reach) to test for external collision")
         _bc("scene_built")
 
     if args_cli.stage in ("robot_noxform", "full"):

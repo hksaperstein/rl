@@ -1144,20 +1144,34 @@ def main():
     timeline.play()
     _bc("after_play")
 
-    # --- KINEMATIC-FLOAT freeze (--float_release) --------------------------
-    # Support-free presentation: the cube has NO support, so hold it FROZEN in
-    # place by re-pinning its world pose + zeroing its velocity every physics
-    # step (a purely API-based kinematic, reliable under the GPU pipeline where a
-    # runtime USD kinematicEnabled toggle may not propagate). Released to genuine
-    # dynamics at the grasp so the friction hold must carry it. Frozen from the
-    # very first settle step so it never falls.
-    _float_active = args_cli.float_release and (cube is not None) and (args_cli.stage == "full")
-    freeze = {"active": _float_active,
+    # --- SUPPORT-FREE FLOAT (--float_release), 3 phases --------------------
+    # The cube has NO support. It must (a) stay put during the approach, (b) be
+    # squeezable (fully dynamic, NOT immovable) while the jaws close on it, and
+    # (c) be released to real gravity for the lift. An earlier pose-PIN made the
+    # cube kinematic/immovable during (b) -- the jaws jammed on it and it popped
+    # out at release (sep->0 on empty air). The right lever is GRAVITY: disable
+    # the cube's gravity so it floats in place (fully dynamic -- the jaws squeeze
+    # and grip it normally), then RE-ENABLE gravity at the grasp so the pure-
+    # friction hold must carry it. Modes:
+    #   "pinned"   -> approach: re-pin pose each step (insurance vs numeric drift;
+    #                 jaws are not touching the cube yet, so immovability is fine).
+    #   "floating" -> close/squeeze: gravity off, NOT pinned -> squeezable float.
+    #   "off"      -> released: real gravity, pure-friction hold must carry it.
+    _float_on = args_cli.float_release and (cube is not None) and (args_cli.stage == "full")
+    freeze = {"mode": "pinned" if _float_on else "off",
               "pos": np.array([CUBE_XY[0], CUBE_XY[1], CUBE_REST_Z], dtype=float),
               "quat": np.array([1.0, 0.0, 0.0, 0.0], dtype=float)}
+    _cube_rbapi = None
+    if _float_on:
+        try:
+            _cube_rbapi = PhysxSchema.PhysxRigidBodyAPI.Apply(stage.GetPrimAtPath(CUBE_PATH))
+            _cube_rbapi.CreateDisableGravityAttr().Set(True)   # float from the start
+            log(f"[FLOAT] cube gravity DISABLED -- floats at {freeze['pos'].tolist()} (support-free)")
+        except Exception as _e:
+            log(f"[FLOAT] could not disable cube gravity: {_e}")
 
     def _pin_cube_now():
-        if not (freeze["active"] and cube is not None):
+        if not (_float_on and cube is not None and freeze["mode"] == "pinned"):
             return
         try:
             cube.set_world_pose(freeze["pos"], freeze["quat"])
@@ -1165,8 +1179,14 @@ def main():
             cube.set_angular_velocity(np.zeros(3, dtype=float))
         except Exception as _e:
             log(f"[FLOAT] pin failed: {_e}")
-    if _float_active:
-        log(f"[FLOAT] freezing cube at {freeze['pos'].tolist()} (support-free; released at grasp)")
+
+    def _float_set_gravity(disabled):
+        if _cube_rbapi is None:
+            return
+        try:
+            _cube_rbapi.GetDisableGravityAttr().Set(bool(disabled))
+        except Exception as _e:
+            log(f"[FLOAT] set gravity disabled={disabled} failed: {_e}")
 
     # let things settle a few steps (heartbeat each step so a slow-but-working
     # 4-vCPU physics loop is not mistaken for a hang by the watchdog)
@@ -2303,6 +2323,13 @@ def main():
         # engage the genuine squeeze (effort or capped-position), then drive it
         # home. Every step goes through drive() so the closing effort is
         # re-applied continuously (a bare world.step() would NOT re-assert it).
+        # SUPPORT-FREE FLOAT: switch the cube from pinned(immovable) to FLOATING
+        # (gravity off, NOT pinned) so the jaws can actually SQUEEZE it -- an
+        # immovable pinned cube jams the jaws (they can't close onto it). Gravity
+        # stays off so it can't fall while the jaws close; re-enabled at release.
+        if freeze["mode"] == "pinned":
+            freeze["mode"] = "floating"
+            log("[FLOAT] cube -> FLOATING (gravity off, unpinned) so the jaws can squeeze it")
         start_squeeze()
         drive(grasp_q_use, GRIP_CLOSED, args_cli.close_steps, render=True)
         sep_mid, _ = jaw_geometry("P3a_mid_close")
@@ -2371,12 +2398,20 @@ def main():
         # turns on while friction is ALREADY carrying it (a free-floating cube would
         # otherwise get shoved by an asymmetric close). From here the hold is a pure-
         # friction hold of a fully dynamic object -- NO joint/weld, NO support.
-        if freeze["active"]:
-            freeze["active"] = False
-            log("[FLOAT] RELEASED cube to dynamics -- now held ONLY by jaw friction (support-free, no weld)")
+        if _float_on and freeze["mode"] != "off":
+            freeze["mode"] = "off"
+            _float_set_gravity(False)  # RE-ENABLE gravity: friction must now carry it
+            _grav_dis = None
+            try:
+                _grav_dis = bool(_cube_rbapi.GetDisableGravityAttr().Get())
+            except Exception:
+                pass
+            log(f"[FLOAT] RELEASED -- cube DisableGravity readback={_grav_dis} (want False == gravity ON); "
+                f"now held ONLY by jaw friction (support-free, no weld)")
             drive(grasp_q_use, GRIP_CLOSED, 40, render=True)  # let friction catch the now-heavy cube
             _rel_z = cube_pose()[0][2]
-            log(f"[FLOAT] cube_z just after release+settle = {_rel_z:.4f}m (rest was {cube_rest_z:.4f})")
+            log(f"[FLOAT] cube_z just after release+settle = {_rel_z:.4f}m (rest was {cube_rest_z:.4f}); "
+                f"{'HELD (friction carrying it)' if _rel_z > cube_rest_z - 0.01 else 'DROPPED (no friction hold)'}")
         drive(grasp_q_use, GRIP_CLOSED, 30, render=True)
         log("[friction] PURE contact-friction grasp -- jaws squeezing cube faces, NO joint/weld")
 

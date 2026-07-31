@@ -223,6 +223,47 @@ parser.add_argument("--prism_height", type=float, default=0.056,
                          "fixed pad plane (0.05621) grips near the top. Swept physics-only to clear the "
                          "gripper's central-body underhang while keeping a solid pad contact band.")
 parser.add_argument("--prism_mass", type=float, default=0.025, help="Prism mass, kg.")
+parser.add_argument("--pin_pick", action="store_true",
+                    help="SUPPORT-FREE THIN-PIN top-down grasp (2026-07-31, ar4-support-free-pin-pick "
+                         "task). The DEFINITIVE blocker (kb 2026-07-31 UPDATEs, proven by "
+                         "--dump_gripper_aabb): the AR4 gripper's central body (gripper_base_link) bottoms "
+                         "only ~1.3mm BELOW the pad plane, so it CANNOT straddle ANY object resting on a "
+                         "support surface -- the body hits the object top / the fingers hit the support -- "
+                         "in BOTH top-down and side-on. Arm/drives/tracking/servo/squeeze/jaw-closure are "
+                         "ALL proven flawless. Fix (Principal decision): present the object SUPPORT-FREE. "
+                         "This mode holds a small object up on a THIN VERTICAL PIN (much thinner than the "
+                         "gripper's jaw clearance) so there is NO support surface in the grasp region for "
+                         "the body/fingers to collide with. The object's TOP is placed just BELOW the "
+                         "gripper body's z_min (so the descending body clears it) and its faces span down "
+                         "through the finger/pad contact band; the pin rises up the CENTER (between the two "
+                         "closing jaws, below the fingertips) and bears the object's weight until the grasp "
+                         "lifts it OFF. Reuses the proven near-vertical top-down GRASP_Q/servo/squeeze/"
+                         "friction machinery unchanged; only the object presentation changes. Recommended "
+                         "with --no_servo (the Jacobian probe would bump the object).")
+parser.add_argument("--pin_obj_width", type=float, default=0.015,
+                    help="Object width along the jaw-SLIDE/closing axis (world X, top-down), meters. Must "
+                         "be < the ~28mm open jaw aperture; 15mm leaves the open jaws clearance to descend "
+                         "beside it and close onto its two +/-X faces.")
+parser.add_argument("--pin_obj_depth", type=float, default=0.018,
+                    help="Object depth along the third axis (world Y, top-down), meters.")
+parser.add_argument("--pin_obj_height", type=float, default=0.020,
+                    help="Object height, meters. The object hangs DOWN from its top face; a taller object "
+                         "gives a taller pad-face contact band (better friction) but its bottom must stay "
+                         "above the pin top. 20mm spans the finger contact band comfortably.")
+parser.add_argument("--pin_obj_top", type=float, default=0.0510,
+                    help="World-Z of the object's TOP face, meters. MUST be below the gripper body's z_min "
+                         "(~0.0548 at the reachable top-down GRASP_Q) so the descending central body clears "
+                         "it -- the whole point of the support-free presentation. Default 0.0510 gives "
+                         "~3.8mm body clearance while the object's faces (0.031..0.051) overlap the finger/"
+                         "pad contact band (~0.038..0.056). Swept physics-only to pick the highest top that "
+                         "clears the body yet gives solid symmetric contact.")
+parser.add_argument("--pin_obj_mass", type=float, default=0.015, help="Object mass, kg (10g cube analog).")
+parser.add_argument("--pin_size", type=float, default=0.009,
+                    help="Thin support-pin cross-section (square), meters. Must be small enough to clear "
+                         "the CLOSING jaws (which reach ~+/-7.5mm on a 15mm object) and rise between the "
+                         "fingertips -- 9mm (+/-4.5mm) leaves ~3mm clearance per side. The pin is a static "
+                         "kinematic collider from the ground up to the object bottom; the gripper body/"
+                         "fingers genuinely clear it (verify via --dump_gripper_aabb --pin_pick).")
 parser.add_argument("--jaw_max_force", type=float, default=50.0,
                     help="Jaw prismatic drive maxForce CEILING (N). The closing force is min(GRIP_KP*error, "
                          "this). 50N (old default) + heavy damping left the jaws stalling BEFORE reaching a "
@@ -620,6 +661,51 @@ if TALL_PRISM:
     PRISM_CENTER_Z = PRISM_H / 2.0      # rests on ground (bottom z=0), so center = H/2
     PRISM_XY = (-0.12246154740662964, 0.37247094274942993)  # == pad-midpoint XY at GRASP_Q
 
+# ---- SUPPORT-FREE THIN-PIN top-down grasp config (2026-07-31, ar4-support-free-
+# pin-pick task). Reuses the SAME proven near-vertical top-down GRASP_Q (pad
+# midpoint lands dead-on (-0.12246, 0.37247, 0.05621) with all joints tracking
+# <0.02deg in free space -- empty_scene-confirmed). Measured gripper geometry at
+# that pose (--dump_gripper_aabb, kb 2026-07-31 tall-prism UPDATE):
+#   pad_mid z = 0.05621; gripper_base_link z_min = 0.0548 (1.3mm below pad plane);
+#   jaw/finger links z_min ~0.038 (18mm below pad); link_6 z_min 0.074.
+# The object is presented SUPPORT-FREE on a thin central pin:
+#   - object TOP (PIN_OBJ_TOP) placed BELOW the body z_min (0.0548) so the
+#     descending central body clears it (this is the exact 1.3mm-window blocker
+#     that made every surface-supported object fail; removing the support does
+#     NOT remove it -- placing the object top below the body does);
+#   - object faces span DOWN from the top through the finger/pad contact band
+#     (~0.038..0.056) so the closing jaws grip the two +/-X faces by real flat-
+#     face friction;
+#   - a THIN square pin (PIN_SIZE) rises up the CENTER from the ground to the
+#     object bottom, thin enough to clear the closing jaws (+/-7.5mm) and rise
+#     between the fingertips; it bears the object's weight until the grasp lifts
+#     it OFF the pin.
+PIN_PICK = args_cli.pin_pick
+if PIN_PICK:
+    PIN_OBJ_W = args_cli.pin_obj_width       # X, jaw-slide/closing axis
+    PIN_OBJ_D = args_cli.pin_obj_depth       # Y
+    PIN_OBJ_H = args_cli.pin_obj_height      # vertical
+    PIN_OBJ_TOP = args_cli.pin_obj_top       # world-Z of object top face
+    PIN_OBJ_CENTER_Z = PIN_OBJ_TOP - PIN_OBJ_H / 2.0
+    PIN_OBJ_BOTTOM = PIN_OBJ_TOP - PIN_OBJ_H
+    PIN_XY = (-0.12246154740662964, 0.37247094274942993)  # == pad-midpoint XY at GRASP_Q
+    PIN_SZ = args_cli.pin_size
+    PIN_HEIGHT = PIN_OBJ_BOTTOM               # pin spans [0, object bottom]
+    PIN_CENTER_Z = PIN_OBJ_BOTTOM / 2.0
+    # servo grip target: the object's own vertical CENTER (real face midpoint),
+    # clamped to the reachable pad plane -- but with --no_servo the arm just goes
+    # to GRASP_Q (pad_mid 0.05621) and closes; the object faces (below the body)
+    # are gripped by the sub-centroid finger band.
+    PIN_GRIP_Z = PIN_OBJ_CENTER_Z
+    # LIFT pose: extrapolate along the proven, near-vertical PREGRASP->GRASP
+    # descent direction (mostly joint_2 shoulder-pitch) to raise the gripper
+    # up-and-back, clearly lifting the object OFF the thin pin. 3x PREGRASP's
+    # offset gives a solid (~several-cm) lift; the arm has 30deg+ joint-limit
+    # margin here so it stays reachable. Retreat then returns to PREGRASP (still
+    # well up off the pin, object still gripped) rather than the violent all-the-
+    # way-to-HOME retreat, so the friction hold is demonstrated stably.
+    PIN_LIFT_Q = [g + 3.0 * (p - g) for g, p in zip(GRASP_Q_BASE, PREGRASP_Q)]
+
 RESULT_PATH = f"/workspace/rl/logs/standalone_pick_result_{args_cli.mechanism}.txt"
 VIDEO_DIR = f"/workspace/rl/logs/videos/ar4_isaacsim_standalone_pick/{args_cli.mechanism}"
 os.makedirs(os.path.dirname(RESULT_PATH), exist_ok=True)
@@ -727,10 +813,22 @@ def main():
     )
     _bc("ground_added")
 
-    # dome light (brighter for side-grasp video legibility)
+    # dome light (brighter for side-grasp / pin-pick video legibility -- the
+    # gripper is dark, so a small low-lit scene reads as a black blob without it)
     from pxr import UsdLux
     light = UsdLux.DomeLight.Define(stage, Sdf.Path("/World/DomeLight"))
-    light.CreateIntensityAttr(3000.0 if SIDE_GRASP else 2000.0)
+    light.CreateIntensityAttr(3000.0 if (SIDE_GRASP or PIN_PICK) else 2000.0)
+    if PIN_PICK:
+        # add a bright distal key light angled down onto the grasp point so the
+        # dark gripper + object are lit from a 3/4 angle, not a flat dome wash --
+        # avoids the "black blob against a dark background" the user complained of.
+        _key = UsdLux.DistantLight.Define(stage, Sdf.Path("/World/KeyLight"))
+        _key.CreateIntensityAttr(2500.0)
+        _key.CreateAngleAttr(1.5)
+        _kx = UsdGeom.Xformable(_key.GetPrim())
+        _kx.ClearXformOpOrder()
+        # aim down-and-toward the grasp from +X+Z (matches the 3/4 camera side)
+        _kx.AddRotateXYZOp().Set(Gf.Vec3f(-50.0, 0.0, 35.0))
 
     cube = None
     robot = None
@@ -756,6 +854,21 @@ def main():
             # below-pad underhang clears the ground -- and there is no support
             # surface for the gripper body to jam on (the side-grasp blocker).
             log("[TALL_PRISM] no pedestal -- prism rests on the ground")
+        elif PIN_PICK:
+            # THIN support pin ONLY (no pedestal/plate): a static kinematic square
+            # post rising from the ground up to the object bottom, thin enough for
+            # the gripper body/fingers to genuinely clear it. High friction so the
+            # object rests stably on it until the grasp lifts it off. Colored bright
+            # so it reads in video against the ground.
+            _pin_mat = None
+            FixedCuboid(
+                prim_path="/World/Pin",
+                position=np.array([PIN_XY[0] + _obs_dx, PIN_XY[1], PIN_CENTER_Z]),
+                scale=np.array([PIN_SZ, PIN_SZ, PIN_HEIGHT]),
+                color=np.array([0.55, 0.55, 0.60]),
+            )
+            log(f"[PIN_PICK] thin support pin {PIN_SZ*1000:.0f}x{PIN_SZ*1000:.0f}mm, "
+                f"height {PIN_HEIGHT*1000:.1f}mm (ground -> object bottom {PIN_OBJ_BOTTOM:.4f})")
         else:
             # pedestal (static collider)
             FixedCuboid(
@@ -776,6 +889,21 @@ def main():
             log(f"[TALL_PRISM] prism {PRISM_W*1000:.0f}x{PRISM_D*1000:.0f}x{PRISM_H*1000:.0f}mm "
                 f"mass={args_cli.prism_mass*1000:.0f}g on ground; top_z={PRISM_H:.4f} "
                 f"pad_plane_z={PRISM_GRIP_Z:.4f} (grip {(PRISM_H-PRISM_GRIP_Z)*1000:+.1f}mm relative to top)")
+        elif PIN_PICK:
+            # support-free object hanging down from just below the gripper body,
+            # resting on the thin pin. Gripped on its two +/-X faces by the jaws.
+            cube = DynamicCuboid(
+                prim_path=CUBE_PATH,
+                position=np.array([PIN_XY[0] + _obs_dx, PIN_XY[1], PIN_OBJ_CENTER_Z]),
+                scale=np.array([PIN_OBJ_W, PIN_OBJ_D, PIN_OBJ_H]),
+                color=np.array([0.85, 0.15, 0.12]),
+                mass=args_cli.pin_obj_mass,
+            )
+            log(f"[PIN_PICK] object {PIN_OBJ_W*1000:.0f}x{PIN_OBJ_D*1000:.0f}x{PIN_OBJ_H*1000:.0f}mm "
+                f"mass={args_cli.pin_obj_mass*1000:.0f}g on thin pin; top_z={PIN_OBJ_TOP:.4f} "
+                f"bottom_z={PIN_OBJ_BOTTOM:.4f} center_z={PIN_OBJ_CENTER_Z:.4f}; "
+                f"body_z_min~0.0548 -> top clearance {(0.0548-PIN_OBJ_TOP)*1000:+.1f}mm; "
+                f"pad_plane 0.05621 -> top {(PIN_OBJ_TOP-0.05621)*1000:+.1f}mm relative to pad centroid")
         else:
             # cube (dynamic, 15mm)
             cube = DynamicCuboid(
@@ -786,7 +914,7 @@ def main():
                 mass=0.01,
             )
         if args_cli.empty_scene:
-            log(f"[EMPTY_SCENE] pedestal+cube shifted +{_obs_dx}m in X (out of reach) to test for external collision")
+            log(f"[EMPTY_SCENE] scene objects shifted +{_obs_dx}m in X (out of reach) to test for external collision")
         _bc("scene_built")
 
     if args_cli.stage in ("robot_noxform", "full"):
@@ -1149,6 +1277,22 @@ def main():
         CAM_A_EYE = [0.12, 0.60, 0.26]    # +X +Y elevated 3/4, ~0.35m, tight on grip
         CAM_B_EYE = [-0.48, 0.74, 0.42]   # -X +Y elevated 3/4, ~0.7m, catches the lift
         CAM_TGT = [-0.122, 0.372, 0.055]  # aim at the grip point (pad plane)
+    elif PIN_PICK:
+        # Support-free pin pick: object at (-0.1224,0.3724), gripped ~0.045 (top
+        # 0.051), lifted up-and-back off the thin pin. Framing lessons applied
+        # (isaac-sim-video-capture skill + side-grasp RUN-1 + tall-prism note):
+        #   - ELEVATED 3/4 aimed DEAD AT THE GRIP POINT (not the mid-lift arc, which
+        #     framed empty space in the tall-prism run) reads the dark gripper +
+        #     object legibly; near-level / look-up variants lose it to the ground.
+        #   - Both eyes on the +Y side (BEYOND the object) so the arm body -- which
+        #     sits between the base (origin) and the object -- does not occlude.
+        #   - CLOSEUP pulled to ~0.55m so the ~15-20mm object is well-sized (bigger
+        #     than the 0.8m side-grasp shot), still elevated/aimed-down so the eye
+        #     stays well outside gripper geometry (no black frames). WIDE ~0.9m to
+        #     catch the whole approach->close->liftoff arc for context.
+        CAM_A_EYE = [0.30, 0.62, 0.34]    # +X +Y elevated 3/4, ~0.55m closeup on the grip
+        CAM_B_EYE = [-0.55, 0.90, 0.58]   # -X +Y elevated 3/4, ~0.90m wide context
+        CAM_TGT = [-0.1224, 0.3724, 0.075]  # aim at the grip point (a touch up to keep early lift in frame)
     else:
         CAM_A_EYE = [0.9, 1.0, 0.85]      # +X +Y high 3/4
         CAM_B_EYE = [-1.1, 1.0, 0.85]     # -X +Y high 3/4
@@ -1706,6 +1850,30 @@ def main():
         # combined gripper-assembly lowest point vs the cube-mid-height support plane
         log(f"[AABB] SUPPORT-CLEARANCE: cube center z=0.09, cube bottom (support top)=0.0825. "
             f"Any gripper AABB z_min BELOW 0.0825 while over the support XY footprint => collision.")
+        if PIN_PICK:
+            # pin-pick clearance verdicts: (1) does the descending gripper BODY
+            # clear the object TOP? (2) is the thin pin (center, thin) clear of the
+            # fingers/body? Read the body z_min from the just-logged AABBs.
+            _bb2 = UsdGeom.BBoxCache(Usd.TimeCode.Default(),
+                                     [UsdGeom.Tokens.default_, UsdGeom.Tokens.render, UsdGeom.Tokens.proxy])
+            _body = find_prim_by_name(stage, AR4_ROOT, "gripper_base_link")
+            _body_zmin = None
+            if _body is not None and _body.IsValid():
+                try:
+                    _body_zmin = _bb2.ComputeWorldBound(_body).ComputeAlignedRange().GetMin()[2]
+                except Exception:
+                    _body_zmin = None
+            log(f"[AABB PIN] object_top={PIN_OBJ_TOP:.4f} object_bottom={PIN_OBJ_BOTTOM:.4f} "
+                f"pin: center=({PIN_XY[0]:.4f},{PIN_XY[1]:.4f}) half_width={PIN_SZ/2*1000:.1f}mm "
+                f"top_z={PIN_HEIGHT:.4f}")
+            if _body_zmin is not None:
+                _clr = (_body_zmin - PIN_OBJ_TOP) * 1000.0
+                log(f"[AABB PIN] BODY-vs-OBJECT-TOP clearance = body_z_min({_body_zmin:.4f}) - "
+                    f"object_top({PIN_OBJ_TOP:.4f}) = {_clr:+.1f}mm "
+                    f"({'CLEARS (body descends past object top)' if _clr > 0.5 else 'COLLISION RISK -- lower object_top'})")
+            log(f"[AABB PIN] the pin rises only at the CENTER (x={PIN_XY[0]:.4f},y={PIN_XY[1]:.4f}) to "
+                f"z={PIN_HEIGHT:.4f}; fingertips reach ~z=0.038 at X-extremes -> the thin central pin is "
+                f"below/between them. Confirm jaw X-spans above straddle the object, not the pin.")
         log("\n[AABB] DUMP COMPLETE (VERDICT: AABB_DUMP_DONE)")
         _R.close(); simulation_app.close(); return
 
@@ -1888,7 +2056,7 @@ def main():
     # For the tall prism, target the fixed reachable pad plane (grip NEAR THE TOP),
     # NOT the object center (which is ~H/2 down and would drive the pad into the
     # ground). For the cube, target its center as before.
-    _servo_target_z = PRISM_GRIP_Z if TALL_PRISM else cube_rest_z
+    _servo_target_z = PIN_GRIP_Z if PIN_PICK else (PRISM_GRIP_Z if TALL_PRISM else cube_rest_z)
     target_xyz = np.array([cube_p0[0], cube_p0[1], _servo_target_z])  # grip point, world
     q_arm_cur = np.array(GRASP_Q, dtype=float)
 
@@ -2142,14 +2310,15 @@ def main():
     # near-vertical mode's back-off-to-PREGRASP, which retreats horizontally).
     # LIFT to SIDE_LIFT_Q (+50mm straight up, FK/IK-derived, j5 margin 7.9deg),
     # HOLD there, then RETREAT back down/out via PREGRASP.
-    _lift_target = SIDE_LIFT_Q if SIDE_GRASP else PREGRASP_Q
+    _lift_target = SIDE_LIFT_Q if SIDE_GRASP else (PIN_LIFT_Q if PIN_PICK else PREGRASP_Q)
     cz["P4_LIFT"] = traj(grasp_q_use, _lift_target, grip_hold, 60, "LIFT")
     report("after LIFT")
     jaw_geometry("P4_after_LIFT")
     contact_report("P4_after_LIFT")
     drive(_lift_target, grip_hold, 40, render=True)
     cz["P5_HOLD"] = cube_pose()[0][2]
-    cz["P6_RETREAT"] = traj(_lift_target, PREGRASP_Q if SIDE_GRASP else HOME_Q, grip_hold, 100, "RETREAT")
+    _retreat_target = PREGRASP_Q if (SIDE_GRASP or PIN_PICK) else HOME_Q
+    cz["P6_RETREAT"] = traj(_lift_target, _retreat_target, grip_hold, 100, "RETREAT")
     report("after RETREAT")
     jaw_geometry("P6_after_RETREAT")
     contact_report("P6_after_RETREAT")

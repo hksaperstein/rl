@@ -275,6 +275,22 @@ parser.add_argument("--grip_kd", type=float, default=200.0,
 parser.add_argument("--close_steps", type=int, default=40,
                     help="Physics steps per jaw-close sub-phase (there are ~3). Raise so the jaws finish "
                          "closing onto the object rather than stalling mid-travel.")
+parser.add_argument("--float_release", action="store_true",
+                    help="SUPPORT-FREE via KINEMATIC FLOAT (2026-07-31, ar4-support-free-pin-pick task). "
+                         "The genuinely support-free presentation for a SIDE grasp: spawn the object with NO "
+                         "support at all and hold it KINEMATIC (frozen in place, gravity ignored) during the "
+                         "approach, then RELEASE it to dynamic at the grasp so the pure-friction jaw hold "
+                         "must carry it through the lift. This is the brief's explicitly-permitted "
+                         "'spawn the object fixed/floating at the grasp height, release-to-dynamic at contact' "
+                         "option -- REQUIRED for the side grasp because ANY ground-rising support (pedestal "
+                         "OR thin pin) rams the arm mid-swing in the horizontal approach corridor (kb "
+                         "2026-07-31 side RUN-1 + the thin-pin retry both landed the pad ~34-40mm low). With "
+                         "no support the side pose is reachable to <0.02deg (empty_scene-proven), the jaws "
+                         "close on the cube's Y faces at MID-HEIGHT (clean grip, body lateral on -X), and the "
+                         "lift is a genuine friction hold of a dynamic object -- NO joint/weld. The object is "
+                         "released to dynamic right AFTER the jaws close+squeeze on it (still kinematic during "
+                         "closure so an asymmetric close can't shove a free-floating object), so friction is "
+                         "already carrying it when gravity turns on.")
 parser.add_argument("--no_servo", action="store_true",
                     help="Skip the empirical-Jacobian centering servo and grasp DIRECTLY at GRASP_Q "
                          "(2026-07-31): the arm tracks GRASP_Q to the object XY to <0.02deg in free space "
@@ -837,7 +853,15 @@ def main():
     # EXTERNAL scene collision (cube/pedestal) vs a self-collision/arm issue.
     _obs_dx = 5.0 if args_cli.empty_scene else 0.0
     if args_cli.stage in ("scene", "robot_noxform", "full"):
-        if SIDE_GRASP and PIN_PICK:
+        if SIDE_GRASP and args_cli.float_release:
+            # SUPPORT-FREE via KINEMATIC FLOAT: spawn NO support at all. The cube is
+            # held kinematic (frozen, gravity off) during the approach and released
+            # to dynamic at the grasp. REQUIRED for the side grasp because ANY
+            # ground-rising support rams the arm mid-swing (kb 2026-07-31 side RUN-1 +
+            # the thin-pin retry: pad landed 34-40mm low). See --float_release.
+            log("[FLOAT] support-free KINEMATIC FLOAT: no support spawned; cube frozen "
+                "during approach, released to dynamic at the grasp")
+        elif SIDE_GRASP and PIN_PICK:
             # SUPPORT-FREE side grasp (2026-07-31): a THIN vertical pin under the
             # cube CENTER, rising from the ground to the cube bottom (0.0825). The
             # side grasp grips the cube's +Y/-Y vertical faces at MID-HEIGHT (cube
@@ -1119,10 +1143,37 @@ def main():
     log(f"RESET_OK stage={args_cli.stage}")
     timeline.play()
     _bc("after_play")
+
+    # --- KINEMATIC-FLOAT freeze (--float_release) --------------------------
+    # Support-free presentation: the cube has NO support, so hold it FROZEN in
+    # place by re-pinning its world pose + zeroing its velocity every physics
+    # step (a purely API-based kinematic, reliable under the GPU pipeline where a
+    # runtime USD kinematicEnabled toggle may not propagate). Released to genuine
+    # dynamics at the grasp so the friction hold must carry it. Frozen from the
+    # very first settle step so it never falls.
+    _float_active = args_cli.float_release and (cube is not None) and (args_cli.stage == "full")
+    freeze = {"active": _float_active,
+              "pos": np.array([CUBE_XY[0], CUBE_XY[1], CUBE_REST_Z], dtype=float),
+              "quat": np.array([1.0, 0.0, 0.0, 0.0], dtype=float)}
+
+    def _pin_cube_now():
+        if not (freeze["active"] and cube is not None):
+            return
+        try:
+            cube.set_world_pose(freeze["pos"], freeze["quat"])
+            cube.set_linear_velocity(np.zeros(3, dtype=float))
+            cube.set_angular_velocity(np.zeros(3, dtype=float))
+        except Exception as _e:
+            log(f"[FLOAT] pin failed: {_e}")
+    if _float_active:
+        log(f"[FLOAT] freezing cube at {freeze['pos'].tolist()} (support-free; released at grasp)")
+
     # let things settle a few steps (heartbeat each step so a slow-but-working
     # 4-vCPU physics loop is not mistaken for a hang by the watchdog)
     for _s in range(10):
+        _pin_cube_now()
         world.step(render=False)
+        _pin_cube_now()
         _bc(f"settle_step_{_s}")
     _bc("settled")
     log(f"STEP_OK stage={args_cli.stage}")
@@ -1513,6 +1564,7 @@ def main():
                 else:
                     controller.apply_action(ArticulationAction(joint_positions=tgt))
             world.step(render=do_render)
+            _pin_cube_now()  # keep the support-free cube frozen until released at grasp
             step_ctr["n"] += 1
             if step_ctr["n"] % 10 == 0:
                 _bc(f"drive_step_{step_ctr['n']}")  # heartbeat for the watchdog
@@ -2314,6 +2366,17 @@ def main():
         # drive() so the closing squeeze keeps being re-applied every step.
         grasp_state["engaged"] = True
         grasp_state["mechanism"] = f"PureFriction(squeeze={args_cli.squeeze_mode},{args_cli.squeeze_force}N)"
+        # KINEMATIC-FLOAT RELEASE: the jaws are now closed+squeezing on the (still-
+        # frozen) support-free cube -- RELEASE it to genuine dynamics here so gravity
+        # turns on while friction is ALREADY carrying it (a free-floating cube would
+        # otherwise get shoved by an asymmetric close). From here the hold is a pure-
+        # friction hold of a fully dynamic object -- NO joint/weld, NO support.
+        if freeze["active"]:
+            freeze["active"] = False
+            log("[FLOAT] RELEASED cube to dynamics -- now held ONLY by jaw friction (support-free, no weld)")
+            drive(grasp_q_use, GRIP_CLOSED, 40, render=True)  # let friction catch the now-heavy cube
+            _rel_z = cube_pose()[0][2]
+            log(f"[FLOAT] cube_z just after release+settle = {_rel_z:.4f}m (rest was {cube_rest_z:.4f})")
         drive(grasp_q_use, GRIP_CLOSED, 30, render=True)
         log("[friction] PURE contact-friction grasp -- jaws squeezing cube faces, NO joint/weld")
 

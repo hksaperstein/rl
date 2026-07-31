@@ -234,6 +234,13 @@ parser.add_argument("--grip_kd", type=float, default=200.0,
 parser.add_argument("--close_steps", type=int, default=40,
                     help="Physics steps per jaw-close sub-phase (there are ~3). Raise so the jaws finish "
                          "closing onto the object rather than stalling mid-travel.")
+parser.add_argument("--no_servo", action="store_true",
+                    help="Skip the empirical-Jacobian centering servo and grasp DIRECTLY at GRASP_Q "
+                         "(2026-07-31): the arm tracks GRASP_Q to the object XY to <0.02deg in free space "
+                         "(the 'droop' was a proven phantom), so the servo is unnecessary -- and its "
+                         "6-joint Jacobian PROBE (+/-0.9deg jostles) BUMPS a tall ground-resting object with "
+                         "the open jaws' tight clearance, sliding it ~18mm off-center so only one jaw grips "
+                         "(tall-prism retry root cause). Descend PREGRASP->GRASP and close, no probing.")
 parser.add_argument("--jaw_close_test", action="store_true",
                     help="DIAGNOSTIC (2026-07-31): at HOME (gripper in free space, no object contact), "
                          "command the jaws CLOSED with the real squeeze and log BOTH jaw joint positions "
@@ -1878,151 +1885,169 @@ def main():
     _servo_target_z = PRISM_GRIP_Z if TALL_PRISM else cube_rest_z
     target_xyz = np.array([cube_p0[0], cube_p0[1], _servo_target_z])  # grip point, world
     q_arm_cur = np.array(GRASP_Q, dtype=float)
-    drive(q_arm_cur.tolist(), GRIP_OPEN, 45, render=(not args_cli.no_video))
-    # ---- build a TRUE-VERTICAL gripper orientation target ----------------
-    # Run 8 proved: HOLDING orientation makes the descent vertical (Z reached
-    # 0.0501, below the cube top) -- but holding the INITIAL grasp orientation
-    # (which is itself tilted) pushed the gripper 33mm past the cube in Y. The
-    # correct hold target is a genuinely vertical gripper: jaw-separation axis
-    # along world X, fingertips pointing straight down (-Z). Derive it live from
-    # the actual jaw geometry: the sep-axis and approach-axis are FIXED in
-    # link_6's frame, so find the link_6 orientation that maps them onto world
-    # (X, -Z). Then descending moves purely in Z, not dragging X/Y.
-    _pj1, _ = link_world_pose(stage, GRIP1_PATH)
-    _pj2, _ = link_world_pose(stage, GRIP2_PATH)
-    _pl6, _ql6 = link_world_pose(stage, LINK6_PATH)
-    _ftm = fingertip_mid_xyz()
-    _sep_w = (_pj2 - _pj1); _sep_w = _sep_w / (np.linalg.norm(_sep_w) + 1e-12)
-    _app_w = (_ftm - _pl6); _app_w = _app_w / (np.linalg.norm(_app_w) + 1e-12)
-    _qi = quat_inv(_ql6)
-    _sep_l6 = quat_apply(_qi, _sep_w)          # sep axis in link_6 frame (constant)
-    _app_l6 = quat_apply(_qi, _app_w)          # approach axis in link_6 frame (constant)
-    # orthonormal link_6-frame basis from (sep, approach)
-    _e1 = _sep_l6 / (np.linalg.norm(_sep_l6) + 1e-12)
-    _e2 = _app_l6 - np.dot(_app_l6, _e1) * _e1
-    _e2 = _e2 / (np.linalg.norm(_e2) + 1e-12)
-    _e3 = np.cross(_e1, _e2)
-    _Bl6 = np.column_stack([_e1, _e2, _e3])
-    if SIDE_GRASP:
-        # SIDE grasp desired WORLD basis: sep -> world Y (grip the cube's +Y/-Y
-        # vertical faces), approach -> world +X (palm on the -X side). Match the
-        # live sep-axis SIGN so the target is the nearest axis-aligned horizontal
-        # frame to the current (already-horizontal) GRASP_Q, not a 180deg flip.
-        _sep_sign = 1.0 if _sep_w[1] >= 0 else -1.0
-        _sep_tgt = np.array([0.0, _sep_sign, 0.0])
-        _app_tgt = np.array([1.0, 0.0, 0.0])
-        _third = np.cross(_sep_tgt, _app_tgt)
-        _D = np.column_stack([_sep_tgt, _app_tgt, _third])
-        _orient_desc = "horizontal (sep->Y, approach->+X)"
+
+    # --no_servo: skip the Jacobian-probe centering servo entirely and grasp at
+    # GRASP_Q directly (the arm already lands the pad dead-on the object XY; the
+    # probe otherwise BUMPS the object off-center). Settle briefly, then commit.
+    if args_cli.no_servo:
+        drive(q_arm_cur.tolist(), GRIP_OPEN, 60, render=(not args_cli.no_video))
+        m_ns = fingertip_mid_xyz()
+        log(f"[SERVO] --no_servo: grasping directly at GRASP_Q; pad_mid={['%.4f'%v for v in m_ns]} "
+            f"target={['%.4f'%v for v in target_xyz]} "
+            f"pos_err_mm={['%.2f'%((t-f)*1000) for t, f in zip(target_xyz, m_ns)]}")
+        grasp_q_use = list(q_arm_cur)
+        report("at GRASP (open, no_servo)")
+        jaw_open_sep, jaw_open_off = jaw_geometry("P2_GRASP(open, no_servo)")
+        _do_servo = False
     else:
-        # desired WORLD basis: sep -> +X, approach -> -Z, third = X x (-Z) = +Y
-        _D = np.column_stack([np.array([1.0, 0.0, 0.0]),
-                              np.array([0.0, 0.0, -1.0]),
-                              np.array([0.0, 1.0, 0.0])])
-        _orient_desc = "vertical (sep->X, approach->-Z)"
-    _Rtgt = _D @ _Bl6.T
-    q_orient_target = mat_to_quat_wxyz(_Rtgt)
-    _init_oerr = float(np.linalg.norm(rot_err_vec(q_orient_target, _ql6)))
-    log(f"[SERVO] orientation target built ({_orient_desc}); initial gripper is {_init_oerr:.3f}rad "
-        f"({math.degrees(_init_oerr):.1f}deg) from target")
-    target_m6 = np.concatenate([target_xyz, np.zeros(3)])
+        _do_servo = True
 
-    def measure6():
-        ft = fingertip_mid_xyz()
-        ov = L * rot_err_vec(gripper_quat(), q_orient_target)  # 0 when aligned
-        return np.concatenate([ft, ov])
+    if _do_servo:
+        drive(q_arm_cur.tolist(), GRIP_OPEN, 45, render=(not args_cli.no_video))
+        # ---- build a TRUE-VERTICAL gripper orientation target ----------------
+        # Run 8 proved: HOLDING orientation makes the descent vertical (Z reached
+        # 0.0501, below the cube top) -- but holding the INITIAL grasp orientation
+        # (which is itself tilted) pushed the gripper 33mm past the cube in Y. The
+        # correct hold target is a genuinely vertical gripper: jaw-separation axis
+        # along world X, fingertips pointing straight down (-Z). Derive it live from
+        # the actual jaw geometry: the sep-axis and approach-axis are FIXED in
+        # link_6's frame, so find the link_6 orientation that maps them onto world
+        # (X, -Z). Then descending moves purely in Z, not dragging X/Y.
+        _pj1, _ = link_world_pose(stage, GRIP1_PATH)
+        _pj2, _ = link_world_pose(stage, GRIP2_PATH)
+        _pl6, _ql6 = link_world_pose(stage, LINK6_PATH)
+        _ftm = fingertip_mid_xyz()
+        _sep_w = (_pj2 - _pj1); _sep_w = _sep_w / (np.linalg.norm(_sep_w) + 1e-12)
+        _app_w = (_ftm - _pl6); _app_w = _app_w / (np.linalg.norm(_app_w) + 1e-12)
+        _qi = quat_inv(_ql6)
+        _sep_l6 = quat_apply(_qi, _sep_w)          # sep axis in link_6 frame (constant)
+        _app_l6 = quat_apply(_qi, _app_w)          # approach axis in link_6 frame (constant)
+        # orthonormal link_6-frame basis from (sep, approach)
+        _e1 = _sep_l6 / (np.linalg.norm(_sep_l6) + 1e-12)
+        _e2 = _app_l6 - np.dot(_app_l6, _e1) * _e1
+        _e2 = _e2 / (np.linalg.norm(_e2) + 1e-12)
+        _e3 = np.cross(_e1, _e2)
+        _Bl6 = np.column_stack([_e1, _e2, _e3])
+        if SIDE_GRASP:
+            # SIDE grasp desired WORLD basis: sep -> world Y (grip the cube's +Y/-Y
+            # vertical faces), approach -> world +X (palm on the -X side). Match the
+            # live sep-axis SIGN so the target is the nearest axis-aligned horizontal
+            # frame to the current (already-horizontal) GRASP_Q, not a 180deg flip.
+            _sep_sign = 1.0 if _sep_w[1] >= 0 else -1.0
+            _sep_tgt = np.array([0.0, _sep_sign, 0.0])
+            _app_tgt = np.array([1.0, 0.0, 0.0])
+            _third = np.cross(_sep_tgt, _app_tgt)
+            _D = np.column_stack([_sep_tgt, _app_tgt, _third])
+            _orient_desc = "horizontal (sep->Y, approach->+X)"
+        else:
+            # desired WORLD basis: sep -> +X, approach -> -Z, third = X x (-Z) = +Y
+            _D = np.column_stack([np.array([1.0, 0.0, 0.0]),
+                                  np.array([0.0, 0.0, -1.0]),
+                                  np.array([0.0, 1.0, 0.0])])
+            _orient_desc = "vertical (sep->X, approach->-Z)"
+        _Rtgt = _D @ _Bl6.T
+        q_orient_target = mat_to_quat_wxyz(_Rtgt)
+        _init_oerr = float(np.linalg.norm(rot_err_vec(q_orient_target, _ql6)))
+        log(f"[SERVO] orientation target built ({_orient_desc}); initial gripper is {_init_oerr:.3f}rad "
+            f"({math.degrees(_init_oerr):.1f}deg) from target")
+        target_m6 = np.concatenate([target_xyz, np.zeros(3)])
 
-    m0 = measure6()
-    log(f"[SERVO] start fingertip={['%.4f'%v for v in m0[:3]]} cube_center={['%.4f'%v for v in target_xyz]} "
-        f"pos_err_mm={['%.2f'%((t-f)*1000) for t, f in zip(target_xyz, m0[:3])]}")
-    # --- estimate the 6x6 empirical pose Jacobian ONCE --------------------
-    Jac = np.zeros((6, 6))
-    dq_probe = math.radians(0.9)  # small enough not to reach the ~18mm-away cube
-    for j in range(6):
-        qp = q_arm_cur.copy(); qp[j] += dq_probe
-        drive(qp.tolist(), GRIP_OPEN, 24, render=False)
-        Jac[:, j] = (measure6() - m0) / dq_probe
-        drive(q_arm_cur.tolist(), GRIP_OPEN, 16, render=False)  # return to base pose
-    log(f"[SERVO] empirical 6x6 pose Jacobian estimated (rows: pos_xyz m/rad, orient*L m/rad)")
-    # --- iterate DLS corrections; refine J ONLINE via Broyden -------------
-    # Position acceptance box: X self-centers on close (~6mm), Y needs pad-face
-    # overlap (~6mm), Z must put the fingertip below the cube top (~4mm).
-    tol = np.array([6.0, 6.0, 4.0]) / 1000.0
+        def measure6():
+            ft = fingertip_mid_xyz()
+            ov = L * rot_err_vec(gripper_quat(), q_orient_target)  # 0 when aligned
+            return np.concatenate([ft, ov])
 
-    def reprobe_jacobian(qc):
-        """Re-measure the full 6x6 pose Jacobian at pose qc (keeps it fresh so
-        Broyden drift / a wandering pose can't corrupt it into instability)."""
-        base = measure6_at(qc)
-        Jn = np.zeros((6, 6))
-        for jj in range(6):
-            qpj = np.array(qc, dtype=float); qpj[jj] += dq_probe
-            drive(qpj.tolist(), GRIP_OPEN, 22, render=False)
-            Jn[:, jj] = (measure6() - base) / dq_probe
-            drive(list(qc), GRIP_OPEN, 14, render=False)
-        return Jn
+        m0 = measure6()
+        log(f"[SERVO] start fingertip={['%.4f'%v for v in m0[:3]]} cube_center={['%.4f'%v for v in target_xyz]} "
+            f"pos_err_mm={['%.2f'%((t-f)*1000) for t, f in zip(target_xyz, m0[:3])]}")
+        # --- estimate the 6x6 empirical pose Jacobian ONCE --------------------
+        Jac = np.zeros((6, 6))
+        dq_probe = math.radians(0.9)  # small enough not to reach the ~18mm-away cube
+        for j in range(6):
+            qp = q_arm_cur.copy(); qp[j] += dq_probe
+            drive(qp.tolist(), GRIP_OPEN, 24, render=False)
+            Jac[:, j] = (measure6() - m0) / dq_probe
+            drive(q_arm_cur.tolist(), GRIP_OPEN, 16, render=False)  # return to base pose
+        log(f"[SERVO] empirical 6x6 pose Jacobian estimated (rows: pos_xyz m/rad, orient*L m/rad)")
+        # --- iterate DLS corrections; refine J ONLINE via Broyden -------------
+        # Position acceptance box: X self-centers on close (~6mm), Y needs pad-face
+        # overlap (~6mm), Z must put the fingertip below the cube top (~4mm).
+        tol = np.array([6.0, 6.0, 4.0]) / 1000.0
 
-    def measure6_at(qc):
-        drive(list(qc), GRIP_OPEN, 20, render=False)
-        return measure6()
+        def reprobe_jacobian(qc):
+            """Re-measure the full 6x6 pose Jacobian at pose qc (keeps it fresh so
+            Broyden drift / a wandering pose can't corrupt it into instability)."""
+            base = measure6_at(qc)
+            Jn = np.zeros((6, 6))
+            for jj in range(6):
+                qpj = np.array(qc, dtype=float); qpj[jj] += dq_probe
+                drive(qpj.tolist(), GRIP_OPEN, 22, render=False)
+                Jn[:, jj] = (measure6() - base) / dq_probe
+                drive(list(qc), GRIP_OPEN, 14, render=False)
+            return Jn
 
-    best_q = list(q_arm_cur)
-    best_metric = 1.0e9
-    prev_m6 = None
-    prev_dq = None
-    # STABILITY (run 7 diverged: lam 0.0006 + noisy 11000 gains -> huge steps,
-    # orientation drifted 25deg). Strong DLS damping, small bounded steps,
-    # moderate quiet gains, and a periodic Jacobian RE-PROBE so a bad Broyden
-    # update can't compound.
-    # GENTLER/BOUNDED (2026-07-30 run-1 fix): run 1's servo (maxstep 1.8deg, 52
-    # iters) WANDERED 12-29mm off and bumped the cube when it couldn't descend.
-    # With the droop-pre-compensated GRASP_Q above the pad now starts already in
-    # the box, so the servo should converge on iteration 0; keep it small-step
-    # and short so that if the pad lands slightly off it can only fine-trim, not
-    # wander far enough to knock the cube.
-    lam = 0.004
-    maxstep = math.radians(0.8)
-    for _it in range(26):
-        drive(q_arm_cur.tolist(), GRIP_OPEN, 32, render=(not args_cli.no_video))
-        m6 = measure6()
-        # Broyden good-update from the LAST actually-observed move.
-        if prev_m6 is not None and prev_dq is not None:
-            dy = m6 - prev_m6
-            denom = float(prev_dq @ prev_dq)
-            if denom > 1e-12:
-                Jac = Jac + np.outer((dy - Jac @ prev_dq), prev_dq) / denom
-        e6 = target_m6 - m6                       # [pos_err(m); -orient*L]
-        perr = e6[:3]                             # position error (m)
-        oerr = 0.0 if L <= 0.0 else float(np.linalg.norm(e6[3:]) / L)  # orient err (rad)
-        pnorm = np.abs(perr) / tol                # per-axis pos error / tolerance
-        ninf = float(np.max(pnorm))               # <=1 => position graspable
-        hxy_mm = float(np.linalg.norm(perr[:2]) * 1000.0)
-        metric = ninf + 0.5 * oerr                # prioritize pos box, penalize tilt
-        log(f"[SERVO it{_it}] pad_mid={['%.4f'%v for v in m6[:3]]} "
-            f"pos_err_mm=[{perr[0]*1000:+.2f},{perr[1]*1000:+.2f},{perr[2]*1000:+.2f}] "
-            f"pos_normLinf={ninf:.2f} horiz={hxy_mm:.2f}mm orient_err_rad={oerr:.3f}")
-        if metric < best_metric:
-            best_metric = metric; best_q = list(q_arm_cur)
-        if ninf <= 1.0 and oerr <= 0.10:
-            log(f"[SERVO] converged: position within box (X<{tol[0]*1000:.0f} Y<{tol[1]*1000:.0f} "
-                f"Z<{tol[2]*1000:.0f}mm), orientation held ({oerr:.3f}rad) -- jaws straddle the cube")
-            best_q = list(q_arm_cur); break
-        # periodic re-probe keeps J trustworthy (Broyden alone drifted in run 7)
-        if _it > 0 and _it % 16 == 0:
-            log(f"[SERVO] re-probing Jacobian at it{_it}")
-            Jac = reprobe_jacobian(q_arm_cur)
-            prev_m6 = None; prev_dq = None
-            continue
-        dq = Jac.T @ np.linalg.solve(Jac @ Jac.T + lam * np.eye(6), e6)
-        _m = float(np.max(np.abs(dq)))
-        if _m > maxstep:
-            dq = dq * (maxstep / _m)
-        prev_m6 = m6
-        prev_dq = dq.copy()
-        q_arm_cur = q_arm_cur + dq
-    grasp_q_use = list(best_q)         # commit the best pose reached
-    log(f"[SERVO] committed pose: best metric {best_metric:.2f} (pos_normLinf<=1 & orient held == graspable)")
-    report("at GRASP (open, after servo)")
-    jaw_open_sep, jaw_open_off = jaw_geometry("P2_GRASP(open, after servo)")
+        def measure6_at(qc):
+            drive(list(qc), GRIP_OPEN, 20, render=False)
+            return measure6()
+
+        best_q = list(q_arm_cur)
+        best_metric = 1.0e9
+        prev_m6 = None
+        prev_dq = None
+        # STABILITY (run 7 diverged: lam 0.0006 + noisy 11000 gains -> huge steps,
+        # orientation drifted 25deg). Strong DLS damping, small bounded steps,
+        # moderate quiet gains, and a periodic Jacobian RE-PROBE so a bad Broyden
+        # update can't compound.
+        # GENTLER/BOUNDED (2026-07-30 run-1 fix): run 1's servo (maxstep 1.8deg, 52
+        # iters) WANDERED 12-29mm off and bumped the cube when it couldn't descend.
+        # With the droop-pre-compensated GRASP_Q above the pad now starts already in
+        # the box, so the servo should converge on iteration 0; keep it small-step
+        # and short so that if the pad lands slightly off it can only fine-trim, not
+        # wander far enough to knock the cube.
+        lam = 0.004
+        maxstep = math.radians(0.8)
+        for _it in range(26):
+            drive(q_arm_cur.tolist(), GRIP_OPEN, 32, render=(not args_cli.no_video))
+            m6 = measure6()
+            # Broyden good-update from the LAST actually-observed move.
+            if prev_m6 is not None and prev_dq is not None:
+                dy = m6 - prev_m6
+                denom = float(prev_dq @ prev_dq)
+                if denom > 1e-12:
+                    Jac = Jac + np.outer((dy - Jac @ prev_dq), prev_dq) / denom
+            e6 = target_m6 - m6                       # [pos_err(m); -orient*L]
+            perr = e6[:3]                             # position error (m)
+            oerr = 0.0 if L <= 0.0 else float(np.linalg.norm(e6[3:]) / L)  # orient err (rad)
+            pnorm = np.abs(perr) / tol                # per-axis pos error / tolerance
+            ninf = float(np.max(pnorm))               # <=1 => position graspable
+            hxy_mm = float(np.linalg.norm(perr[:2]) * 1000.0)
+            metric = ninf + 0.5 * oerr                # prioritize pos box, penalize tilt
+            log(f"[SERVO it{_it}] pad_mid={['%.4f'%v for v in m6[:3]]} "
+                f"pos_err_mm=[{perr[0]*1000:+.2f},{perr[1]*1000:+.2f},{perr[2]*1000:+.2f}] "
+                f"pos_normLinf={ninf:.2f} horiz={hxy_mm:.2f}mm orient_err_rad={oerr:.3f}")
+            if metric < best_metric:
+                best_metric = metric; best_q = list(q_arm_cur)
+            if ninf <= 1.0 and oerr <= 0.10:
+                log(f"[SERVO] converged: position within box (X<{tol[0]*1000:.0f} Y<{tol[1]*1000:.0f} "
+                    f"Z<{tol[2]*1000:.0f}mm), orientation held ({oerr:.3f}rad) -- jaws straddle the cube")
+                best_q = list(q_arm_cur); break
+            # periodic re-probe keeps J trustworthy (Broyden alone drifted in run 7)
+            if _it > 0 and _it % 16 == 0:
+                log(f"[SERVO] re-probing Jacobian at it{_it}")
+                Jac = reprobe_jacobian(q_arm_cur)
+                prev_m6 = None; prev_dq = None
+                continue
+            dq = Jac.T @ np.linalg.solve(Jac @ Jac.T + lam * np.eye(6), e6)
+            _m = float(np.max(np.abs(dq)))
+            if _m > maxstep:
+                dq = dq * (maxstep / _m)
+            prev_m6 = m6
+            prev_dq = dq.copy()
+            q_arm_cur = q_arm_cur + dq
+        grasp_q_use = list(best_q)         # commit the best pose reached
+        log(f"[SERVO] committed pose: best metric {best_metric:.2f} (pos_normLinf<=1 & orient held == graspable)")
+        report("at GRASP (open, after servo)")
+        jaw_open_sep, jaw_open_off = jaw_geometry("P2_GRASP(open, after servo)")
 
     # ---- CLOSE the jaws onto the cube with a REAL squeeze force ----------
     contact_report("P2_before_close(open)")

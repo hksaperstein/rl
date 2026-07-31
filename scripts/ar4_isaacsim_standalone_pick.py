@@ -837,7 +837,29 @@ def main():
     # EXTERNAL scene collision (cube/pedestal) vs a self-collision/arm issue.
     _obs_dx = 5.0 if args_cli.empty_scene else 0.0
     if args_cli.stage in ("scene", "robot_noxform", "full"):
-        if SIDE_GRASP:
+        if SIDE_GRASP and PIN_PICK:
+            # SUPPORT-FREE side grasp (2026-07-31): a THIN vertical pin under the
+            # cube CENTER, rising from the ground to the cube bottom (0.0825). The
+            # side grasp grips the cube's +Y/-Y vertical faces at MID-HEIGHT (cube
+            # center 0.09 == pad plane) while the body sits laterally on -X -- so
+            # UNLIKE top-down, the pad grip band is NOT tied to the body's vertical
+            # position, and the ONLY prior blocker was the SUPPORT under the cube
+            # intersecting the jaw z-band (kb 2026-07-31 side-grasp UPDATE). A thin
+            # central pin (much thinner than the 15mm cube) threads up through the
+            # cube's own footprint, between the two Y-face jaws, clearing them and
+            # the body (body +X edge -0.122 vs pin at -0.12). The cube rests on it
+            # until the grasp lifts it straight off.
+            _side_pin_h = CUBE_REST_Z - CUBE_SIZE / 2.0   # cube bottom == 0.0825
+            FixedCuboid(
+                prim_path="/World/Pin",
+                position=np.array([CUBE_XY[0] + _obs_dx, CUBE_XY[1], _side_pin_h / 2.0]),
+                scale=np.array([PIN_SZ, PIN_SZ, _side_pin_h]),
+                color=np.array([0.55, 0.55, 0.60]),
+            )
+            log(f"[SIDE_PIN] support-free side grasp: thin pin {PIN_SZ*1000:.0f}x{PIN_SZ*1000:.0f}mm "
+                f"height {_side_pin_h*1000:.1f}mm (ground -> cube bottom {_side_pin_h:.4f}) at cube center; "
+                f"grips cube Y-faces at mid-height 0.09, body lateral on -X")
+        elif SIDE_GRASP:
             # thin FLOATING support plate (top == cube rest surface 0.0825), NOT a
             # tall ground-rooted pedestal -- so it never rises as a wall in the
             # horizontal approach/swing corridor (RUN-1 proved the tall pedestal
@@ -889,7 +911,7 @@ def main():
             log(f"[TALL_PRISM] prism {PRISM_W*1000:.0f}x{PRISM_D*1000:.0f}x{PRISM_H*1000:.0f}mm "
                 f"mass={args_cli.prism_mass*1000:.0f}g on ground; top_z={PRISM_H:.4f} "
                 f"pad_plane_z={PRISM_GRIP_Z:.4f} (grip {(PRISM_H-PRISM_GRIP_Z)*1000:+.1f}mm relative to top)")
-        elif PIN_PICK:
+        elif PIN_PICK and not SIDE_GRASP:
             # support-free object hanging down from just below the gripper body,
             # resting on the thin pin. Gripped on its two +/-X faces by the jaws.
             cube = DynamicCuboid(
@@ -2056,7 +2078,7 @@ def main():
     # For the tall prism, target the fixed reachable pad plane (grip NEAR THE TOP),
     # NOT the object center (which is ~H/2 down and would drive the pad into the
     # ground). For the cube, target its center as before.
-    _servo_target_z = PIN_GRIP_Z if PIN_PICK else (PRISM_GRIP_Z if TALL_PRISM else cube_rest_z)
+    _servo_target_z = PIN_GRIP_Z if (PIN_PICK and not SIDE_GRASP) else (PRISM_GRIP_Z if TALL_PRISM else cube_rest_z)
     target_xyz = np.array([cube_p0[0], cube_p0[1], _servo_target_z])  # grip point, world
     q_arm_cur = np.array(GRASP_Q, dtype=float)
 

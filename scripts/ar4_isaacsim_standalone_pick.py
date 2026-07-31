@@ -950,6 +950,22 @@ def main():
                 f"bottom_z={PIN_OBJ_BOTTOM:.4f} center_z={PIN_OBJ_CENTER_Z:.4f}; "
                 f"body_z_min~0.0548 -> top clearance {(0.0548-PIN_OBJ_TOP)*1000:+.1f}mm; "
                 f"pad_plane 0.05621 -> top {(PIN_OBJ_TOP-0.05621)*1000:+.1f}mm relative to pad centroid")
+        elif SIDE_GRASP and args_cli.float_release:
+            # Support-free side FLOAT object: a BRIGHT-RED BOX. The GRIPPED dimension
+            # (Y, the two vertical faces the jaws squeeze) stays 15mm so the proven
+            # grip is unchanged, but it is made DEEPER (X) and TALLER (Z) than the
+            # ~15mm jaw pads so the red object PROTRUDES beyond the dark jaws and is
+            # clearly visible on video (a flush 15mm cube was fully hidden inside the
+            # jaws in the extracted frames). Center stays at grip mid-height 0.09.
+            cube = DynamicCuboid(
+                prim_path=CUBE_PATH,
+                position=np.array([CUBE_XY[0] + _obs_dx, CUBE_XY[1], CUBE_REST_Z]),
+                scale=np.array([0.024, CUBE_SIZE, 0.026]),   # X depth 24, Y(gripped) 15, Z height 26 mm
+                color=np.array([0.95, 0.05, 0.05]),
+                mass=0.02,
+            )
+            log("[SIDE_FLOAT] bright-red box 24(X)x15(Y,gripped)x26(Z)mm, center z=0.09 "
+                "(protrudes beyond the jaws for video legibility)")
         else:
             # cube (dynamic, 15mm)
             cube = DynamicCuboid(
@@ -1351,8 +1367,14 @@ def main():
         #     between the jaws, both jaws visible, gripper well-sized + lit.
         #   WIDE: +X and slightly +Y, elevated, ~0.7m -- whole gripper + cube + the
         #     0.09->0.14 lift arc in frame, not cropped.
-        CAM_A_EYE = [0.42, 0.278, 0.30]    # +X on the cube's Y-axis, elevated ~0.60m (frontal closeup)
-        CAM_B_EYE = [0.66, 0.58, 0.50]     # +X +Y elevated 3/4 ~0.95m (wide context, catches the lift)
+        # A pure-frontal +X eye is blocked by the AR4 BASE (at the origin, on the
+        # +X sight-line to the gripper) -> empty horizon (verified in extracted
+        # frames). The RELIABLE angle that framed the gripper clearly is the +X+Y
+        # elevated 3/4 (~0.8m) -- and the enlarged red box now protrudes its +X/top
+        # faces TOWARD this camera (the +Y face is the gripped/occluded one), so the
+        # red object reads clearly. Two +X+Y distances: a closer closeup + a wide.
+        CAM_A_EYE = [0.52, 0.50, 0.40]     # +X +Y elevated 3/4 ~0.78m (closeup: box + both jaws)
+        CAM_B_EYE = [0.82, 0.72, 0.56]     # +X +Y elevated 3/4 ~1.10m (wide: full gripper + lift arc)
         CAM_TGT = [-0.12, 0.28, 0.105]     # aim at the grip point / early-lift height
     elif SIDE_GRASP:
         # Side grasp: cube at (-0.12,0.28,0.09), gripper approaches horizontally

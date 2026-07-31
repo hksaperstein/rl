@@ -223,6 +223,23 @@ parser.add_argument("--prism_height", type=float, default=0.056,
                          "fixed pad plane (0.05621) grips near the top. Swept physics-only to clear the "
                          "gripper's central-body underhang while keeping a solid pad contact band.")
 parser.add_argument("--prism_mass", type=float, default=0.025, help="Prism mass, kg.")
+parser.add_argument("--jaw_max_force", type=float, default=50.0,
+                    help="Jaw prismatic drive maxForce CEILING (N). The closing force is min(GRIP_KP*error, "
+                         "this). 50N (old default) + heavy damping left the jaws stalling BEFORE reaching a "
+                         "narrow object (2026-07-31 tall-prism sweep: jaw1 crept to dof 0.011 and stalled, "
+                         "jaw2 never moved) -> no symmetric grip. Raise to firmly/quickly close both jaws.")
+parser.add_argument("--grip_kd", type=float, default=200.0,
+                    help="Jaw prismatic drive damping. 200 is ~6x overdamped for the light jaws and makes "
+                         "them creep; lower it so both jaws actually reach the object within the close steps.")
+parser.add_argument("--close_steps", type=int, default=40,
+                    help="Physics steps per jaw-close sub-phase (there are ~3). Raise so the jaws finish "
+                         "closing onto the object rather than stalling mid-travel.")
+parser.add_argument("--jaw_close_test", action="store_true",
+                    help="DIAGNOSTIC (2026-07-31): at HOME (gripper in free space, no object contact), "
+                         "command the jaws CLOSED with the real squeeze and log BOTH jaw joint positions "
+                         "over 200 steps -> a clean control for whether BOTH jaw drives physically close to "
+                         "~0 in free space (rules out a one-jaw-stuck drive bug vs an object-interaction "
+                         "centering failure -- the tall-prism sweep showed jaw2 never moving). Exits after.")
 parser.add_argument("--dump_gripper_aabb", action="store_true",
                     help="DIAGNOSTIC (2026-07-31, side-grasp): drive to GRASP_Q, settle, and dump the "
                          "WORLD-frame collision-mesh AABB (min/max xyz) of gripper_base_link + both jaw "
@@ -511,7 +528,7 @@ ARM_MAX_FORCE = 1500.0  # N*m per arm joint drive -- generous ceiling; feedforwa
 # delivered by this PD drive directly (a proven closing path -- the prior task
 # closed the jaws this way); the earlier RUNTIME DriveAPI maxForce mutation is
 # removed (it desynced the articulation drive and left the jaws stuck open).
-GRIP_KP, GRIP_KD = 5000.0, 200.0
+GRIP_KP, GRIP_KD = 5000.0, args_cli.grip_kd
 
 JAW1_LOWER_EXTENT = 0.018475  # fingertip offset below jaw link origin
 
@@ -850,7 +867,7 @@ def main():
             # by capping this same maxForce to --squeeze_force (position mode)
             # or by zeroing the position gains and applying a direct joint
             # effort (effort mode). The old 500N here would eject a 10g cube.
-            _drive.CreateMaxForceAttr().Set(50.0)
+            _drive.CreateMaxForceAttr().Set(float(args_cli.jaw_max_force))
             _drive.CreateTargetPositionAttr().Set(GRIP_OPEN)
             log(f"[DRIVE] authored explicit linear force-type drive on {_jprim.GetPath()} "
                 f"(stiffness={GRIP_KP}, damping={GRIP_KD}, maxForce ceiling=50N; "
@@ -1679,6 +1696,38 @@ def main():
         log("\n[AABB] DUMP COMPLETE (VERDICT: AABB_DUMP_DONE)")
         _R.close(); simulation_app.close(); return
 
+    # ======================================================================
+    # FREE-SPACE JAW-CLOSE TEST (2026-07-31): do BOTH jaw drives close to ~0 in
+    # free space? -- clean control to separate a one-jaw-stuck DRIVE bug from an
+    # object-interaction CENTERING failure (tall-prism sweep showed jaw2 never
+    # moving). At HOME the gripper is well clear of any object.
+    # ======================================================================
+    if args_cli.jaw_close_test:
+        log("\n" + "#" * 70)
+        log(f"# FREE-SPACE JAW-CLOSE TEST (jaw_max_force={args_cli.jaw_max_force} "
+            f"grip_kd={args_cli.grip_kd} close_steps={args_cli.close_steps})")
+        log("#" * 70)
+        drive(HOME_Q, GRIP_OPEN, 60, render=False)
+        d0 = np.array(robot.get_joint_positions())[grip_idx]
+        log(f"[JAWTEST] jaws OPEN in free space: grip_dof={d0.tolist()}")
+        start_squeeze()
+        for w in range(10):
+            drive(HOME_Q, GRIP_CLOSED, 30, render=False)
+            dj = np.array(robot.get_joint_positions())[grip_idx]
+            ef = None
+            try:
+                ef = [round(float(v), 3) for v in np.asarray(robot.get_measured_joint_efforts())[grip_idx]]
+            except Exception:
+                pass
+            log(f"[JAWTEST] after {(w+1)*30} close steps: grip_dof={[round(float(v),5) for v in dj]} "
+                f"efforts_N={ef}  (target GRIP_CLOSED={GRIP_CLOSED}; both -> ~0 == both drives close)")
+        dj = np.array(robot.get_joint_positions())[grip_idx]
+        both_closed = bool(abs(dj[0]) < 0.002 and abs(dj[1]) < 0.002)
+        log(f"[JAWTEST] VERDICT: both jaws closed in free space = {both_closed} "
+            f"(final grip_dof={[round(float(v),5) for v in dj]})")
+        log("[JAWTEST] JAW-CLOSE TEST COMPLETE (VERDICT: JAWTEST_DONE)")
+        _R.close(); simulation_app.close(); return
+
     # ---- execute the pick -------------------------------------------------
     drive(HOME_Q, GRIP_OPEN, 40, render=False)
     cube_rest_z = cube_pose()[0][2]
@@ -1982,7 +2031,7 @@ def main():
         # home. Every step goes through drive() so the closing effort is
         # re-applied continuously (a bare world.step() would NOT re-assert it).
         start_squeeze()
-        drive(grasp_q_use, GRIP_CLOSED, 40, render=True)
+        drive(grasp_q_use, GRIP_CLOSED, args_cli.close_steps, render=True)
         sep_mid, _ = jaw_geometry("P3a_mid_close")
         contact_report("P3a_mid_close")
         # effort-mode sign self-check: a genuine CLOSE must DECREASE jaw
@@ -1991,9 +2040,9 @@ def main():
             squeeze["eff"] = -squeeze["eff"]
             log(f"[SQUEEZE] jaw sep did not decrease ({jaw_open_sep:.2f}->{sep_mid:.2f}mm); "
                 f"flipping closing-effort sign to {squeeze['eff']:.3f} N/jaw and re-driving")
-            drive(grasp_q_use, GRIP_CLOSED, 40, render=True)
+            drive(grasp_q_use, GRIP_CLOSED, args_cli.close_steps, render=True)
         # settle the squeeze firmly against the two faces
-        drive(grasp_q_use, GRIP_CLOSED, 40, render=True)
+        drive(grasp_q_use, GRIP_CLOSED, args_cli.close_steps, render=True)
     else:
         # legacy diagnostics only (NOT the deliverable): plain position close.
         drive(grasp_q_use, GRIP_CLOSED, 80, render=True)

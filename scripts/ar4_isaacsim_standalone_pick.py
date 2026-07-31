@@ -1028,14 +1028,16 @@ def main():
         # cube+jaws directly. Closeup from +X+Y (looks -X at the cube's +X face,
         # sees the two jaws close along Y); wide from -X-Y (over the incoming
         # gripper's shoulder, sees the full approach + straight-up lift).
-        # RUN-1/2/3 cameras looked DOWN/level at the low (z~0.09) scene, so the
-        # DARK gripper was silhouetted against the DARK ground and vanished. Fix:
-        # place cameras LOW (z~0.04, just above the ground) looking UP at the
-        # gripper, so the dark gripper is framed against the BRIGHT dome. Closeup
-        # from +X-Y low; wide from -X-Y low over the incoming gripper.
-        CAM_A_EYE = [0.10, 0.18, 0.045]   # +X -Y low, looking up (~0.33m)
-        CAM_B_EYE = [-0.40, -0.05, 0.045] # -X -Y low, looking up over incoming gripper (~0.50m)
-        CAM_TGT = [-0.14, 0.29, 0.120]
+        # PROVEN values: RUN-1's elbow camera (CAM_B_EYE=[-0.75,0.62,0.42],
+        # target [-0.12,0.28,0.11]) demonstrably showed the gripper (dark gripper
+        # against the scene, off-center but clearly visible in extracted frames).
+        # RUN-2/3/4 "improvements" (closer / near-level / look-up) all lost the
+        # gripper -- so revert to the RUN-1 elevated-3/4 geometry (per the
+        # isaac-sim-video-capture skill: reuse a verified position, don't re-derive)
+        # and mirror it for a second view. ~0.8m elevated 3/4 from +X+Y and -X+Y.
+        CAM_A_EYE = [0.75, 0.62, 0.42]    # +X +Y elevated 3/4 (mirror of the proven elbow)
+        CAM_B_EYE = [-0.75, 0.62, 0.42]   # -X +Y elevated 3/4 (RUN-1's confirmed-visible elbow eye)
+        CAM_TGT = [-0.12, 0.28, 0.11]
     else:
         CAM_A_EYE = [0.9, 1.0, 0.85]      # +X +Y high 3/4
         CAM_B_EYE = [-1.1, 1.0, 0.85]     # -X +Y high 3/4

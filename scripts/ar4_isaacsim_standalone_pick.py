@@ -645,14 +645,14 @@ def main():
         prim_path="/World/Ground",
         position=np.array([0.0, 0.0, -0.5]),
         scale=np.array([50.0, 50.0, 1.0]),
-        color=np.array([0.3, 0.3, 0.3]),
+        color=np.array([0.55, 0.55, 0.58]) if SIDE_GRASP else np.array([0.3, 0.3, 0.3]),
     )
     _bc("ground_added")
 
-    # dome light
+    # dome light (brighter for side-grasp video legibility)
     from pxr import UsdLux
     light = UsdLux.DomeLight.Define(stage, Sdf.Path("/World/DomeLight"))
-    light.CreateIntensityAttr(2000.0)
+    light.CreateIntensityAttr(3000.0 if SIDE_GRASP else 2000.0)
 
     cube = None
     robot = None
@@ -1028,9 +1028,13 @@ def main():
         # cube+jaws directly. Closeup from +X+Y (looks -X at the cube's +X face,
         # sees the two jaws close along Y); wide from -X-Y (over the incoming
         # gripper's shoulder, sees the full approach + straight-up lift).
-        CAM_A_EYE = [0.02, 0.44, 0.17]    # +X +Y CLOSEUP (~0.24m)
-        CAM_B_EYE = [-0.45, 0.02, 0.33]   # -X -Y wide over-the-shoulder (~0.45m)
-        CAM_TGT = [-0.12, 0.28, 0.105]
+        # RUN-1/2 cameras looked DOWN at the low (z~0.09) scene -> black ground
+        # filled the frame. Fix: NEAR-LEVEL framing so the gripper is silhouetted
+        # against the bright gray dome (horizon), only a thin ground band at the
+        # bottom. Closeup from +X near cube height; wide from -X-Y elevated.
+        CAM_A_EYE = [0.22, 0.30, 0.115]   # +X near-level closeup (~0.35m)
+        CAM_B_EYE = [-0.34, -0.06, 0.26]  # -X -Y elevated over incoming gripper (~0.45m)
+        CAM_TGT = [-0.13, 0.28, 0.100]
     else:
         CAM_A_EYE = [0.9, 1.0, 0.85]      # +X +Y high 3/4
         CAM_B_EYE = [-1.1, 1.0, 0.85]     # -X +Y high 3/4

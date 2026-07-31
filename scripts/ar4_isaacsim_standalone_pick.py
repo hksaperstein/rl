@@ -2437,7 +2437,17 @@ def main():
     contact_report("P4_after_LIFT")
     drive(_lift_target, grip_hold, 40, render=True)
     cz["P5_HOLD"] = cube_pose()[0][2]
-    _retreat_target = PREGRASP_Q if (SIDE_GRASP or PIN_PICK) else HOME_Q
+    # For the support-free side FLOAT grasp, the retreat must stay ELEVATED so the
+    # held-through-retreat check (final_z > rest+1cm) reflects the real held state
+    # -- retreating to PREGRASP returns the gripper to GRASP height (~0.09), which
+    # would read as "dropped" even though the cube tracked the gripper the whole
+    # time. Hold at the lifted pose (SIDE_LIFT, cube ~0.14) as the demonstrated end.
+    if SIDE_GRASP and args_cli.float_release:
+        _retreat_target = SIDE_LIFT_Q
+    elif SIDE_GRASP or PIN_PICK:
+        _retreat_target = PREGRASP_Q
+    else:
+        _retreat_target = HOME_Q
     cz["P6_RETREAT"] = traj(_lift_target, _retreat_target, grip_hold, 100, "RETREAT")
     report("after RETREAT")
     jaw_geometry("P6_after_RETREAT")

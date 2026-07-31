@@ -142,6 +142,22 @@ parser.add_argument("--gravity_comp", action="store_true",
                          "DOWN toward the cube center). This is the fix for the droop that resisted "
                          "60x drive maxForce -- feedforward injects the holding torque directly rather "
                          "than relying on drive stiffness/force headroom.")
+parser.add_argument("--assist_mode", choices=["integral", "gravity"], default="integral",
+                    help="What the --gravity_comp tracking assist actually does. 'integral' (default, "
+                         "RUN-5 fix): a PI integrator on per-arm-joint (commanded-achieved) error, "
+                         "applied as additive joint effort, ramping until the steady-state joint "
+                         "tracking offset is nulled -- the cause-agnostic fix for the measured "
+                         "NON-gravitational +9-16mm vertical gap (wrist joints settle 4-9deg off "
+                         "command at near-zero effort: friction/weak-drive, NOT gravity, per the "
+                         "droop diagnostic). 'gravity': legacy feedforward of G(q) (retained; the "
+                         "diagnostic proved it does nothing here because the gap is not gravitational).")
+parser.add_argument("--integral_ki", type=float, default=6.0,
+                    help="Per-step integral gain for the integral tracking assist (effort += ki*err "
+                         "each physics step, err in rad). Ramps applied joint effort until per-joint "
+                         "position error is nulled. Heavy joint damping (ARM_KD=600) stabilizes it.")
+parser.add_argument("--integral_clamp", type=float, default=400.0,
+                    help="Anti-windup clamp (N*m) on each arm joint's integral effort -- well below "
+                         "the 1500 N*m drive maxForce, generous vs the few-N*m loads involved.")
 args_cli = parser.parse_args()
 
 # enable_cameras (and thus the RTX render pipeline) ONLY when capturing video.
@@ -922,7 +938,27 @@ def main():
     # regardless of the drive's effective stiffness/force headroom. The applied
     # joint effort is an ADDITIVE actuation force in PhysX's reduced-coordinate
     # articulation (summed with the position drive's force), NOT a replacement.
-    grav = {"active": False, "sign": 1.0, "api": None}
+    # RUN-5 DIAGNOSTIC RESULT (2026-07-30, ar4-gravity-droop): the +9-16mm
+    # vertical gap is NOT gravity droop -- feedforward of the reported G(q)
+    # (tiny: joint_2 only ~2.3 N*m) changed nothing, and the settled pose shows
+    # large tracking errors concentrated in the WRIST joints (joint_5 +4.5deg,
+    # joint_6 +8.6deg) at near-ZERO effort -- i.e. the arm settles OFF its
+    # commanded FK pose (which is verified pad-at-cube-center 0.000mm) for a
+    # position-tracking reason (joint friction / weak effective wrist drive),
+    # not a gravitational load. The robust, cause-agnostic fix is an INTEGRAL
+    # term on applied joint EFFORT: accumulate per-arm-joint (cmd-achieved) into
+    # an effort that ramps until the steady-state joint error is nulled --
+    # overcoming whatever static offset (friction/deadband/weak drive) the plain
+    # position PD leaves. Nulling all 6 arm-joint errors drives the achieved
+    # pose ONTO the commanded FK pose == pad at cube center. This is the "closed-
+    # loop integral term that nulls the steady-state gap" fix. A small gravity
+    # feedforward is retained as an option but is NOT the operative mechanism.
+    grav = {"active": False, "sign": 1.0, "api": None,
+            "mode": args_cli.assist_mode, "integ": np.zeros(robot.num_dof, dtype=np.float64),
+            "ki": args_cli.integral_ki, "clamp": args_cli.integral_clamp}
+
+    def _reset_integrator():
+        grav["integ"][:] = 0.0
 
     def _query_gravity_forces():
         """Return the generalized gravity force vector G(q) over all DOFs, or
@@ -955,22 +991,40 @@ def main():
                     continue
         return None
 
-    def _gravity_ff_effort():
-        """Full num_dof effort array: arm DOFs = sign*G(q), others 0."""
-        eff = np.zeros(robot.num_dof, dtype=np.float32)
+    def _assist_effort(q_arm):
+        """Full num_dof additive-effort array for the active assist mode, or
+        None when inactive. 'integral': PI-style integrator on per-arm-joint
+        (commanded - achieved) position error -> nulls steady-state tracking
+        offset. 'gravity': feedforward sign*G(q) (retained; NOT operative --
+        the droop was measured to be non-gravitational). Grip DOFs stay 0 here
+        (their effort is handled by the squeeze path)."""
         if not grav["active"]:
             return None
-        g = _query_gravity_forces()
-        if g is None or g.size < robot.num_dof:
-            return None
-        for i in arm_idx:
-            eff[i] = grav["sign"] * float(g[i])
+        eff = np.zeros(robot.num_dof, dtype=np.float32)
+        if grav["mode"] == "gravity":
+            g = _query_gravity_forces()
+            if g is None or g.size < robot.num_dof:
+                return None
+            for i in arm_idx:
+                eff[i] = grav["sign"] * float(g[i])
+            return eff
+        # integral (default): accumulate effort until per-joint error -> 0
+        ach = np.array(robot.get_joint_positions())
+        c = grav["clamp"]
+        for k, i in enumerate(arm_idx):
+            err = float(q_arm[k]) - float(ach[i])       # rad
+            grav["integ"][i] += grav["ki"] * err        # discrete integrator
+            if grav["integ"][i] > c:
+                grav["integ"][i] = c
+            elif grav["integ"][i] < -c:
+                grav["integ"][i] = -c
+            eff[i] = grav["integ"][i]
         return eff
 
     def drive(q_arm, grip_val, steps, render=True):
         do_render = render and RENDER
         for _ in range(steps):
-            gff = _gravity_ff_effort()  # None unless gravity comp active
+            gff = _assist_effort(q_arm)  # None unless a tracking assist is active
             if squeeze["active"] and args_cli.squeeze_mode == "effort":
                 # arm on position control (arm DOFs only); jaws on pure EFFORT.
                 # Gravity feedforward (if active) rides on the arm apply_action.
@@ -1127,42 +1181,36 @@ def main():
         else:
             log("[DIAG] generalized gravity force API NOT available on this build (tried candidates)")
 
-        log("\n[DIAG] --- (B) GRAVITY-OFF CONTROL: disable gravity, re-settle ---")
-        grav_restored = None
+        log("\n[DIAG] --- (B) GRAVITY-OFF CONTROL: robot.disable_gravity(), re-settle ---")
+        # DEFINITIVE gravity-off via the articulation's own disable_gravity()
+        # (the RUN-5 introspection confirmed robot exposes disable/enable_gravity;
+        # the earlier physics_context.set_gravity path was suspect -- results were
+        # suspiciously identical, so use the proper API here).
+        goff_ok = False
         try:
-            pc = world.get_physics_context()
-            try:
-                grav_restored = pc.get_gravity()
-            except Exception:
-                grav_restored = None
-            pc.set_gravity(0.0)
-            log("[DIAG] gravity set to 0.0 via physics_context.set_gravity")
+            robot.disable_gravity()
+            goff_ok = True
+            log("[DIAG] robot.disable_gravity() called")
         except Exception as e:
-            log(f"[DIAG] physics_context.set_gravity failed ({e}); trying USD scene attr")
-            try:
-                for p in Usd.PrimRange(stage.GetPrimAtPath("/World")):
-                    if p.IsA(UsdPhysics.Scene):
-                        UsdPhysics.Scene(p).CreateGravityMagnitudeAttr().Set(0.0)
-                        log(f"[DIAG] set gravityMagnitude=0 on {p.GetPath()}")
-            except Exception as e2:
-                log(f"[DIAG] USD gravity-off also failed: {e2}")
+            log(f"[DIAG] robot.disable_gravity() failed: {e}")
         drive(GRASP_Q, GRIP_OPEN, 400, render=False)
         pad_goff, _ = _per_joint_report("B_grav_off")
-        log(f"[DIAG] GRAVITY-OFF verdict: pad_z moved {(pad_goff[2]-pad_base[2])*1000:+.2f}mm vs grav-on; "
+        log(f"[DIAG] GRAVITY-OFF verdict (disable_gravity ok={goff_ok}): pad_z moved "
+            f"{(pad_goff[2]-pad_base[2])*1000:+.2f}mm vs grav-on; "
             f"residual_vs_cube_center={(pad_goff[2]-cube_center_z)*1000:+.2f}mm "
-            f"({'REACHES cube center (droop IS gravity)' if abs(pad_goff[2]-cube_center_z)<0.003 else 'still off center (NOT purely gravity)'})")
-        # restore gravity
+            f"({'REACHES cube center (gap WAS gravity)' if abs(pad_goff[2]-cube_center_z)<0.003 else 'STILL off center (gap is NOT gravity -> tracking/friction)'})")
         try:
-            world.get_physics_context().set_gravity(-9.81 if grav_restored is None else grav_restored)
-            log("[DIAG] gravity restored")
+            robot.enable_gravity()
+            log("[DIAG] robot.enable_gravity() -- gravity restored")
         except Exception as e:
-            log(f"[DIAG] gravity restore failed: {e}")
+            log(f"[DIAG] robot.enable_gravity() failed: {e}")
         drive(GRASP_Q, GRIP_OPEN, 200, render=False)
 
         log("\n[DIAG] --- (C) FEEDFORWARD GRAVITY COMP test (both signs) ---")
         if g_vec is None:
             log("[DIAG] no gravity-force API -> cannot test feedforward comp; skipping (C)")
         else:
+            grav["mode"] = "gravity"
             _per_joint_report("C0_grav_on_recheck")
             for sgn in (1.0, -1.0):
                 grav["active"] = True
@@ -1174,6 +1222,27 @@ def main():
                     f"(baseline droop was {(pad_base[2]-cube_center_z)*1000:+.2f}mm)")
                 grav["active"] = False
                 drive(GRASP_Q, GRIP_OPEN, 150, render=False)  # relax back
+            grav["mode"] = args_cli.assist_mode
+
+        log("\n[DIAG] --- (D) INTEGRAL-EFFORT TRACKING ASSIST test (the fix) ---")
+        # THE FIX under test: an integral term on applied joint effort that ramps
+        # until each arm joint's (commanded-achieved) error is nulled -> achieved
+        # pose lands on the commanded FK pose == pad at cube center. Cause-
+        # agnostic (works whether the offset is friction, weak drive, or gravity).
+        grav["mode"] = "integral"
+        _reset_integrator()
+        _per_joint_report("D0_before_integral")
+        grav["active"] = True
+        for _w in (100, 100, 100, 100, 100):
+            drive(GRASP_Q, GRIP_OPEN, _w, render=False)
+            pad_i, _ = _per_joint_report(f"D_integral_after{step_ctr['n']}")
+            log(f"[DIAG] integral assist: pad_z residual_vs_cube_center="
+                f"{(pad_i[2]-cube_center_z)*1000:+.2f}mm  integ_arm="
+                f"{[round(float(grav['integ'][i]),2) for i in arm_idx]}")
+        log(f"[DIAG] INTEGRAL verdict: baseline droop {(pad_base[2]-cube_center_z)*1000:+.2f}mm -> "
+            f"after integral {(pad_i[2]-cube_center_z)*1000:+.2f}mm "
+            f"({'NULLED (fix works)' if abs(pad_i[2]-cube_center_z)<0.003 else 'residual remains -- retune ki/clamp'})")
+        grav["active"] = False
 
         log("\n[DIAG] DIAGNOSTIC COMPLETE (VERDICT: DROOP_DIAG_DONE)")
         _R.close()
@@ -1196,40 +1265,48 @@ def main():
     report("at GRASP (open)")
     jaw_geometry("P2_GRASP(open, before descent)")
 
-    # ---- GRAVITY-COMP ACTIVATION + LIVE SIGN AUTO-CALIBRATION ------------
-    # The droop makes the pad float HIGH (Z too high above the cube center).
-    # Compensating gravity lets the arm HOLD its commanded (lower) pose, so the
-    # correct feedforward sign is the one that drives pad_z DOWN toward the
-    # cube. Calibrate live (the generalized-gravity API's sign convention is not
-    # assumed): settle no-comp, settle +G, settle -G, keep whichever lands
-    # pad_z closest to the cube center. Then leave gravity comp ON for the rest
-    # of the pick (servo, close, lift, retreat all hold pose against gravity).
+    # ---- TRACKING ASSIST ACTIVATION -------------------------------------
+    # RUN-5: the +9-16mm vertical gap was measured to be NON-gravitational (a
+    # joint tracking offset, esp. the wrist joints, from friction/weak drive --
+    # see the droop diagnostic). Default assist is the INTEGRAL-effort term:
+    # activate it here and settle, so the achieved pose is pulled ONTO the
+    # commanded FK pose (pad at cube center) BEFORE the servo probes -- then
+    # leave it ON for the whole pick (servo, close, lift, retreat) so the arm
+    # keeps tracking every commanded pose.
     if args_cli.gravity_comp:
         cube_center_z = float(cube_pose()[0][2])
-        g_probe = _query_gravity_forces()
-        if g_probe is None:
-            log("[GRAVCOMP] WARNING: generalized-gravity API unavailable -- gravity comp DISABLED, "
-                "falling back to PD only (expect droop). Diagnostic mode reports the API surface.")
+        if grav["mode"] == "gravity":
+            # legacy feedforward path with live sign calibration
+            g_probe = _query_gravity_forces()
+            if g_probe is None:
+                log("[ASSIST] WARNING: gravity API unavailable -- gravity assist DISABLED.")
+            else:
+                drive(GRASP_Q, GRIP_OPEN, 120, render=False)
+                z_none = _pad_mid_xyz()[2]
+                grav["active"] = True; grav["sign"] = 1.0
+                drive(GRASP_Q, GRIP_OPEN, 200, render=False)
+                z_plus = _pad_mid_xyz()[2]
+                grav["sign"] = -1.0
+                drive(GRASP_Q, GRIP_OPEN, 200, render=False)
+                z_minus = _pad_mid_xyz()[2]
+                grav["sign"] = 1.0 if abs(z_plus-cube_center_z) <= abs(z_minus-cube_center_z) else -1.0
+                grav["active"] = True
+                drive(GRASP_Q, GRIP_OPEN, 200, render=False)
+                log(f"[ASSIST gravity] chose sign={grav['sign']:+.0f}; residual_vs_center="
+                    f"{(_pad_mid_xyz()[2]-cube_center_z)*1000:+.2f}mm (no-comp {(z_none-cube_center_z)*1000:+.2f}mm)")
         else:
-            drive(GRASP_Q, GRIP_OPEN, 120, render=False)
+            # INTEGRAL assist (default, the fix): reset integrator, activate, settle
+            drive(GRASP_Q, GRIP_OPEN, 100, render=False)
             z_none = _pad_mid_xyz()[2]
+            _reset_integrator()
             grav["active"] = True
-            grav["sign"] = 1.0
-            drive(GRASP_Q, GRIP_OPEN, 200, render=False)
-            z_plus = _pad_mid_xyz()[2]
-            grav["sign"] = -1.0
-            drive(GRASP_Q, GRIP_OPEN, 200, render=False)
-            z_minus = _pad_mid_xyz()[2]
-            # pick sign whose settled pad_z is closest to cube center
-            err_plus, err_minus = abs(z_plus - cube_center_z), abs(z_minus - cube_center_z)
-            grav["sign"] = 1.0 if err_plus <= err_minus else -1.0
-            grav["active"] = True
-            drive(GRASP_Q, GRIP_OPEN, 200, render=False)
+            drive(GRASP_Q, GRIP_OPEN, 500, render=False)  # let the integrator null the joint errors
             z_final = _pad_mid_xyz()[2]
-            log(f"[GRAVCOMP] sign calibration: pad_z no-comp={z_none:.5f} (+G)={z_plus:.5f} "
-                f"(-G)={z_minus:.5f} cube_center={cube_center_z:.5f} -> chose sign={grav['sign']:+.0f}; "
-                f"settled pad_z={z_final:.5f} residual_vs_center={(z_final-cube_center_z)*1000:+.2f}mm "
-                f"(droop no-comp was {(z_none-cube_center_z)*1000:+.2f}mm)")
+            log(f"[ASSIST integral] ki={grav['ki']} clamp={grav['clamp']}: pad_z no-assist={z_none:.5f} "
+                f"-> after-integral={z_final:.5f} cube_center={cube_center_z:.5f}; "
+                f"residual_vs_center={(z_final-cube_center_z)*1000:+.2f}mm "
+                f"(no-assist gap was {(z_none-cube_center_z)*1000:+.2f}mm); "
+                f"integ_arm={[round(float(grav['integ'][i]),2) for i in arm_idx]}")
 
     # ---- 3-AXIS EMPIRICAL-JACOBIAN SERVO TO CUBE CENTER ------------------
     # ROOT CAUSE this replaces (measured live 2026-07-30): the prior 1-D

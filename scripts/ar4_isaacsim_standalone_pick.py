@@ -1240,6 +1240,32 @@ def main():
         pad_base, meff_base = _per_joint_report("A_grav_on")
 
         if args_cli.quick:
+            # RUN-7 finding: cmd_integral offsets SATURATE yet joints stay off
+            # command (joint_2 pinned ~52deg pushing ~480 N*m) -> GRASP_Q may be
+            # physically UNREACHABLE (joint limit or collision), not a control issue.
+            # Read the actual USD joint limits (pxr is available inside the app) to
+            # distinguish a LIMIT block from a COLLISION block, and check arm-link
+            # net contact via measured joint forces.
+            log("[DIAG LIMITS] USD revolute-joint limits vs GRASP_Q:")
+            for k, _jn in enumerate(ARM_JOINTS):
+                _jp = find_prim_by_name(stage, AR4_ROOT, _jn)
+                lo = hi = None
+                if _jp is not None and _jp.IsValid():
+                    try:
+                        _rj = UsdPhysics.RevoluteJoint(_jp)
+                        lo = _rj.GetLowerLimitAttr().Get()
+                        hi = _rj.GetUpperLimitAttr().Get()
+                    except Exception as _e:
+                        log(f"[DIAG LIMITS] {_jn}: read failed {_e}")
+                gq = math.degrees(GRASP_Q[k])
+                _flag = ""
+                if lo is not None and hi is not None:
+                    if gq <= lo + 1.0:
+                        _flag = f">>> GRASP_Q AT/BELOW LOWER LIMIT ({lo})"
+                    elif gq >= hi - 1.0:
+                        _flag = f">>> GRASP_Q AT/ABOVE UPPER LIMIT ({hi})"
+                log(f"[DIAG LIMITS] {_jn:8s} USD_limits=[{lo},{hi}]deg  GRASP_Q={gq:+.2f}deg  {_flag}")
+
             # QUICK mode: validate the cmd_integral tracking assist cheaply. Report
             # baseline joint errors (section A above), then activate cmd_integral,
             # settle, and report whether the per-joint errors are nulled and the pad

@@ -517,10 +517,23 @@ if SIDE_GRASP:
         GRASP_Q = [g + _k * d for g, d in zip(IK_GRASP_Q, VERT_DESCENT_DIR)]
     # scene: cube on a NARROW pedestal, gripper approaches horizontally from -X
     PEDESTAL_CENTER_XY = (-0.12, 0.28)
-    PEDESTAL_FOOTPRINT = (0.03, 0.010)   # 30mm X x 10mm Y -- narrow in the grip (Y) axis
+    PEDESTAL_FOOTPRINT = (0.03, 0.010)   # (legacy; unused in side mode -- see plate below)
     PEDESTAL_HEIGHT = 0.0825
     CUBE_XY = (-0.12, 0.28)
     CUBE_REST_Z = PEDESTAL_HEIGHT + CUBE_SIZE / 2.0  # 0.09 == FK pad-midpoint z
+# SIDE-grasp support: a THIN FLOATING PLATE, NOT a ground-rooted pedestal.
+# RUN-1 (2026-07-31) proved (via the free-space vs obstacles A/B diagnostic) that
+# a tall 82.5mm ground-rooted pedestal RAMS the arm mid-swing: joint_5 jammed 28deg
+# short (64 vs 92 commanded), joint_1/2/3 pushing 88-138 N*m, pad 40mm low -- while
+# the SAME horizontal GRASP_Q in FREE SPACE tracks to <0.02deg and lands the pads
+# dead-on the cube center. The blocker is purely the tall support wall in the
+# horizontal approach/swing corridor. Fix: a thin static plate whose TOP is the
+# cube's rest surface (z=0.0825) but which is only ~10mm thick (a FixedCuboid is
+# kinematic -- it can float, no ground rooting needed), positioned UNDER + toward
+# +X of the cube so it (a) supports the cube's footprint and (b) leaves the -X
+# horizontal approach corridor open and never rises as a wall the arm swings into.
+SIDE_SUPPORT_CENTER = (-0.10, 0.28, 0.0775)   # plate center; top at 0.0825, bottom 0.0725
+SIDE_SUPPORT_SCALE = (0.06, 0.06, 0.010)       # 60x60x10mm thin plate; covers cube footprint (X -0.13..-0.07)
 
 RESULT_PATH = f"/workspace/rl/logs/standalone_pick_result_{args_cli.mechanism}.txt"
 VIDEO_DIR = f"/workspace/rl/logs/videos/ar4_isaacsim_standalone_pick/{args_cli.mechanism}"
@@ -641,13 +654,25 @@ def main():
     # EXTERNAL scene collision (cube/pedestal) vs a self-collision/arm issue.
     _obs_dx = 5.0 if args_cli.empty_scene else 0.0
     if args_cli.stage in ("scene", "robot_noxform", "full"):
-        # pedestal (static collider)
-        FixedCuboid(
-            prim_path="/World/Pedestal",
-            position=np.array([PEDESTAL_CENTER_XY[0] + _obs_dx, PEDESTAL_CENTER_XY[1], PEDESTAL_HEIGHT / 2.0]),
-            scale=np.array([PEDESTAL_FOOTPRINT[0], PEDESTAL_FOOTPRINT[1], PEDESTAL_HEIGHT]),
-            color=np.array([0.45, 0.32, 0.22]),
-        )
+        if SIDE_GRASP:
+            # thin FLOATING support plate (top == cube rest surface 0.0825), NOT a
+            # tall ground-rooted pedestal -- so it never rises as a wall in the
+            # horizontal approach/swing corridor (RUN-1 proved the tall pedestal
+            # rammed the arm 40mm low; free space was flawless). See SIDE_SUPPORT_*.
+            FixedCuboid(
+                prim_path="/World/Pedestal",
+                position=np.array([SIDE_SUPPORT_CENTER[0] + _obs_dx, SIDE_SUPPORT_CENTER[1], SIDE_SUPPORT_CENTER[2]]),
+                scale=np.array([SIDE_SUPPORT_SCALE[0], SIDE_SUPPORT_SCALE[1], SIDE_SUPPORT_SCALE[2]]),
+                color=np.array([0.45, 0.32, 0.22]),
+            )
+        else:
+            # pedestal (static collider)
+            FixedCuboid(
+                prim_path="/World/Pedestal",
+                position=np.array([PEDESTAL_CENTER_XY[0] + _obs_dx, PEDESTAL_CENTER_XY[1], PEDESTAL_HEIGHT / 2.0]),
+                scale=np.array([PEDESTAL_FOOTPRINT[0], PEDESTAL_FOOTPRINT[1], PEDESTAL_HEIGHT]),
+                color=np.array([0.45, 0.32, 0.22]),
+            )
         # cube (dynamic, 15mm)
         cube = DynamicCuboid(
             prim_path=CUBE_PATH,
@@ -991,11 +1016,14 @@ def main():
     if SIDE_GRASP:
         # Side grasp: cube at (-0.12,0.28,0.09), gripper approaches horizontally
         # from -X (palm on -X side), pads grip the +Y/-Y faces, lift straight up
-        # to z~0.14. Closeup from +X+Y (sees the gripper come in + the cube);
-        # elbow from -X+Y (over the gripper's shoulder). Aim at mid lift arc.
-        CAM_A_EYE = [0.45, 0.72, 0.32]    # +X +Y closeup
-        CAM_B_EYE = [-0.75, 0.62, 0.42]   # -X +Y over-the-shoulder
-        CAM_TGT = [-0.12, 0.28, 0.11]
+        # to z~0.14. RUN-1's cameras were too far (0.6-0.8m) for a 15mm cube --
+        # closeup showed only the horizon. Bring them CLOSE (~0.25m) and frame the
+        # cube+jaws directly. Closeup from +X+Y (looks -X at the cube's +X face,
+        # sees the two jaws close along Y); wide from -X-Y (over the incoming
+        # gripper's shoulder, sees the full approach + straight-up lift).
+        CAM_A_EYE = [0.02, 0.44, 0.17]    # +X +Y CLOSEUP (~0.24m)
+        CAM_B_EYE = [-0.45, 0.02, 0.33]   # -X -Y wide over-the-shoulder (~0.45m)
+        CAM_TGT = [-0.12, 0.28, 0.105]
     else:
         CAM_A_EYE = [0.9, 1.0, 0.85]      # +X +Y high 3/4
         CAM_B_EYE = [-1.1, 1.0, 0.85]     # -X +Y high 3/4

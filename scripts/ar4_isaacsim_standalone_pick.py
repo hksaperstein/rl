@@ -1267,6 +1267,59 @@ def main():
         # restore nominal gains
         controller.set_gains(kps=kps, kds=kds)
 
+        log("\n[DIAG] --- (E) ARMATURE stabilization test (distal-joint drive fix) ---")
+        # D2/D3 show the distal joints (esp joint_6) don't track: near-zero drive
+        # effort at large error, WORSE with higher stiffness -> low-inertia drive
+        # pathology. Textbook cure: add ARMATURE (reflected inertia) to the DOFs so
+        # the position drive is well-conditioned. Introspect the API, read joint
+        # limits (rule out a limit), then set armature and retest tracking+settle.
+        arm_methods = sorted([m for m in dir(robot) if 'armature' in m.lower()])
+        log(f"[DIAG E] armature-related robot methods: {arm_methods}")
+        try:
+            lim = robot.get_dof_limits()
+            lim = np.asarray(lim)
+            lim = lim.reshape(-1, 2) if lim.ndim > 1 else lim
+            for k, i in enumerate(arm_idx):
+                lo, hi = lim[i]
+                log(f"[DIAG E] {ARM_JOINTS[k]:8s} limits=[{math.degrees(float(lo)):+.1f},{math.degrees(float(hi)):+.1f}]deg")
+        except Exception as e:
+            log(f"[DIAG E] get_dof_limits failed: {e}")
+
+        def _try_set_armature(val):
+            av = np.zeros(robot.num_dof, dtype=np.float32)
+            for i in arm_idx:
+                av[i] = val
+            for name in ("set_armatures", "set_armature"):
+                fn = getattr(robot, name, None)
+                if fn is None:
+                    continue
+                try:
+                    fn(av)
+                    return name
+                except Exception as e:
+                    log(f"[DIAG E] {name}({val}) failed: {e}")
+            return None
+
+        for armv in (0.05, 0.5):
+            used = _try_set_armature(armv)
+            log(f"[DIAG E] set armature={armv} via {used}")
+            controller.set_gains(kps=kps, kds=kds)  # nominal 8000/600
+            drive(GRASP_Q, GRIP_OPEN, 400, render=False)
+            pad_a, _ = _per_joint_report(f"E_armature{armv}")
+            # per-joint tracking retest under armature
+            base_a = np.array(robot.get_joint_positions())
+            for k, i in enumerate(arm_idx):
+                qt = list(GRASP_Q); qt[k] += math.radians(5.0)
+                drive(qt, GRIP_OPEN, 150, render=False)
+                mv = math.degrees(float(np.array(robot.get_joint_positions())[i] - base_a[i]))
+                log(f"[DIAG E armature={armv}] {ARM_JOINTS[k]:8s} +5deg cmd -> moved {mv:+6.2f}deg "
+                    f"({'TRACKS' if abs(mv-5.0)<1.5 else 'off'})")
+                drive(GRASP_Q, GRIP_OPEN, 120, render=False)
+            log(f"[DIAG E] armature={armv}: pad_z residual_vs_cube_center="
+                f"{(pad_a[2]-cube_center_z)*1000:+.2f}mm "
+                f"({'REACHES center (armature fix works)' if abs(pad_a[2]-cube_center_z)<0.003 else 'still off'})")
+        _try_set_armature(0.0)
+
         log("\n[DIAG] DIAGNOSTIC COMPLETE (VERDICT: DROOP_DIAG_DONE)")
         _R.close()
         simulation_app.close()

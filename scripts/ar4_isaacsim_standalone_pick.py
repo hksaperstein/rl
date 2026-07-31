@@ -288,17 +288,36 @@ GRIP1_PATH = "/World/AR4/root_joint/gripper_jaw1_link"
 GRIP2_PATH = "/World/AR4/root_joint/gripper_jaw2_link"
 CUBE_PATH = "/World/Cube"
 
-PEDESTAL_CENTER_XY = (-0.0262, 0.3660)
+# SCENE + GRASP CONFIG (2026-07-30 REACHABLE-CONFIG FIX, ar4-reachable-friction-
+# grasp task). The prior hand-tuned GRASP_Q was a near-HORIZONTAL branch
+# (~79deg from vertical) at cube Y~0.39, near AR4's full forward extension:
+# its jaw LINK origins bottomed out at z~0.0686m -- ~21mm ABOVE the cube center
+# -- so the jaws closed above the cube (0N contact, cube never moved). That was
+# a GEOMETRIC reach limit, not a servo/squeeze problem (kb 2026-07-30
+# "PURE-FRICTION grasp attempt -- ground-truth reach-limit blocker").
+#
+# THIS config comes from the standing pure-FK graspable-workspace sweep
+# (scripts/ar4_graspable_workspace.py, 8M-sample near-vertical solve) then
+# re-verified offline with the CORRECTED pad geometry (12.5mm along each jaw
+# link's LOCAL -Y, the measured pad centroid -- NOT the old 18.475mm world-Z
+# model). At this config the arm approaches near-VERTICALLY (tilt 5.55deg from
+# straight-down) with 36deg+ joint-limit margin on EVERY joint, and the true
+# jaw-pad MIDPOINT lands at world (-0.12246, 0.37247, 0.05621). CUBE_XY is set
+# to that pad-midpoint XY (pads centered on the cube horizontally) and
+# PEDESTAL_HEIGHT so the cube's vertical CENTER == the pad-midpoint z -- i.e.
+# the pads straddle the two flat faces at mid-height in ALL THREE axes at the
+# nominal grasp pose (FK err 0.000mm x/y/z), leaving the in-run servo only
+# residual gravity-droop to trim. See scratchpad verify_config.py derivation
+# recorded in the kb 2026-07-30 reachable-config UPDATE.
+PEDESTAL_CENTER_XY = (-0.12246, 0.37247)
 PEDESTAL_FOOTPRINT = (0.30, 0.14)
-PEDESTAL_HEIGHT = 0.040
-CUBE_XY = (-0.04511343308636716, 0.3926929901804897)
+PEDESTAL_HEIGHT = 0.04871
+CUBE_XY = (-0.12246154740662964, 0.37247094274942993)
 CUBE_SIZE = 0.015
-CUBE_REST_Z = PEDESTAL_HEIGHT + CUBE_SIZE / 2.0  # 0.0475
+CUBE_REST_Z = PEDESTAL_HEIGHT + CUBE_SIZE / 2.0  # 0.05621 == FK pad-midpoint z
 
-GRASP_Q_DEG = [-6.486502296738718, 55.02598117736985, 13.479564958718077,
-               0.9246593576759368, 21.857063034307192, 96.18412135786986]
-PREGRASP_Q_DEG = [-6.486502296738718, 46.38313360110892, 13.354865607777075,
-                  1.3196911944959482, 30.254696468370202, 95.82074708404251]
+GRASP_Q_DEG = [-19.4595, 53.2382, 14.9828, -14.9277, 21.9517, 114.6585]
+PREGRASP_Q_DEG = [-19.5117, 47.5355, 16.5996, -14.892, 22.9696, 114.6585]
 HOME_Q = [0.0] * 6
 GRASP_Q_BASE = [math.radians(d) for d in GRASP_Q_DEG]
 PREGRASP_Q = [math.radians(d) for d in PREGRASP_Q_DEG]
@@ -318,7 +337,13 @@ PREGRASP_Q = [math.radians(d) for d in PREGRASP_Q_DEG]
 # 11.1mm descent direction in joint space, reused by the in-run closed loop to
 # correct any residual gravity-droop under-tracking WITHOUT drifting off the
 # cube horizontally.
-IK_GRASP_Q_DEG = [-6.4875, 57.1201, 12.7372, 0.9256, 21.4778, 96.1841]
+# REACHABLE-CONFIG FIX (2026-07-30): the recommended near-vertical GRASP_Q
+# above ALREADY places the pad midpoint at the cube center (FK-verified 0.000mm
+# in x/y/z), so no artificial vertical-descent nudge is needed. Set IK_GRASP_Q
+# == GRASP_Q so VERT_DESCENT_DIR ~= 0 and the legacy grasp_depth_extra knob is
+# a no-op by default; the in-run empirical-Jacobian servo below does the real
+# (droop-compensating) final centering.
+IK_GRASP_Q_DEG = list(GRASP_Q_DEG)
 IK_GRASP_Q = [math.radians(d) for d in IK_GRASP_Q_DEG]
 VERT_DESCENT_DIR = [ik - b for ik, b in zip(IK_GRASP_Q, GRASP_Q_BASE)]  # ~11.1mm world descent
 VERT_DESCENT_M = 0.0111  # world-meters of fingertip descent for +1.0 of VERT_DESCENT_DIR
@@ -772,9 +797,9 @@ def main():
     # to the red cube through the whole pick despite arm-link occlusion. The
     # camera prim's USD orientation is set DIRECTLY via a lookat matrix
     # (unambiguous), bypassing the isaacsim camera_axes convention.
-    CAM_A_EYE = [1.0, 1.0, 0.85]      # +X +Y high 3/4
-    CAM_B_EYE = [-1.0, 1.0, 0.85]     # -X +Y high 3/4
-    CAM_TGT = [-0.03, 0.36, 0.24]
+    CAM_A_EYE = [0.9, 1.0, 0.85]      # +X +Y high 3/4
+    CAM_B_EYE = [-1.1, 1.0, 0.85]     # -X +Y high 3/4
+    CAM_TGT = [-0.122, 0.372, 0.20]   # aim at new cube XY / mid lift arc
 
     def _set_cam_lookat(prim_path, eye, target):
         eye = np.asarray(eye, float); target = np.asarray(target, float)

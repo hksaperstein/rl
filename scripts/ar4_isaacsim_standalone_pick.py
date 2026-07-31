@@ -1338,7 +1338,23 @@ def main():
     # to the red cube through the whole pick despite arm-link occlusion. The
     # camera prim's USD orientation is set DIRECTLY via a lookat matrix
     # (unambiguous), bypassing the isaacsim camera_axes convention.
-    if SIDE_GRASP:
+    if SIDE_GRASP and args_cli.float_release:
+        # SUPPORT-FREE side FLOAT grasp -- the SUCCESS deliverable. Framing tuned
+        # from real extracted frames (2026-07-31): the 0.8m +X+Y/-X+Y views showed
+        # the gripper clearly but the small RED cube was OCCLUDED by the dark jaws
+        # (it is gripped on its +Y/-Y faces, so a jaw hides it from an oblique-Y
+        # angle), and the -X+Y elbow was cropped to the frame edge. The cube's
+        # EXPOSED faces are +X (approach axis) / top -- so frame it MORE FRONTALLY
+        # down the +X approach axis (same Y as the cube) so the red cube shows
+        # BETWEEN the two Y-jaws, with both jaws visible left/right.
+        #   CLOSEUP: on the +X axis (cube's Y), elevated, ~0.42m -- red cube centered
+        #     between the jaws, both jaws visible, gripper well-sized + lit.
+        #   WIDE: +X and slightly +Y, elevated, ~0.7m -- whole gripper + cube + the
+        #     0.09->0.14 lift arc in frame, not cropped.
+        CAM_A_EYE = [0.42, 0.278, 0.30]    # +X on the cube's Y-axis, elevated ~0.60m (frontal closeup)
+        CAM_B_EYE = [0.66, 0.58, 0.50]     # +X +Y elevated 3/4 ~0.95m (wide context, catches the lift)
+        CAM_TGT = [-0.12, 0.28, 0.105]     # aim at the grip point / early-lift height
+    elif SIDE_GRASP:
         # Side grasp: cube at (-0.12,0.28,0.09), gripper approaches horizontally
         # from -X (palm on -X side), pads grip the +Y/-Y faces, lift straight up
         # to z~0.14. RUN-1's cameras were too far (0.6-0.8m) for a 15mm cube --

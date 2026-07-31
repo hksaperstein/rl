@@ -6160,3 +6160,102 @@ near-vertical GRASP_Q, high-maxForce arm drives, bounded servo),
 `logs/ar4_reachable_grasp_2026-07-30/result_run{1..4}.txt` (per-run measured
 pos_err + contact + cube-pose), `logs/videos/ar4_reachable_friction_grasp/`
 (run-1 closeup+elbow), GCS `gs://rl-manipulation-hks-runs/ar4-reachable-friction-grasp/`.
+
+---
+
+## UPDATE (2026-07-31, ar4-gravity-droop task): the "vertical droop" was a PHANTOM — root cause is a GRIPPER↔CUBE COLLISION, arm/drives are flawless
+
+The immediately-prior update escalated a **joint-level tracking diagnostic** (not
+another end-to-end pick) to explain the persistent 11–16 mm "gravity droop" that
+resisted 60× arm-drive maxForce. That diagnostic got built and run, and it
+**overturned the entire gravity-droop diagnosis.** The arm was never drooping;
+the drives, gains, and tracking are perfect. The pad floats ~9 mm high because
+**the descending gripper collides with the cube itself** before the pads reach
+mid-height. Every counter-measure in runs 1–4 (Cartesian pre-comp, taller
+pedestal, 60× maxForce, 2.5× stiffness) was chasing a phantom.
+
+Measured across **7 cheap physics-only diagnostic runs** on one on-demand
+g2-standard-4/L4 instance (~$1.2, torn down clean, `check_cloud_state.sh` 0/0/0).
+The decisive chain, each step ruling out a hypothesis:
+
+**(1) NOT gravity — definitive control.** Added `--droop_diagnostic`: command the
+reachable GRASP_Q, settle 400 steps, report per-arm-joint commanded-vs-achieved
+angle + measured effort. Then a **`robot.disable_gravity()` control** (the proper
+articulation API — an earlier `physics_context.set_gravity(0)` attempt was
+suspect, results suspiciously identical): with gravity truly off, the pad-height
+gap moved **−0.00 mm**. The reported generalized gravity force is tiny (`joint_2`
+≈ 2.3 N·m); feedforward of it, both signs, changed the gap by 0.0 mm. Gravity is
+not involved.
+
+**(2) The tracking errors are real but concentrated + odd.** At GRASP_Q the arm
+settles with `joint_5` +4.5°, `joint_6` +8.6° error at **near-zero effort**
+(0.3–0.7 N·m) while `joint_1/2/3` track well. A `+5°` per-joint command probe:
+`joint_6` moved **+47°** (unstable); higher stiffness (50k/200k) made distal
+tracking **worse** with ~0 effort — the look of a low-inertia distal-joint drive
+pathology. **Two attempted fixes both failed and were instructive:** an
+integral-effort term **ran away** (joints to 1000s of degrees — there is no
+effective drive to stabilize applied effort on those joints), and a joint-space
+**command pre-compensation** (`cmd_integral`, stable, rides the position drive)
+**saturated its ±25° offset yet the joints still would not reach command** —
+`joint_2` commanded to 78° (GRASP+25°) pushed **~480 N·m** and moved **nothing**,
+staying pinned at ~52°.
+
+**(3) NOT a joint limit.** A pinned joint pushing 480 N·m looked like a limit, but
+reading the USD revolute-joint limits directly (`UsdPhysics.RevoluteJoint`
+lower/upper, available inside the running app) showed **every joint has 37°+
+margin** at GRASP_Q (`joint_2` [−42,90] vs +53°; `joint_3` [−89,52] vs +15°;
+`joint_5` [−105,105] vs +22°; …). Not a limit.
+
+**(4) It is an EXTERNAL COLLISION — the smoking gun.** `--empty_scene` moves the
+pedestal+cube 5 m out of reach and re-settles at GRASP_Q. Result: **the arm
+reaches GRASP_Q perfectly** — all six joints track to **<0.02°** (`joint_2` err
++0.018° with −2.3 N·m effort, vs pinned −1.36°/+100 N·m with the cube present;
+`joint_5` err +0.000°), and the pad lands at **−0.30 mm** from the FK cube-center
+target (was +9 mm). The drives, gains (8000/600), and tracking are flawless. The
++9 mm gap exists **only when the cube is present**: the near-vertical gripper's
+body/palm sits on the grasp centerline directly above the cube, contacts the
+cube's **top face**, and jams the descent ~9 mm early (pad settles ~1.4 mm above
+the cube top). The dynamic 10 g cube does **not** get shoved (ground-truth pose
+unchanged) — the gripper is jamming against the cube, not pushing it. This is the
+same **collision-reachability** class the first 2026-07-30 update flagged: the FK
+"reachable config" solved JOINT reachability (and joint limits), but the gripper
+geometry still cannot straddle a 15 mm cube down to mid-height in a centered
+top-down approach.
+
+**Why this matters / what it retires:** the whole "vertical droop the arm drive
+cannot close" framing (this doc's two prior 2026-07-30 updates) is **wrong** — a
+phantom created by never checking the free-space (obstacle-removed) tracking. The
+arm was always capable of the pose. Method lesson (a sharper version of the
+standing Experiment-16 rule): when a joint won't reach a commanded pose, **remove
+the scene obstacles and re-test in free space before blaming the actuator/
+controller** — one `--empty_scene` run would have saved four "droop" pick attempts
+and this task's own first five diagnostic detours (gravity feedforward, effort
+integral, armature, stiffness sweep, command pre-comp — all chasing a
+non-existent tracking deficit).
+
+**What is proven solid and reusable:** the near-vertical reachable config + its FK
+derivation; the 12.5 mm-local−Y pad geometry; the arm's drives + tracking (bit-
+perfect in free space); and the new diagnostic tooling in
+`scripts/ar4_isaacsim_standalone_pick.py` (`--droop_diagnostic` with per-joint
+tracking, `disable_gravity()` control, USD joint-limit readout, and `--empty_scene`
+collision isolation).
+
+**Escalation (architecture-level, not a Senior's unilateral call):** a top-down
+pure-friction pick of a 15 mm cube at this gripper geometry is collision-blocked.
+Options, each a grasp-mechanism/scene redesign: (a) a **smaller cube** the palm
+clears; (b) a **side/horizontal** grasp approach (jaws close on vertical faces,
+palm not over the object); (c) a gripper with **deeper finger reach** relative to
+its palm; or (d) a top-down approach **laterally offset** so the palm clears the
+cube. The FK-reachability + servo + pad-geometry work all carry forward into
+whichever is chosen. The next concrete step is to **measure the gripper's
+palm-to-fingertip depth vs the cube half-height** to quantify exactly how much
+deeper the jaws must reach (or how much smaller the cube must be), then pick (a)–(d).
+
+**Cost:** ~$1.2 (7 physics-only diagnostic runs, one on-demand g2-standard-4/L4,
+~1h35m; the on-demand choice avoided preemption on a short iterative session).
+Instance deleted, verified clean via `scripts/check_cloud_state.sh` (0 instances /
+0 disks / 0 snapshots). Artifacts: `scripts/ar4_isaacsim_standalone_pick.py`
+(`--droop_diagnostic`/`--quick`/`--empty_scene` + the `cmd_integral`/gravity/
+integral assists, retained with their measured verdicts documented inline),
+`logs/ar4_gravity_droop_2026-07-31/` (droop_diagnostic v3/v4, cmdint/limits/
+empty_scene quick logs), GCS `gs://rl-manipulation-hks-runs/ar4-gravity-droop/`.

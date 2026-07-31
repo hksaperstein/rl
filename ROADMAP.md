@@ -27,32 +27,45 @@ direction, not a scoped backlog.
 
 Roughly in the order they'd likely be picked up:
 
-0a. **AR4 PURE-FRICTION grasp — reach limit SOLVED, now BLOCKED by a persistent
-   vertical-tracking (gravity-droop) gap (2026-07-30, ar4-reachable-friction-grasp
-   task; supersedes the earlier reach-limit entry).**
-   Fixed the prior blocker: found a genuinely-reachable **near-vertical** grasp
-   config (tilt 5.55°, 36°+ margin on every joint) via the pure-FK
-   `scripts/ar4_graspable_workspace.py` sweep, re-verified with the corrected
-   12.5mm-local−Y pad geometry to put the pad **at the cube center 0.000mm in all
-   3 axes (FK)**, and re-ran the pure-friction grasp there. **Reach limit gone —
-   but a deeper blocker replaced it, pick still NOT achieved across 4 cloud
-   runs.** Live, the empirical-Jacobian servo centers the HORIZONTAL plane well
-   (X/Y to 1.8–3.7mm) but the pad **cannot be driven down to the cube's
-   mid-height — it floats 11–16mm too high in Z every time**, so the jaws close
-   on empty air and pure-friction contact is never established (**0N normal force
-   every phase, all 4 runs; cube ground-truth never rises**). The vertical gap
-   RESISTED every counter-measure: Cartesian pre-compensation (deeper target just
-   droops more — 3.4mm achieved of 16 commanded), raising the cube (taller cube
-   props the gripper up), and **60× arm-drive maxForce + 2.5× stiffness (cut droop
-   only ~30%)**. That insensitivity to 60× force means it is **NOT simple drive
-   saturation nor a stiffness deficit** — mechanism still open. **Escalated to
-   Principal:** next step is a **joint-level tracking diagnostic** (commanded-vs-
-   achieved per-joint angle + measured effort vs maxForce, gravity-off control) —
-   NOT another end-to-end pick run — before choosing a fix (gravity-feedforward/
-   integral joint control, a validated stiffer actuator model, or a grasp-assist).
-   Cost ~$2.7 (4 runs), all instances torn down clean. Full detail + the 4-run
-   measured table: `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s
-   2026-07-30 "ar4-reachable-friction-grasp" UPDATE.
+0a. **AR4 PURE-FRICTION grasp — the "vertical droop" was a PHANTOM; real blocker
+   is a GRIPPER↔CUBE COLLISION during top-down descent (2026-07-31,
+   ar4-gravity-droop task; supersedes the gravity-droop framing entirely).**
+   The joint-level diagnostic that was escalated for got done, and it overturned
+   the entire prior diagnosis. Measured on cloud (7 diagnostic runs, one L4
+   instance, ~$1.2, torn down clean):
+   - **NOT gravity.** `robot.disable_gravity()` control: the +9mm pad-height gap
+     moved **−0.00mm**. Reported generalized gravity force is tiny (joint_2 ~2.3
+     N·m); feedforward of it (both signs) did nothing.
+   - **NOT joint limits.** All six joints have **37°+ margin** at GRASP_Q (read
+     from the USD: joint_2 [−42,90], GRASP +53°; joint_3 [−89,52], GRASP +15°; …).
+   - **NOT a drive/tracking/gains problem.** With the pedestal+cube moved 5m out
+     of reach (`--empty_scene`), the arm reaches GRASP_Q **perfectly**: every
+     joint tracks to **<0.02°** and the pad lands at the FK target
+     (**−0.30mm** from cube center). The arm, drives (8000/600), and tracking are
+     flawless.
+   - **The real cause:** with the cube present, the descending near-vertical
+     gripper **collides with the cube** (gripper body/palm sits on the grasp
+     centerline directly above the cube; it contacts the cube's top face and jams
+     the descent ~9mm early — pad settles ~1.4mm above the cube top). joint_2
+     stalls pushing ~100–480 N·m against the static contact; the dynamic cube
+     doesn't move (so it's the gripper jamming, not shoving the cube). This is
+     the SAME collision-reachability class the first 2026-07-30 update flagged —
+     the FK "reachable config" fixed JOINT reachability but the gripper geometry
+     still can't straddle a 15mm cube down to mid-height top-down.
+   Every "droop" counter-measure in runs 1–4 (pre-comp, taller pedestal, 60×
+   maxForce, higher stiffness) was chasing a phantom — the arm was never drooping.
+   **This is now an architecture-level grasp-mechanism/scene decision (escalated,
+   not a Senior's unilateral call):** options are (a) a smaller cube the palm
+   clears, (b) a side/horizontal grasp approach, (c) a gripper with deeper finger
+   reach, or (d) a top-down approach offset so the palm isn't centered over the
+   cube. What is now PROVEN solid and reusable: the near-vertical reachable config
+   + FK derivation, the 12.5mm-local−Y pad geometry, and the arm's drives/tracking
+   (perfect in free space). New capability added to `scripts/ar4_isaacsim_standalone_pick.py`:
+   `--droop_diagnostic` (per-joint tracking, gravity-off control, USD-limit
+   readout, `--empty_scene` collision test). Full measured detail:
+   `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s 2026-07-31 UPDATE.
+   Logs: `logs/ar4_gravity_droop_2026-07-31/`, GCS
+   `gs://rl-manipulation-hks-runs/ar4-gravity-droop/`.
 
 00. **AR4 GENUINE Isaac Sim physics grasp+lift — ACHIEVED 2026-07-30
    (ar4-isaacsim-standalone-pick task).** Closes the whole AR4-pick arc.

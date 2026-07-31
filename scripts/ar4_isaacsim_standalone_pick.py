@@ -1373,9 +1373,15 @@ def main():
         # elevated 3/4 (~0.8m) -- and the enlarged red box now protrudes its +X/top
         # faces TOWARD this camera (the +Y face is the gripped/occluded one), so the
         # red object reads clearly. Two +X+Y distances: a closer closeup + a wide.
-        CAM_A_EYE = [0.52, 0.50, 0.40]     # +X +Y elevated 3/4 ~0.78m (closeup: box + both jaws)
-        CAM_B_EYE = [0.82, 0.72, 0.56]     # +X +Y elevated 3/4 ~1.10m (wide: full gripper + lift arc)
-        CAM_TGT = [-0.12, 0.28, 0.105]     # aim at the grip point / early-lift height
+        # KNOWN-GOOD positions (extracted-frame verified): the render-1 closeup eye
+        # [0.75,0.62,0.42] framed the gripper large + legible; the render-3 wide eye
+        # [0.82,0.72,0.56] framed the whole arm + the red box clearly. (A ~0.7m eye
+        # along the same line rendered empty horizon -- do NOT move the closeup eye
+        # in toward ~0.7m.) Both +X+Y elevated 3/4 at >=~0.95m so the enlarged red
+        # box's exposed +X/top faces read clearly.
+        CAM_A_EYE = [0.75, 0.62, 0.42]     # +X +Y elevated 3/4 ~0.98m (closeup, render-1 proven)
+        CAM_B_EYE = [1.02, 0.88, 0.64]     # +X +Y elevated 3/4 ~1.35m (wide context + full lift arc)
+        CAM_TGT = [-0.12, 0.28, 0.11]      # aim at the grip point / early-lift height
     elif SIDE_GRASP:
         # Side grasp: cube at (-0.12,0.28,0.09), gripper approaches horizontally
         # from -X (palm on -X side), pads grip the +Y/-Y faces, lift straight up

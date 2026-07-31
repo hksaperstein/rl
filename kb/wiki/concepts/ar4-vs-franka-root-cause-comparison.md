@@ -6362,3 +6362,90 @@ killed mid-setup by `run_on_cloud_gpu.sh`'s monitor treating a transient `gcloud
 describe` UNKNOWN as a preemption — mitigated by dispatching subsequent runs with
 `--detach` and owning teardown directly). All artifacts under GCS
 `gs://rl-manipulation-hks-runs/ar4-side-grasp/`.
+
+## UPDATE (2026-07-31, ar4-tall-prism-pick task): the PROPERLY-SIZED object ALSO fails — top-down pure-friction grasp is geometrically infeasible for ANY surface-supported object (the gripper's central body bottoms 1.3mm BELOW the pad plane)
+
+Following the two prior 2026-07-31 findings (15mm cube blocked both top-down and
+side-on), this task acted on the Principal decision to grasp a **properly-sized
+object**: a tall, narrow rectangular prism resting on the ground, gripped near its
+top so the gripper's <=23mm below-pad underhang clears the ground. New `--prism`
+top-down mode in `scripts/ar4_isaacsim_standalone_pick.py` (object dims CLI-swept),
+reusing the proven near-vertical GRASP_Q/servo/squeeze machinery. **Result: also
+fails — and the DECISIVE, measured reason retires the whole "just pick a bigger
+object" idea for a top-down grasp with this gripper.** One warm on-demand
+g2-standard-4/L4 instance, ~$1, torn down, `check_cloud_state.sh` 0/0/0.
+
+**The killer measurement — top-down gripper AABB at GRASP_Q (`--dump_gripper_aabb`,
+empty_scene, near-vertical orientation), pad_mid = (-0.1224, 0.3724, 0.0561):**
+- `gripper_base_link`: **z_min = 0.0548 — only 1.3mm BELOW the pad plane** (z_above
+  51.3mm), X span -0.1547..-0.0946 (covers the object's X footprint), Y 0.331..0.411.
+- both jaw links: z_min ~0.038 (**18mm below the pad** — the fingers), X -0.144..-0.101.
+- link_6: z_min 0.074 (46mm ABOVE the pad).
+
+So in the true top-down orientation the gripper's **central body (gripper_base_link)
+bottoms out 1.3mm BELOW the pad-grip plane**, directly over the object footprint. For
+the pads to grip, the object's top must reach ~the pad plane (0.056); but to clear the
+descending body the top must stay **below 0.0548**. **0.056 > 0.0548 — an impossible
+~1.3mm NEGATIVE window.** This is exactly the mechanism that jammed the 15mm cube (pad
+settled ~1.4mm above the cube top): the central body, not the palm-depth, is the
+limiter. It is independent of object size — no surface-supported object can present a
+top face that is simultaneously high enough to be gripped and low enough for the body
+to clear. **Top-down pure-friction grasp of any object on a work surface is
+geometrically infeasible for the AR4 gripper.**
+
+**Empirically confirmed across a height + width + servo/no-servo matrix (all 0N grip,
+no lift):**
+- **Height sweep** (tops 0.050/0.054/0.058/0.062, 18mm wide): 0.050 -> pads close
+  ABOVE the object (top too far below pad plane, 0N); 0.058/0.062 -> body jams on the
+  object top (0.1mm gain). None grip.
+- **Jaw closure was a red herring at first but is genuinely fine:** the initial runs
+  showed jaws stalling (jaw1 crept to dof 0.011, jaw2 never moved) — traced to the 50N
+  drive ceiling + 6x-overdamped GRIP_KD=200. A dedicated **free-space jaw-close control**
+  (`--jaw_close_test`, added) proved **BOTH jaws close fully to dof 0 in free space**
+  with firmer params (`--jaw_max_force 120 --grip_kd 60 --close_steps 60`) — NO stuck-jaw
+  drive bug. So closure params were parametrized and fixed; the grasp still failed.
+- **The centering servo actively HARMS this grasp:** its 6-joint Jacobian PROBE
+  (+/-0.9deg jostles) bumps the tall object through the open jaws' tight clearance,
+  sliding it ~18mm off-center so only one jaw contacts (asymmetric efforts -41/-118N,
+  object nudged 1mm, no lift). Added `--no_servo` (direct grasp at GRASP_Q — justified:
+  the arm tracks GRASP_Q to <0.02deg in free space, the "droop" being a proven phantom).
+- **With `--no_servo` the tall object OBSTRUCTS the approach:** at GRASP_Q *with the
+  object present* the pad lands at (-0.1287, 0.3867, 0.0611) — **~14mm off in Y and 5mm
+  high** from its object-free landing (-0.1224, 0.3724, 0.0561), and the object is itself
+  nudged +5mm. The tall object (top at the pad plane) is caught/raked by the descending
+  gripper and tips/deflects the arm laterally. Same 1.3mm-window collision, now in the
+  approach phase. Both no-servo heights (0.050/0.053) failed identically.
+
+**Why a bigger CUBE at mid-height also cannot work (rules out the other suggested
+option):** a 45-50mm cube gripped at its center (center at pad plane 0.056) has its top
+at 0.056 + ~0.023 = ~0.079 — **~24mm ABOVE the body's 0.0548 bottom** -> the body would
+have to pass through the cube's entire upper half. Blocked by the same central-body
+underhang.
+
+**Verdict:** PICK NOT CONFIRMED for the properly-sized object too. This is NOT a
+controller/servo/closure/friction/object-size problem — every one of those is proven
+sound (arm tracks <0.02deg in free space; both jaws close in free space; friction
+params fine). It is a hard **gripper-geometry** limit: the AR4 gripper's central body
+hangs 1.3mm below the pad-grip plane, so it cannot straddle any object down onto a
+support. **This closes the door on a top-down (and, per the prior update, side-on)
+pure-friction grasp of a supported object with this gripper.** The genuine remaining
+paths are all asset/scene redesigns escalated to Principal: (a) a **smaller / deeper-
+fingered gripper** (the pads must extend BELOW the palm/body, which they currently do
+not — the body bottoms level with the pads); (b) present the object **cantilevered free
+of any support** in the grasp region (thin stalk on a non-gripped face, or dynamic
+drop-and-catch); (c) accept the characterized limit and pivot the anchor-task object/
+gripper. FK-reachability + empirical-Jacobian servo + pad-geometry + firm-close params
++ the new `--prism`/`--no_servo`/`--jaw_close_test`/`--jaw_max_force`/`--grip_kd`/
+`--close_steps` tooling all carry forward.
+
+**Videos (per the standing render+sync-every-attempt directive):** local
+`logs/videos/ar4_tall_prism_2026-07-31/{dispatch1_servo_0.054,retry2_no_servo_0.053}/
+{closeup,elbow}.mp4`; GCS `gs://rl-manipulation-hks-runs/ar4-tall-prism/`. NOTE: the
+tall-prism camera framing was poor (small low object; closeup caught only the horizon)
+— framing was improved in-code afterward but not re-shot, since the grasp is
+geometrically infeasible. Verdict from the ground-truth data, not the frames.
+
+**Cost:** ~$1 (one warm on-demand g2-standard-4/L4; AABB dump + height sweeps + free-
+space jaw test + no-servo sweeps + 2 video renders, all on ONE instance by shipping
+updated code to it via `git archive` rather than re-provisioning per iteration).
+Instance deleted, `check_cloud_state.sh` 0/0/0.

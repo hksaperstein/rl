@@ -27,6 +27,37 @@ direction, not a scoped backlog.
 
 Roughly in the order they'd likely be picked up:
 
+0aaa. **AR4 tall-prism (PROPERLY-SIZED object) ALSO fails — top-down pure-friction
+   grasp is geometrically infeasible for ANY surface-supported object; the gripper's
+   central body bottoms 1.3mm BELOW the pad plane (2026-07-31, ar4-tall-prism-pick
+   task; ESCALATED — retires the "just pick a bigger object" fix).** Acted on the
+   Principal decision to grasp a properly-sized object: a tall narrow prism on the
+   ground gripped near its top (new `--prism` mode, CLI-swept dims). Decisive measured
+   reason (top-down `--dump_gripper_aabb` at GRASP_Q, pad plane z=0.0561): the
+   **gripper_base_link central body z_min = 0.0548 — 1.3mm BELOW the pad plane** and
+   over the object footprint. For the pads to grip, the object top must reach ~0.056;
+   to clear the descending body it must stay <0.0548 -> **impossible ~1.3mm NEGATIVE
+   window**, independent of object size (same mechanism that jammed the 15mm cube; a
+   45mm cube at mid-height would put its top ~24mm INTO the body). Confirmed 0N grip
+   across a height x width x servo/no-servo matrix. Along the way: **both jaws DO close
+   fully in free space** (new `--jaw_close_test` control — no stuck-jaw drive bug; the
+   earlier stall was the 50N ceiling + 6x-overdamped GRIP_KD, now parametrized
+   `--jaw_max_force`/`--grip_kd`/`--close_steps`); the centering **servo's Jacobian
+   probe BUMPS the tall object off-center** (added `--no_servo` direct grasp, justified
+   by <0.02° free-space tracking); and with no-servo the **tall object OBSTRUCTS the
+   approach** (pad lands ~14mm off in Y with the object present vs object-free). NOT a
+   controller/servo/closure/friction/size problem — a hard gripper-geometry limit: the
+   pads do not extend below the palm/body. **Remaining paths (all asset/scene
+   redesigns, Principal's call): (a) a smaller/deeper-fingered gripper (the real fix —
+   pads must reach below the body); (b) present the object cantilevered free of any
+   support; (c) pivot the anchor-task object/gripper.** Videos (poorly framed — small
+   low object; framing improved in-code but not re-shot):
+   `logs/videos/ar4_tall_prism_2026-07-31/{dispatch1_servo_0.054,retry2_no_servo_0.053}/
+   {closeup,elbow}.mp4`. Full detail:
+   `kb/wiki/concepts/ar4-vs-franka-root-cause-comparison.md`'s 2026-07-31
+   ar4-tall-prism-pick UPDATE. GCS `gs://rl-manipulation-hks-runs/ar4-tall-prism/`.
+   ~$1, one warm instance, torn down clean.
+
 0aa. **AR4 SIDE/HORIZONTAL grasp ALSO collision-blocked — the gripper envelope
    ENGULFS a 15mm cube; a pure-friction grasp of this object with this gripper is
    geometrically infeasible top-down AND side-on (2026-07-31, ar4-side-grasp task;

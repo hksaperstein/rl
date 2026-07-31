@@ -1140,9 +1140,15 @@ def main():
         # (grasp->PREGRASP->HOME retreat) to ~0.2-0.3. Reuse the side-grasp lesson:
         # a ~0.8m ELEVATED-3/4 framing reads the small dark gripper + blue prism
         # legibly (near-level / too-far framings lost it). Two opposite-X views.
-        CAM_A_EYE = [0.42, 0.80, 0.52]    # +X +Y elevated 3/4 (~0.8m)
-        CAM_B_EYE = [-0.62, 0.80, 0.52]   # -X +Y elevated 3/4 (~0.8m)
-        CAM_TGT = [-0.122, 0.372, 0.13]   # aim between grip height and mid lift arc
+        # NOTE (2026-07-31): the first tall-prism videos framed empty space (closeup
+        # showed only the horizon, elbow caught the base corner) -- the small object
+        # at (-0.122,0.372,~0.05) and the low grasp action need a CLOSER camera aimed
+        # at the grip point, not the mid-lift arc. Closeup ~0.35m on the grip point;
+        # elbow ~0.7m to also catch the lift. (Framing improvement; not re-verified
+        # this session since the grasp itself is geometrically infeasible -- see kb.)
+        CAM_A_EYE = [0.12, 0.60, 0.26]    # +X +Y elevated 3/4, ~0.35m, tight on grip
+        CAM_B_EYE = [-0.48, 0.74, 0.42]   # -X +Y elevated 3/4, ~0.7m, catches the lift
+        CAM_TGT = [-0.122, 0.372, 0.055]  # aim at the grip point (pad plane)
     else:
         CAM_A_EYE = [0.9, 1.0, 0.85]      # +X +Y high 3/4
         CAM_B_EYE = [-1.1, 1.0, 0.85]     # -X +Y high 3/4

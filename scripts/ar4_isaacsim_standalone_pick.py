@@ -309,27 +309,35 @@ CUBE_PATH = "/World/Cube"
 # nominal grasp pose (FK err 0.000mm x/y/z), leaving the in-run servo only
 # residual gravity-droop to trim. See scratchpad verify_config.py derivation
 # recorded in the kb 2026-07-30 reachable-config UPDATE.
-PEDESTAL_CENTER_XY = (-0.12246, 0.37247)
+# RUN-3 STRATEGY (2026-07-30, "place the cube at the arm's natural DROOPED pad
+# pose"). Runs 1-2 proved the blocker is NOT reachability-in-principle (FK says
+# reachable) but GRAVITY-TORQUE-LIMITED tracking: at GRASP_Q the position drive
+# (8000 stiffness) sags, so the pad floats at a live floor z~0.069-0.072 and
+# CANNOT be driven down to a cube center at 0.0564 -- run 2 commanded 16mm deeper
+# and the pad descended only 3.4mm (0.0725->0.0691), and stiffening the drive
+# destabilizes the servo (kb run 6). Rather than fight the droop, place the cube
+# exactly where the gripper NATURALLY floats at GRASP_Q: the live-MEASURED
+# drooped pad midpoint (-0.1236, 0.3763, 0.0725) (run-1 [SERVO] start, arm
+# settled at nominal GRASP_Q). Cube XY = that pad XY; pedestal raised to 65mm so
+# the cube CENTER (pedestal+7.5mm) == the pad's live floating z 0.0725. The arm
+# then reaches GRASP_Q, droops to its natural pose, and the pads are at the cube
+# center in ALL THREE axes with ZERO commanded descent -- the servo starts at
+# ~0 error (converges immediately, no wandering/bump) and the jaws close+squeeze
+# straight onto the cube faces. Droop is a fixed function of the arm config, not
+# the cube/pedestal, so this placement is robust.
+PEDESTAL_CENTER_XY = (-0.1236, 0.3763)
 PEDESTAL_FOOTPRINT = (0.30, 0.14)
-PEDESTAL_HEIGHT = 0.04871
-CUBE_XY = (-0.12246154740662964, 0.37247094274942993)
+PEDESTAL_HEIGHT = 0.065
+CUBE_XY = (-0.1236, 0.3763)
 CUBE_SIZE = 0.015
-CUBE_REST_Z = PEDESTAL_HEIGHT + CUBE_SIZE / 2.0  # 0.05621 == FK pad-midpoint z
+CUBE_REST_Z = PEDESTAL_HEIGHT + CUBE_SIZE / 2.0  # 0.0725 == live drooped pad z at GRASP_Q
 
-# DROOP PRE-COMPENSATION (2026-07-30 run-1 measured fix). Run 1 (cube at this
-# reachable near-vertical config) measured that at the FK-cube-center GRASP_Q the
-# live pad was HORIZONTALLY centered (X 1.4mm, Y 3.7mm -- inside the 6mm box) but
-# 16.3mm too HIGH in Z: the arm gravity-UNDER-TRACKS the commanded descent (live
-# pad Z=0.0725 vs commanded-FK 0.0562). The 6-DOF servo (orientation-hold off)
-# then failed to descend that 16mm -- it traded Z for X, wandered 12-29mm off,
-# and bumped the cube; jaws closed on empty air (0N, 0mm gain). Fix: command a
-# GRASP_Q whose FK pad_mid is 16.3mm BELOW cube center, so the sagged live pad
-# lands AT cube center at the nominal pose (X/Y already land centered), making
-# the grasp near servo-INDEPENDENT (the servo then converges on iter 0 with the
-# pad pre-positioned in the box, instead of wandering). Derived offline via the
-# standing FK framework (scratchpad deep_config.py): 16.1mm deeper, 0.00006mm XY
-# drift, joint_2 margin still 33.7deg.
-GRASP_Q_DEG = [-19.428, 56.3077, 13.9074, -14.9532, 21.3373, 114.6585]
+# NOMINAL near-vertical GRASP_Q (the FK-reachable config; the cube is now placed
+# at THIS pose's live drooped pad position -- see the SCENE block above). Run-2's
+# droop-pre-compensated deeper config is retired: the pad could not actually
+# descend to it (torque-limited floor), so the fix moved the CUBE up to the pad
+# instead of the pad down to the cube.
+GRASP_Q_DEG = [-19.4595, 53.2382, 14.9828, -14.9277, 21.9517, 114.6585]
 PREGRASP_Q_DEG = [-19.5117, 47.5355, 16.5996, -14.892, 22.9696, 114.6585]
 HOME_Q = [0.0] * 6
 GRASP_Q_BASE = [math.radians(d) for d in GRASP_Q_DEG]

@@ -158,6 +158,16 @@ parser.add_argument("--integral_ki", type=float, default=6.0,
 parser.add_argument("--integral_clamp", type=float, default=400.0,
                     help="Anti-windup clamp (N*m) on each arm joint's integral effort -- well below "
                          "the 1500 N*m drive maxForce, generous vs the few-N*m loads involved.")
+parser.add_argument("--arm_armature", type=float, default=0.0,
+                    help="RUN-6 fix: joint ARMATURE (reflected actuator inertia, PhysxJointAxisAPI) "
+                         "authored on each arm joint before reset. The diagnostic proved the AR4 wrist "
+                         "joints (4,5,6) don't hold their commanded position (near-zero drive effort at "
+                         "large error, worse with higher stiffness) -- the classic low/zero distal-link "
+                         "inertia drive pathology, whose textbook cure is armature. 0 = off. Try ~0.5.")
+parser.add_argument("--quick", action="store_true",
+                    help="Quick diagnostic: only section A (per-joint tracking at GRASP_Q) + a +5deg "
+                         "per-joint command-tracking probe, then exit -- to validate the armature fix "
+                         "cheaply without the full A-E battery.")
 args_cli = parser.parse_args()
 
 # enable_cameras (and thus the RTX render pipeline) ONLY when capturing video.
@@ -625,6 +635,26 @@ def main():
             _adrive.CreateMaxForceAttr().Set(ARM_MAX_FORCE)
             log(f"[ARM DRIVE] authored angular force-type drive on {_ajprim.GetPath()} "
                 f"(stiffness={ARM_KP}, damping={ARM_KD}, maxForce={ARM_MAX_FORCE} N*m)")
+            # RUN-6 (2026-07-30, ar4-gravity-droop): the wrist joints (4,5,6)
+            # do NOT hold their commanded position -- near-zero drive effort at
+            # large error, worse with higher stiffness (diagnostic D2/D3) -- the
+            # signature of low/zero distal-link inertia making the position drive
+            # ill-conditioned. Author ARMATURE (reflected actuator inertia) on
+            # each arm joint axis so the drive is well-conditioned and actually
+            # tracks. Attribute: PhysxJointAxisAPI(<axis>):armature. Try the
+            # likely axis instance names for a revolute drive.
+            if args_cli.arm_armature > 0.0:
+                _armed = False
+                for _axis in ("angular", "rotX", "X"):
+                    try:
+                        _axapi = PhysxSchema.PhysxJointAxisAPI.Apply(_ajprim, _axis)
+                        _axapi.CreateArmatureAttr().Set(float(args_cli.arm_armature))
+                        _armed = _axis
+                        break
+                    except Exception:
+                        continue
+                log(f"[ARM ARMATURE] joint {_ajname}: armature={args_cli.arm_armature} "
+                    f"authored via PhysxJointAxisAPI axis='{_armed}'")
 
         for _jname in GRIP_JOINTS:
             _jprim = find_prim_by_name(stage, AR4_ROOT, _jname)
@@ -1165,6 +1195,27 @@ def main():
 
         log("\n[DIAG] --- (A) GRAVITY ON, PD only (baseline droop) ---")
         pad_base, meff_base = _per_joint_report("A_grav_on")
+
+        if args_cli.quick:
+            # QUICK mode: just A (per-joint tracking at GRASP_Q) + per-joint +5deg
+            # command-tracking probe, then exit. Used to validate the armature fix
+            # cheaply (does the wrist now track?) without the full A-E battery.
+            log(f"[DIAG QUICK] arm_armature={args_cli.arm_armature}: per-joint +5deg tracking probe")
+            drive(GRASP_Q, GRIP_OPEN, 150, render=False)
+            base_ach = np.array(robot.get_joint_positions())
+            for k, i in enumerate(arm_idx):
+                qtest = list(GRASP_Q); qtest[k] += math.radians(5.0)
+                drive(qtest, GRIP_OPEN, 200, render=False)
+                moved = math.degrees(float(np.array(robot.get_joint_positions())[i] - base_ach[i]))
+                log(f"[DIAG QUICK] {ARM_JOINTS[k]:8s} +5.00deg cmd -> moved {moved:+6.2f}deg "
+                    f"({'TRACKS' if abs(moved-5.0)<1.5 else 'WEAK/DEAD'})")
+                drive(GRASP_Q, GRIP_OPEN, 150, render=False)
+            pad_q, _ = _per_joint_report("QUICK_final")
+            log(f"[DIAG QUICK] pad_z residual_vs_cube_center={(pad_q[2]-cube_center_z)*1000:+.2f}mm "
+                f"({'REACHES center (armature fix works)' if abs(pad_q[2]-cube_center_z)<0.003 else 'still off'})")
+            log("\n[DIAG] DIAGNOSTIC COMPLETE (VERDICT: DROOP_DIAG_DONE)")
+            _R.close(); simulation_app.close(); return
+
         # generalized gravity force query
         g_vec = _query_gravity_forces()
         if g_vec is not None:

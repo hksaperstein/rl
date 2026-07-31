@@ -186,6 +186,18 @@ parser.add_argument("--empty_scene", action="store_true",
                     help="Place pedestal+cube 5m out of reach so nothing collides with the arm -- the "
                          "decisive test for whether GRASP_Q is blocked by an EXTERNAL scene collision "
                          "(the arm should then reach the FK pad z ~0.0562 freely) vs a self-collision.")
+parser.add_argument("--side_grasp", action="store_true",
+                    help="SIDE / HORIZONTAL grasp mode (2026-07-31, ar4-side-grasp task). The proven "
+                         "blocker (kb 2026-07-31 UPDATE): a centered TOP-DOWN approach is collision-"
+                         "blocked -- the gripper palm/body (48.5mm palm-to-fingertip depth) jams on the "
+                         "cube TOP FACE ~9mm early; shallow fingers cannot straddle a 15mm cube from "
+                         "directly above. This mode instead orients the gripper HORIZONTALLY (approach "
+                         "axis along world +X, jaw-slide/closing axis along world Y) so the pads close "
+                         "onto the cube's two VERTICAL +Y/-Y faces at mid-height and the palm sits on the "
+                         "-X SIDE of the cube, never above it -- sidestepping the top collision entirely. "
+                         "Uses a NARROW pedestal (narrow in Y) so the pads clear it at the cube faces. "
+                         "All poses (PREGRASP/GRASP/LIFT) are FK/IK-derived with joint-limit margin "
+                         "(tightest joint_5 ~12.6deg at grasp) -- see scripts/_design_ar4_side_grasp.py.")
 args_cli = parser.parse_args()
 
 # enable_cameras (and thus the RTX render pipeline) ONLY when capturing video.
@@ -470,6 +482,45 @@ ARM_MAX_FORCE = 1500.0  # N*m per arm joint drive -- generous ceiling; feedforwa
 GRIP_KP, GRIP_KD = 5000.0, 200.0
 
 JAW1_LOWER_EXTENT = 0.018475  # fingertip offset below jaw link origin
+
+# ---- SIDE / HORIZONTAL grasp config (2026-07-31, ar4-side-grasp task) -------
+# Overrides the near-vertical top-down scene+poses above with a horizontal side
+# grasp that sidesteps the proven palm-vs-cube-top collision (kb 2026-07-31
+# UPDATE). Derived offline via scripts/_design_ar4_side_grasp.py (pure-FK/IK on
+# tasks/ar4/fk_verification.py's vendor-URDF chain + the measured 12.5mm local-Y
+# pad centroid). Geometry:
+#   - approach axis = world +X (link_6/palm on the -X side of the cube, fingers
+#     reach +X toward the cube); closing/jaw-slide axis = world Y (pads grip the
+#     cube's +Y and -Y VERTICAL faces at mid-height).
+#   - cube center world = (-0.12, 0.28, 0.09); pedestal top z = 0.0825 (cube
+#     half-height 7.5mm below center). The whole gripper sits at z~0.09, 7.5mm
+#     above the pedestal top, with the finger LONG axis pointing horizontally
+#     (+X), so the fingers do not dip toward the pedestal.
+#   - NARROW pedestal (30mm X x 10mm Y): narrower than the 15mm cube in Y, so the
+#     pads closing onto the +/-7.5mm cube faces clear the pedestal top laterally.
+#   - joint-limit margins (deg): GRASP tightest joint_5=12.6; PREGRASP j5=8.8;
+#     LIFT(+50mm) j5=7.9. All comfortably inside limits.
+SIDE_GRASP = args_cli.side_grasp
+SIDE_LIFT_Q_DEG = [-36.8047, 51.8462, 26.3231, -53.7862, 97.0561, -9.5172]  # +50mm up
+SIDE_LIFT_Q = [math.radians(d) for d in SIDE_LIFT_Q_DEG]
+if SIDE_GRASP:
+    GRASP_Q_DEG = [-36.8089, 62.1258, 23.7873, -53.2924, 92.4411, -3.2426]
+    PREGRASP_Q_DEG = [-41.132, 62.6465, 17.8947, -49.2824, 96.1933, -7.1265]
+    GRASP_Q_BASE = [math.radians(d) for d in GRASP_Q_DEG]
+    PREGRASP_Q = [math.radians(d) for d in PREGRASP_Q_DEG]
+    IK_GRASP_Q_DEG = list(GRASP_Q_DEG)
+    IK_GRASP_Q = [math.radians(d) for d in IK_GRASP_Q_DEG]
+    VERT_DESCENT_DIR = [ik - b for ik, b in zip(IK_GRASP_Q, GRASP_Q_BASE)]  # ~0
+    GRASP_Q = list(IK_GRASP_Q)
+    if args_cli.grasp_depth_extra != 0.0:
+        _k = args_cli.grasp_depth_extra
+        GRASP_Q = [g + _k * d for g, d in zip(IK_GRASP_Q, VERT_DESCENT_DIR)]
+    # scene: cube on a NARROW pedestal, gripper approaches horizontally from -X
+    PEDESTAL_CENTER_XY = (-0.12, 0.28)
+    PEDESTAL_FOOTPRINT = (0.03, 0.010)   # 30mm X x 10mm Y -- narrow in the grip (Y) axis
+    PEDESTAL_HEIGHT = 0.0825
+    CUBE_XY = (-0.12, 0.28)
+    CUBE_REST_Z = PEDESTAL_HEIGHT + CUBE_SIZE / 2.0  # 0.09 == FK pad-midpoint z
 
 RESULT_PATH = f"/workspace/rl/logs/standalone_pick_result_{args_cli.mechanism}.txt"
 VIDEO_DIR = f"/workspace/rl/logs/videos/ar4_isaacsim_standalone_pick/{args_cli.mechanism}"
@@ -937,9 +988,18 @@ def main():
     # to the red cube through the whole pick despite arm-link occlusion. The
     # camera prim's USD orientation is set DIRECTLY via a lookat matrix
     # (unambiguous), bypassing the isaacsim camera_axes convention.
-    CAM_A_EYE = [0.9, 1.0, 0.85]      # +X +Y high 3/4
-    CAM_B_EYE = [-1.1, 1.0, 0.85]     # -X +Y high 3/4
-    CAM_TGT = [-0.122, 0.372, 0.20]   # aim at new cube XY / mid lift arc
+    if SIDE_GRASP:
+        # Side grasp: cube at (-0.12,0.28,0.09), gripper approaches horizontally
+        # from -X (palm on -X side), pads grip the +Y/-Y faces, lift straight up
+        # to z~0.14. Closeup from +X+Y (sees the gripper come in + the cube);
+        # elbow from -X+Y (over the gripper's shoulder). Aim at mid lift arc.
+        CAM_A_EYE = [0.45, 0.72, 0.32]    # +X +Y closeup
+        CAM_B_EYE = [-0.75, 0.62, 0.42]   # -X +Y over-the-shoulder
+        CAM_TGT = [-0.12, 0.28, 0.11]
+    else:
+        CAM_A_EYE = [0.9, 1.0, 0.85]      # +X +Y high 3/4
+        CAM_B_EYE = [-1.1, 1.0, 0.85]     # -X +Y high 3/4
+        CAM_TGT = [-0.122, 0.372, 0.20]   # aim at new cube XY / mid lift arc
 
     def _set_cam_lookat(prim_path, eye, target):
         eye = np.asarray(eye, float); target = np.asarray(target, float)
@@ -1628,15 +1688,28 @@ def main():
     _e2 = _e2 / (np.linalg.norm(_e2) + 1e-12)
     _e3 = np.cross(_e1, _e2)
     _Bl6 = np.column_stack([_e1, _e2, _e3])
-    # desired WORLD basis: sep -> +X, approach -> -Z, third = X x (-Z) = +Y
-    _D = np.column_stack([np.array([1.0, 0.0, 0.0]),
-                          np.array([0.0, 0.0, -1.0]),
-                          np.array([0.0, 1.0, 0.0])])
+    if SIDE_GRASP:
+        # SIDE grasp desired WORLD basis: sep -> world Y (grip the cube's +Y/-Y
+        # vertical faces), approach -> world +X (palm on the -X side). Match the
+        # live sep-axis SIGN so the target is the nearest axis-aligned horizontal
+        # frame to the current (already-horizontal) GRASP_Q, not a 180deg flip.
+        _sep_sign = 1.0 if _sep_w[1] >= 0 else -1.0
+        _sep_tgt = np.array([0.0, _sep_sign, 0.0])
+        _app_tgt = np.array([1.0, 0.0, 0.0])
+        _third = np.cross(_sep_tgt, _app_tgt)
+        _D = np.column_stack([_sep_tgt, _app_tgt, _third])
+        _orient_desc = "horizontal (sep->Y, approach->+X)"
+    else:
+        # desired WORLD basis: sep -> +X, approach -> -Z, third = X x (-Z) = +Y
+        _D = np.column_stack([np.array([1.0, 0.0, 0.0]),
+                              np.array([0.0, 0.0, -1.0]),
+                              np.array([0.0, 1.0, 0.0])])
+        _orient_desc = "vertical (sep->X, approach->-Z)"
     _Rtgt = _D @ _Bl6.T
     q_orient_target = mat_to_quat_wxyz(_Rtgt)
     _init_oerr = float(np.linalg.norm(rot_err_vec(q_orient_target, _ql6)))
-    log(f"[SERVO] vertical-orientation target built; initial gripper is {_init_oerr:.3f}rad "
-        f"({math.degrees(_init_oerr):.1f}deg) from vertical (sep->X, approach->-Z)")
+    log(f"[SERVO] orientation target built ({_orient_desc}); initial gripper is {_init_oerr:.3f}rad "
+        f"({math.degrees(_init_oerr):.1f}deg) from target")
     target_m6 = np.concatenate([target_xyz, np.zeros(3)])
 
     def measure6():
@@ -1818,13 +1891,19 @@ def main():
     # grip_hold is only used by the legacy position path; in friction mode the
     # squeeze (effort or capped-force) persists via drive() regardless.
     grip_hold = GRIP_CLOSED
-    cz["P4_LIFT"] = traj(grasp_q_use, PREGRASP_Q, grip_hold, 60, "LIFT")
+    # SIDE grasp: the grip is on the cube's two VERTICAL faces, so a genuine
+    # friction hold must resist gravity by lifting the cube straight UP (not the
+    # near-vertical mode's back-off-to-PREGRASP, which retreats horizontally).
+    # LIFT to SIDE_LIFT_Q (+50mm straight up, FK/IK-derived, j5 margin 7.9deg),
+    # HOLD there, then RETREAT back down/out via PREGRASP.
+    _lift_target = SIDE_LIFT_Q if SIDE_GRASP else PREGRASP_Q
+    cz["P4_LIFT"] = traj(grasp_q_use, _lift_target, grip_hold, 60, "LIFT")
     report("after LIFT")
     jaw_geometry("P4_after_LIFT")
     contact_report("P4_after_LIFT")
-    drive(PREGRASP_Q, grip_hold, 40, render=True)
+    drive(_lift_target, grip_hold, 40, render=True)
     cz["P5_HOLD"] = cube_pose()[0][2]
-    cz["P6_RETREAT"] = traj(PREGRASP_Q, HOME_Q, grip_hold, 100, "RETREAT")
+    cz["P6_RETREAT"] = traj(_lift_target, PREGRASP_Q if SIDE_GRASP else HOME_Q, grip_hold, 100, "RETREAT")
     report("after RETREAT")
     jaw_geometry("P6_after_RETREAT")
     contact_report("P6_after_RETREAT")

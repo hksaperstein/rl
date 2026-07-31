@@ -123,6 +123,25 @@ parser.add_argument("--squeeze_force", type=float, default=5.0,
                          "is a large safety margin; kept modest (default 5N, NOT the old 500N which "
                          "would eject/penetrate a 10g cube) so the small cube is squeezed, not "
                          "launched. Measured contact normal force is logged as the proof it is real.")
+parser.add_argument("--droop_diagnostic", action="store_true",
+                    help="DIAGNOSTIC MODE (2026-07-30, ar4-gravity-droop task). Instead of the full "
+                         "pick, command the arm to the reachable GRASP_Q, settle to STEADY STATE, and "
+                         "report per-arm-joint commanded-vs-achieved angle + measured joint effort vs "
+                         "the drive's maxForce/effort limit, introspect the articulation's "
+                         "generalized-gravity-force API, run a GRAVITY-OFF control (does the pad reach "
+                         "cube-center Z with gravity disabled?), and test gravity-feedforward comp "
+                         "(both signs) -- the decisive joint-level diagnostic for the persistent "
+                         "11-16mm vertical droop that blocked runs 1-4. No video, no pick. Exits after.")
+parser.add_argument("--gravity_comp", action="store_true",
+                    help="Enable FEEDFORWARD GRAVITY COMPENSATION on the arm joints: each physics step, "
+                         "query the articulation's generalized gravity force G(q) and apply it as an "
+                         "additive joint EFFORT on the arm DOFs so the PD drive only handles the "
+                         "residual (a plain PD controller sags under gravity because it counters "
+                         "position error, not the gravitational load). The feedforward sign is "
+                         "auto-calibrated live at the grasp pose (pick whichever sign drives the pad "
+                         "DOWN toward the cube center). This is the fix for the droop that resisted "
+                         "60x drive maxForce -- feedforward injects the holding torque directly rather "
+                         "than relying on drive stiffness/force headroom.")
 args_cli = parser.parse_args()
 
 # enable_cameras (and thus the RTX render pipeline) ONLY when capturing video.
@@ -386,8 +405,17 @@ GRIP_CLOSED = 0.0
 # measurements feeding the Broyden update are quiet. 8000/600 (KD/KP=0.075).
 # RUN-4: firmer arm gains + high-maxForce arm drives (see the arm-drive
 # authoring block) to eliminate the ~16mm gravity droop that blocked runs 1-3.
-ARM_KP, ARM_KD = 20000.0, 1000.0
-ARM_MAX_FORCE = 3000.0  # N*m per arm joint drive -- must exceed gravity holding torque
+# RUN-5 (2026-07-30, ar4-gravity-droop task): run 4 PROVED brute force is the
+# wrong lever -- 60x maxForce (3000 N*m) + 2.5x stiffness (20000) cut the droop
+# only ~30% AND its extreme stiffness introduced a gripper-won't-close solver
+# artifact and oscillation that corrupted the servo's online Jacobian. The
+# principled fix is FEEDFORWARD GRAVITY COMPENSATION (--gravity_comp): inject
+# G(q) as joint effort so the PD holds pose with ~0 steady-state error at MODERATE
+# gains. So revert to the documented clean, well-damped 8000/600 (KD/KP=0.075) --
+# the choice the servo measures best at -- with a healthy (not extreme) maxForce
+# ceiling. Gravity comp, not stiffness, closes the droop now.
+ARM_KP, ARM_KD = 8000.0, 600.0
+ARM_MAX_FORCE = 1500.0  # N*m per arm joint drive -- generous ceiling; feedforward carries the gravity load
 # GRIP_KP sets the closing/squeeze force: force = GRIP_KP * jaw position error.
 # At cube contact each jaw sits ~0.0065m short of its 0-target, so 5000*0.0065
 # ~= 33N squeeze -- firm, well above the ~0.12N needed for the 10g cube, but
@@ -884,14 +912,77 @@ def main():
     _arm_idx_np = np.array(arm_idx, dtype=np.int32)
     _grip_idx_np = np.array(grip_idx, dtype=np.int32)
 
+    # --- FEEDFORWARD GRAVITY COMPENSATION (2026-07-30, ar4-gravity-droop) ----
+    # Root-cause fix for the persistent 11-16mm vertical droop that resisted 60x
+    # arm-drive maxForce (runs 1-4): a plain PD position drive sags under gravity
+    # because its force is proportional ONLY to position error, so it must droop
+    # to generate any holding torque at all. Feedforward the generalized gravity
+    # force G(q) as an additive joint EFFORT each step -> the PD then only handles
+    # the residual, and the commanded pose is held with ~0 steady-state error
+    # regardless of the drive's effective stiffness/force headroom. The applied
+    # joint effort is an ADDITIVE actuation force in PhysX's reduced-coordinate
+    # articulation (summed with the position drive's force), NOT a replacement.
+    grav = {"active": False, "sign": 1.0, "api": None}
+
+    def _query_gravity_forces():
+        """Return the generalized gravity force vector G(q) over all DOFs, or
+        None. Defensive: the exact method name on this Isaac Sim 5.1
+        SingleArticulation is introspected at runtime (candidates below), the
+        winner cached in grav['api']."""
+        candidates = [robot] + [getattr(robot, a, None) for a in
+                                ("_articulation_view", "_physics_view", "_articulation")]
+        method_names = ("get_generalized_gravity_forces",
+                        "get_gravity_compensation_forces")
+        if grav["api"] is not None:
+            obj, name = grav["api"]
+            try:
+                return np.asarray(getattr(obj, name)()).reshape(-1)
+            except Exception:
+                grav["api"] = None
+        for obj in candidates:
+            if obj is None:
+                continue
+            for name in method_names:
+                fn = getattr(obj, name, None)
+                if fn is None:
+                    continue
+                try:
+                    g = np.asarray(fn()).reshape(-1)
+                    if g.size >= robot.num_dof:
+                        grav["api"] = (obj, name)
+                        return g
+                except Exception:
+                    continue
+        return None
+
+    def _gravity_ff_effort():
+        """Full num_dof effort array: arm DOFs = sign*G(q), others 0."""
+        eff = np.zeros(robot.num_dof, dtype=np.float32)
+        if not grav["active"]:
+            return None
+        g = _query_gravity_forces()
+        if g is None or g.size < robot.num_dof:
+            return None
+        for i in arm_idx:
+            eff[i] = grav["sign"] * float(g[i])
+        return eff
+
     def drive(q_arm, grip_val, steps, render=True):
         do_render = render and RENDER
         for _ in range(steps):
+            gff = _gravity_ff_effort()  # None unless gravity comp active
             if squeeze["active"] and args_cli.squeeze_mode == "effort":
-                # arm on position control (arm DOFs only); jaws on pure EFFORT
-                controller.apply_action(ArticulationAction(
-                    joint_positions=np.array(q_arm, dtype=np.float32),
-                    joint_indices=_arm_idx_np))
+                # arm on position control (arm DOFs only); jaws on pure EFFORT.
+                # Gravity feedforward (if active) rides on the arm apply_action.
+                if gff is not None:
+                    controller.apply_action(ArticulationAction(
+                        joint_positions=np.array(q_arm, dtype=np.float32),
+                        joint_efforts=gff[_arm_idx_np],
+                        joint_indices=_arm_idx_np))
+                else:
+                    controller.apply_action(ArticulationAction(
+                        joint_positions=np.array(q_arm, dtype=np.float32),
+                        joint_indices=_arm_idx_np))
                 controller.apply_action(ArticulationAction(
                     joint_efforts=np.full(len(grip_idx), squeeze["eff"], dtype=np.float32),
                     joint_indices=_grip_idx_np))
@@ -900,7 +991,11 @@ def main():
                 # force the jaw target CLOSED (past the cube) regardless of the
                 # grip_val the caller passed, so the capped-force squeeze holds.
                 gv = GRIP_CLOSED if (squeeze["active"] and args_cli.squeeze_mode == "position") else grip_val
-                controller.apply_action(ArticulationAction(joint_positions=full_targets(q_arm, gv)))
+                if gff is not None:
+                    controller.apply_action(ArticulationAction(
+                        joint_positions=full_targets(q_arm, gv), joint_efforts=gff))
+                else:
+                    controller.apply_action(ArticulationAction(joint_positions=full_targets(q_arm, gv)))
             world.step(render=do_render)
             step_ctr["n"] += 1
             if step_ctr["n"] % 10 == 0:
@@ -963,6 +1058,128 @@ def main():
             f"grip_dof={dof_grip.tolist()} jaw1_pos_m={p1.tolist()} jaw2_pos_m={p2.tolist()}")
         return fsep_mm, foff_mm
 
+    def _pad_mid_xyz():
+        """Tilt-correct true jaw-pad midpoint (world). Same measured 12.5mm
+        local-Y offset as the servo's fingertip_mid_xyz, duplicated here so the
+        diagnostic is usable independent of the servo block."""
+        p1, q1 = link_world_pose(stage, GRIP1_PATH)
+        p2, q2 = link_world_pose(stage, GRIP2_PATH)
+        off = np.array([0.0, -0.0125, 0.0])
+        return (p1 + quat_apply(q1, off) + p2 + quat_apply(q2, off)) / 2.0
+
+    # ======================================================================
+    # DROOP DIAGNOSTIC MODE (2026-07-30, ar4-gravity-droop task)
+    # ======================================================================
+    if args_cli.droop_diagnostic:
+        log("\n" + "#" * 70)
+        log("# JOINT-LEVEL DROOP DIAGNOSTIC")
+        log("#" * 70)
+        cube_p = cube_pose()[0]
+        cube_center_z = float(cube_p[2])
+        log(f"[DIAG] cube center world = {cube_p.tolist()}  (cube_center_z={cube_center_z:.5f})")
+
+        # introspect the articulation API surface (once) so we KNOW the exact
+        # generalized-gravity / effort-limit method names on this 5.1 build.
+        api_hits = sorted([m for m in dir(robot) if any(
+            k in m.lower() for k in ("grav", "mass", "coriolis", "jacob", "effort", "force", "max"))])
+        log(f"[DIAG API] robot methods of interest: {api_hits}")
+
+        # command the reachable GRASP_Q and settle HARD to true steady state
+        drive(HOME_Q, GRIP_OPEN, 40, render=False)
+        traj(HOME_Q, PREGRASP_Q, GRIP_OPEN, 80, "DIAG HOME->PREGRASP", render=False)
+        traj(PREGRASP_Q, GRASP_Q, GRIP_OPEN, 60, "DIAG PREGRASP->GRASP", render=False)
+        drive(GRASP_Q, GRIP_OPEN, 400, render=False)  # long settle -> steady state
+
+        def _per_joint_report(tag):
+            ach = np.array(robot.get_joint_positions())
+            cmd = np.array(GRASP_Q)
+            try:
+                meff = np.array(robot.get_measured_joint_efforts()).reshape(-1)
+            except Exception as e:
+                meff = None
+                log(f"[DIAG {tag}] get_measured_joint_efforts failed: {e}")
+            pad = _pad_mid_xyz()
+            log(f"[DIAG {tag}] pad_mid_z={pad[2]:.5f}  pad_z_err_vs_cube_center_mm={(pad[2]-cube_center_z)*1000:+.2f} "
+                f"pad_xyz={['%.5f'%v for v in pad]}")
+            for k, i in enumerate(arm_idx):
+                err_deg = math.degrees(float(ach[i] - cmd[k]))
+                eff = float(meff[i]) if meff is not None else float('nan')
+                log(f"[DIAG {tag}] {ARM_JOINTS[k]:8s} cmd={math.degrees(cmd[k]):+8.3f}deg "
+                    f"ach={math.degrees(float(ach[i])):+8.3f}deg  err={err_deg:+7.3f}deg  "
+                    f"measured_effort={eff:+9.3f}  drive_maxForce={ARM_MAX_FORCE:.0f}")
+            return pad, meff
+
+        log("\n[DIAG] --- (A) GRAVITY ON, PD only (baseline droop) ---")
+        pad_base, meff_base = _per_joint_report("A_grav_on")
+        # generalized gravity force query
+        g_vec = _query_gravity_forces()
+        if g_vec is not None:
+            log(f"[DIAG] generalized gravity forces G(q) [all dof] = {[round(float(v),3) for v in g_vec]}")
+            log(f"[DIAG] G(q) on ARM dofs = {[round(float(g_vec[i]),3) for i in arm_idx]}  "
+                f"(via {grav['api'][1] if grav['api'] else '?'})")
+            if meff_base is not None:
+                log("[DIAG] SATURATION CHECK per arm joint: |measured_effort| vs drive_maxForce "
+                    f"({ARM_MAX_FORCE:.0f}) and |G|:")
+                for k, i in enumerate(arm_idx):
+                    log(f"[DIAG]   {ARM_JOINTS[k]:8s} |meas|={abs(float(meff_base[i])):8.3f} "
+                        f"|G|={abs(float(g_vec[i])):8.3f} maxForce={ARM_MAX_FORCE:.0f} "
+                        f"-> {'SATURATING' if abs(float(meff_base[i]))>0.95*ARM_MAX_FORCE else 'below cap'}")
+        else:
+            log("[DIAG] generalized gravity force API NOT available on this build (tried candidates)")
+
+        log("\n[DIAG] --- (B) GRAVITY-OFF CONTROL: disable gravity, re-settle ---")
+        grav_restored = None
+        try:
+            pc = world.get_physics_context()
+            try:
+                grav_restored = pc.get_gravity()
+            except Exception:
+                grav_restored = None
+            pc.set_gravity(0.0)
+            log("[DIAG] gravity set to 0.0 via physics_context.set_gravity")
+        except Exception as e:
+            log(f"[DIAG] physics_context.set_gravity failed ({e}); trying USD scene attr")
+            try:
+                for p in Usd.PrimRange(stage.GetPrimAtPath("/World")):
+                    if p.IsA(UsdPhysics.Scene):
+                        UsdPhysics.Scene(p).CreateGravityMagnitudeAttr().Set(0.0)
+                        log(f"[DIAG] set gravityMagnitude=0 on {p.GetPath()}")
+            except Exception as e2:
+                log(f"[DIAG] USD gravity-off also failed: {e2}")
+        drive(GRASP_Q, GRIP_OPEN, 400, render=False)
+        pad_goff, _ = _per_joint_report("B_grav_off")
+        log(f"[DIAG] GRAVITY-OFF verdict: pad_z moved {(pad_goff[2]-pad_base[2])*1000:+.2f}mm vs grav-on; "
+            f"residual_vs_cube_center={(pad_goff[2]-cube_center_z)*1000:+.2f}mm "
+            f"({'REACHES cube center (droop IS gravity)' if abs(pad_goff[2]-cube_center_z)<0.003 else 'still off center (NOT purely gravity)'})")
+        # restore gravity
+        try:
+            world.get_physics_context().set_gravity(-9.81 if grav_restored is None else grav_restored)
+            log("[DIAG] gravity restored")
+        except Exception as e:
+            log(f"[DIAG] gravity restore failed: {e}")
+        drive(GRASP_Q, GRIP_OPEN, 200, render=False)
+
+        log("\n[DIAG] --- (C) FEEDFORWARD GRAVITY COMP test (both signs) ---")
+        if g_vec is None:
+            log("[DIAG] no gravity-force API -> cannot test feedforward comp; skipping (C)")
+        else:
+            _per_joint_report("C0_grav_on_recheck")
+            for sgn in (1.0, -1.0):
+                grav["active"] = True
+                grav["sign"] = sgn
+                drive(GRASP_Q, GRIP_OPEN, 300, render=False)
+                pad_ff, _ = _per_joint_report(f"C_ff_sign{int(sgn):+d}")
+                log(f"[DIAG] feedforward sign={sgn:+.0f}: pad_z residual_vs_cube_center="
+                    f"{(pad_ff[2]-cube_center_z)*1000:+.2f}mm "
+                    f"(baseline droop was {(pad_base[2]-cube_center_z)*1000:+.2f}mm)")
+                grav["active"] = False
+                drive(GRASP_Q, GRIP_OPEN, 150, render=False)  # relax back
+
+        log("\n[DIAG] DIAGNOSTIC COMPLETE (VERDICT: DROOP_DIAG_DONE)")
+        _R.close()
+        simulation_app.close()
+        return
+
     # ---- execute the pick -------------------------------------------------
     drive(HOME_Q, GRIP_OPEN, 40, render=False)
     cube_rest_z = cube_pose()[0][2]
@@ -978,6 +1195,41 @@ def main():
     cz["P2_GRASP"] = traj(PREGRASP_Q, GRASP_Q, GRIP_OPEN, 60, "PREGRASP->GRASP")
     report("at GRASP (open)")
     jaw_geometry("P2_GRASP(open, before descent)")
+
+    # ---- GRAVITY-COMP ACTIVATION + LIVE SIGN AUTO-CALIBRATION ------------
+    # The droop makes the pad float HIGH (Z too high above the cube center).
+    # Compensating gravity lets the arm HOLD its commanded (lower) pose, so the
+    # correct feedforward sign is the one that drives pad_z DOWN toward the
+    # cube. Calibrate live (the generalized-gravity API's sign convention is not
+    # assumed): settle no-comp, settle +G, settle -G, keep whichever lands
+    # pad_z closest to the cube center. Then leave gravity comp ON for the rest
+    # of the pick (servo, close, lift, retreat all hold pose against gravity).
+    if args_cli.gravity_comp:
+        cube_center_z = float(cube_pose()[0][2])
+        g_probe = _query_gravity_forces()
+        if g_probe is None:
+            log("[GRAVCOMP] WARNING: generalized-gravity API unavailable -- gravity comp DISABLED, "
+                "falling back to PD only (expect droop). Diagnostic mode reports the API surface.")
+        else:
+            drive(GRASP_Q, GRIP_OPEN, 120, render=False)
+            z_none = _pad_mid_xyz()[2]
+            grav["active"] = True
+            grav["sign"] = 1.0
+            drive(GRASP_Q, GRIP_OPEN, 200, render=False)
+            z_plus = _pad_mid_xyz()[2]
+            grav["sign"] = -1.0
+            drive(GRASP_Q, GRIP_OPEN, 200, render=False)
+            z_minus = _pad_mid_xyz()[2]
+            # pick sign whose settled pad_z is closest to cube center
+            err_plus, err_minus = abs(z_plus - cube_center_z), abs(z_minus - cube_center_z)
+            grav["sign"] = 1.0 if err_plus <= err_minus else -1.0
+            grav["active"] = True
+            drive(GRASP_Q, GRIP_OPEN, 200, render=False)
+            z_final = _pad_mid_xyz()[2]
+            log(f"[GRAVCOMP] sign calibration: pad_z no-comp={z_none:.5f} (+G)={z_plus:.5f} "
+                f"(-G)={z_minus:.5f} cube_center={cube_center_z:.5f} -> chose sign={grav['sign']:+.0f}; "
+                f"settled pad_z={z_final:.5f} residual_vs_center={(z_final-cube_center_z)*1000:+.2f}mm "
+                f"(droop no-comp was {(z_none-cube_center_z)*1000:+.2f}mm)")
 
     # ---- 3-AXIS EMPIRICAL-JACOBIAN SERVO TO CUBE CENTER ------------------
     # ROOT CAUSE this replaces (measured live 2026-07-30): the prior 1-D

@@ -1224,25 +1224,48 @@ def main():
                 drive(GRASP_Q, GRIP_OPEN, 150, render=False)  # relax back
             grav["mode"] = args_cli.assist_mode
 
-        log("\n[DIAG] --- (D) INTEGRAL-EFFORT TRACKING ASSIST test (the fix) ---")
-        # THE FIX under test: an integral term on applied joint effort that ramps
-        # until each arm joint's (commanded-achieved) error is nulled -> achieved
-        # pose lands on the commanded FK pose == pad at cube center. Cause-
-        # agnostic (works whether the offset is friction, weak drive, or gravity).
-        grav["mode"] = "integral"
-        _reset_integrator()
-        _per_joint_report("D0_before_integral")
-        grav["active"] = True
-        for _w in (100, 100, 100, 100, 100):
-            drive(GRASP_Q, GRIP_OPEN, _w, render=False)
-            pad_i, _ = _per_joint_report(f"D_integral_after{step_ctr['n']}")
-            log(f"[DIAG] integral assist: pad_z residual_vs_cube_center="
-                f"{(pad_i[2]-cube_center_z)*1000:+.2f}mm  integ_arm="
-                f"{[round(float(grav['integ'][i]),2) for i in arm_idx]}")
-        log(f"[DIAG] INTEGRAL verdict: baseline droop {(pad_base[2]-cube_center_z)*1000:+.2f}mm -> "
-            f"after integral {(pad_i[2]-cube_center_z)*1000:+.2f}mm "
-            f"({'NULLED (fix works)' if abs(pad_i[2]-cube_center_z)<0.003 else 'residual remains -- retune ki/clamp'})")
-        grav["active"] = False
+        log("\n[DIAG] --- (D) POSITION-DRIVE investigation (why wrist joints don't track) ---")
+        # The +9mm gap is a POSITION-TRACKING failure: wrist joints settle 4-9deg
+        # off command at near-zero effort (an 8000-stiffness drive would exert
+        # ~1200 N*m at 8.6deg). Effort feedforward is unstable (no effective drive
+        # to stabilize it -> runaway). So investigate the POSITION drive directly.
+        # (D1) read back the effective per-DOF drive gains.
+        gains_str = "unavailable"
+        try:
+            gk, gd = controller.get_gains()
+            gk = np.asarray(gk).reshape(-1); gd = np.asarray(gd).reshape(-1)
+            gains_str = "; ".join(f"{ARM_JOINTS[k]}:kp={gk[i]:.1f},kd={gd[i]:.1f}" for k, i in enumerate(arm_idx))
+        except Exception as e:
+            log(f"[DIAG D1] controller.get_gains() failed: {e}")
+        log(f"[DIAG D1] effective arm drive gains: {gains_str}")
+
+        # (D2) per-joint command-tracking probe: from GRASP_Q, add +5deg to ONE
+        # arm joint's target, settle, measure how far that joint ACTUALLY moved.
+        # delta~5deg => drive tracks; delta~0 => drive dead on that joint.
+        drive(GRASP_Q, GRIP_OPEN, 200, render=False)
+        base_ach = np.array(robot.get_joint_positions())
+        for k, i in enumerate(arm_idx):
+            qtest = list(GRASP_Q); qtest[k] += math.radians(5.0)
+            drive(qtest, GRIP_OPEN, 200, render=False)
+            moved = math.degrees(float(np.array(robot.get_joint_positions())[i] - base_ach[i]))
+            log(f"[DIAG D2] {ARM_JOINTS[k]:8s} commanded +5.00deg -> joint moved {moved:+6.2f}deg "
+                f"({'TRACKS' if abs(moved-5.0)<1.5 else 'WEAK/DEAD drive'})")
+            drive(GRASP_Q, GRIP_OPEN, 150, render=False)  # return
+
+        # (D3) FIX test: raise ALL arm drive gains hard (position-only, no effort),
+        # re-settle at GRASP_Q, and see if the joints now track -> pad at center.
+        for stiff in (50000.0, 200000.0):
+            kps2 = np.array(kps, dtype=np.float32); kds2 = np.array(kds, dtype=np.float32)
+            for i in arm_idx:
+                kps2[i] = stiff; kds2[i] = 2.0 * math.sqrt(stiff)  # ~critical-ish
+            controller.set_gains(kps=kps2, kds=kds2)
+            drive(GRASP_Q, GRIP_OPEN, 400, render=False)
+            pad_s, _ = _per_joint_report(f"D3_stiff{int(stiff)}")
+            log(f"[DIAG D3] arm stiffness={stiff:.0f}: pad_z residual_vs_cube_center="
+                f"{(pad_s[2]-cube_center_z)*1000:+.2f}mm "
+                f"({'REACHES center (stiffness fix works)' if abs(pad_s[2]-cube_center_z)<0.003 else 'still off'})")
+        # restore nominal gains
+        controller.set_gains(kps=kps, kds=kds)
 
         log("\n[DIAG] DIAGNOSTIC COMPLETE (VERDICT: DROOP_DIAG_DONE)")
         _R.close()

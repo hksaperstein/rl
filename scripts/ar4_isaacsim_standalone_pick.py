@@ -198,6 +198,31 @@ parser.add_argument("--side_grasp", action="store_true",
                          "Uses a NARROW pedestal (narrow in Y) so the pads clear it at the cube faces. "
                          "All poses (PREGRASP/GRASP/LIFT) are FK/IK-derived with joint-limit margin "
                          "(tightest joint_5 ~12.6deg at grasp) -- see scripts/_design_ar4_side_grasp.py.")
+parser.add_argument("--prism", action="store_true",
+                    help="TALL-PRISM TOP-DOWN grasp (2026-07-31, ar4-tall-prism-pick task). The proven "
+                         "blocker for a 15mm cube (kb 2026-07-31 UPDATEs): the gripper collision envelope "
+                         "hangs 15-23mm BELOW the pad plane and its body SURROUNDS a 15mm cube on a work "
+                         "surface -> geometrically infeasible top-down AND side-on. Fix (Principal decision): "
+                         "grasp a PROPERLY-SIZED object. This mode replaces the pedestal+15mm-cube with a "
+                         "TALL, NARROW rectangular prism resting directly on the GROUND (no pedestal), sized "
+                         "so the FIXED reachable pad plane (z=0.05621 at the proven near-vertical GRASP_Q) "
+                         "grips NEAR THE PRISM'S TOP: the prism is tall enough that the gripper's below-pad "
+                         "underhang clears the ground (pad 56mm up, underhang <=23mm -> >=33mm clearance) and "
+                         "NARROW enough (<28mm jaw aperture) to fit between the open jaws. Prism dims are "
+                         "--prism_width/--prism_depth/--prism_height (the last swept cheaply physics-only to "
+                         "find the height whose top clears the gripper's central body while giving a solid "
+                         "pad contact band). Reuses the proven top-down GRASP_Q/servo/squeeze machinery "
+                         "unchanged; only the object + the servo's grip-height target change.")
+parser.add_argument("--prism_width", type=float, default=0.018,
+                    help="Prism width along the jaw-SLIDE/closing axis (world X, top-down), meters. Must be "
+                         "< the ~28mm open jaw aperture; 18mm leaves ~5mm clearance per side.")
+parser.add_argument("--prism_depth", type=float, default=0.018,
+                    help="Prism depth along the third axis (world Y, top-down), meters.")
+parser.add_argument("--prism_height", type=float, default=0.056,
+                    help="Prism height (rests on ground z=0, so top = this value), meters. Chosen so the "
+                         "fixed pad plane (0.05621) grips near the top. Swept physics-only to clear the "
+                         "gripper's central-body underhang while keeping a solid pad contact band.")
+parser.add_argument("--prism_mass", type=float, default=0.025, help="Prism mass, kg.")
 parser.add_argument("--dump_gripper_aabb", action="store_true",
                     help="DIAGNOSTIC (2026-07-31, side-grasp): drive to GRASP_Q, settle, and dump the "
                          "WORLD-frame collision-mesh AABB (min/max xyz) of gripper_base_link + both jaw "
@@ -542,6 +567,35 @@ if SIDE_GRASP:
 SIDE_SUPPORT_CENTER = (-0.10, 0.28, 0.0775)   # plate center; top at 0.0825, bottom 0.0725
 SIDE_SUPPORT_SCALE = (0.06, 0.06, 0.010)       # 60x60x10mm thin plate; covers cube footprint (X -0.13..-0.07)
 
+# ---- TALL-PRISM top-down grasp config (2026-07-31, ar4-tall-prism-pick task) -
+# The measured, definitive blocker (kb 2026-07-31 UPDATEs): the AR4 gripper's
+# collision envelope hangs 15-23mm below the pad plane and SURROUNDS a 15mm cube
+# on a work surface, so a pure-friction grasp of a 15mm cube is geometrically
+# infeasible both top-down (palm jams on cube top) and side-on (body jams on the
+# support). Fix (Principal decision): grasp a PROPERLY-SIZED object. Here: a TALL
+# NARROW rectangular prism resting directly on the GROUND, reusing the SAME proven
+# near-vertical top-down GRASP_Q (which lands the pad midpoint dead-on
+# (-0.12246, 0.37247, 0.05621) with all joints tracking <0.02deg in free space --
+# empty_scene-confirmed). The prism is:
+#   - NARROW (18mm along the jaw-slide axis X) -> fits between the 28mm open jaws
+#     with ~5mm clearance per side, so the open jaws descend BESIDE it, not onto it.
+#   - TALL (height ~= the 56mm pad plane) -> its top reaches the fixed pad plane so
+#     the pads grip near the top, while its body extends down to the ground, putting
+#     the whole grasp 56mm up where the gripper's <=23mm below-pad underhang clears
+#     the ground by >=33mm. No support/pedestal to jam the body on (the cube's
+#     side-on blocker), and nothing above the pads for the palm to jam on
+#     (the cube's top-down blocker).
+# PRISM_GRIP_Z is the reachable pad-plane z the servo targets (unchanged from the
+# cube's CUBE_REST_Z, which WAS this exact pad plane). Prism dims are CLI-swept.
+TALL_PRISM = args_cli.prism
+PRISM_GRIP_Z = 0.05621  # measured pad-midpoint z at the reachable top-down GRASP_Q
+if TALL_PRISM:
+    PRISM_W = args_cli.prism_width
+    PRISM_D = args_cli.prism_depth
+    PRISM_H = args_cli.prism_height
+    PRISM_CENTER_Z = PRISM_H / 2.0      # rests on ground (bottom z=0), so center = H/2
+    PRISM_XY = (-0.12246154740662964, 0.37247094274942993)  # == pad-midpoint XY at GRASP_Q
+
 RESULT_PATH = f"/workspace/rl/logs/standalone_pick_result_{args_cli.mechanism}.txt"
 VIDEO_DIR = f"/workspace/rl/logs/videos/ar4_isaacsim_standalone_pick/{args_cli.mechanism}"
 os.makedirs(os.path.dirname(RESULT_PATH), exist_ok=True)
@@ -672,6 +726,12 @@ def main():
                 scale=np.array([SIDE_SUPPORT_SCALE[0], SIDE_SUPPORT_SCALE[1], SIDE_SUPPORT_SCALE[2]]),
                 color=np.array([0.45, 0.32, 0.22]),
             )
+        elif TALL_PRISM:
+            # NO pedestal: the tall prism rests directly on the ground (z=0). The
+            # whole grasp sits 56mm up (the reachable pad plane) so the gripper's
+            # below-pad underhang clears the ground -- and there is no support
+            # surface for the gripper body to jam on (the side-grasp blocker).
+            log("[TALL_PRISM] no pedestal -- prism rests on the ground")
         else:
             # pedestal (static collider)
             FixedCuboid(
@@ -680,14 +740,27 @@ def main():
                 scale=np.array([PEDESTAL_FOOTPRINT[0], PEDESTAL_FOOTPRINT[1], PEDESTAL_HEIGHT]),
                 color=np.array([0.45, 0.32, 0.22]),
             )
-        # cube (dynamic, 15mm)
-        cube = DynamicCuboid(
-            prim_path=CUBE_PATH,
-            position=np.array([CUBE_XY[0] + _obs_dx, CUBE_XY[1], CUBE_REST_Z]),
-            scale=np.array([CUBE_SIZE, CUBE_SIZE, CUBE_SIZE]),
-            color=np.array([0.8, 0.1, 0.1]),
-            mass=0.01,
-        )
+        if TALL_PRISM:
+            # tall narrow prism (dynamic), resting on the ground, gripped near top
+            cube = DynamicCuboid(
+                prim_path=CUBE_PATH,
+                position=np.array([PRISM_XY[0] + _obs_dx, PRISM_XY[1], PRISM_CENTER_Z]),
+                scale=np.array([PRISM_W, PRISM_D, PRISM_H]),
+                color=np.array([0.1, 0.35, 0.85]),
+                mass=args_cli.prism_mass,
+            )
+            log(f"[TALL_PRISM] prism {PRISM_W*1000:.0f}x{PRISM_D*1000:.0f}x{PRISM_H*1000:.0f}mm "
+                f"mass={args_cli.prism_mass*1000:.0f}g on ground; top_z={PRISM_H:.4f} "
+                f"pad_plane_z={PRISM_GRIP_Z:.4f} (grip {(PRISM_H-PRISM_GRIP_Z)*1000:+.1f}mm relative to top)")
+        else:
+            # cube (dynamic, 15mm)
+            cube = DynamicCuboid(
+                prim_path=CUBE_PATH,
+                position=np.array([CUBE_XY[0] + _obs_dx, CUBE_XY[1], CUBE_REST_Z]),
+                scale=np.array([CUBE_SIZE, CUBE_SIZE, CUBE_SIZE]),
+                color=np.array([0.8, 0.1, 0.1]),
+                mass=0.01,
+            )
         if args_cli.empty_scene:
             log(f"[EMPTY_SCENE] pedestal+cube shifted +{_obs_dx}m in X (out of reach) to test for external collision")
         _bc("scene_built")
@@ -1038,6 +1111,14 @@ def main():
         CAM_A_EYE = [0.75, 0.62, 0.42]    # +X +Y elevated 3/4 (mirror of the proven elbow)
         CAM_B_EYE = [-0.75, 0.62, 0.42]   # -X +Y elevated 3/4 (RUN-1's confirmed-visible elbow eye)
         CAM_TGT = [-0.12, 0.28, 0.11]
+    elif TALL_PRISM:
+        # Tall prism at (-0.122,0.372), gripped near its top (~0.056), lifted up
+        # (grasp->PREGRASP->HOME retreat) to ~0.2-0.3. Reuse the side-grasp lesson:
+        # a ~0.8m ELEVATED-3/4 framing reads the small dark gripper + blue prism
+        # legibly (near-level / too-far framings lost it). Two opposite-X views.
+        CAM_A_EYE = [0.42, 0.80, 0.52]    # +X +Y elevated 3/4 (~0.8m)
+        CAM_B_EYE = [-0.62, 0.80, 0.52]   # -X +Y elevated 3/4 (~0.8m)
+        CAM_TGT = [-0.122, 0.372, 0.13]   # aim between grip height and mid lift arc
     else:
         CAM_A_EYE = [0.9, 1.0, 0.85]      # +X +Y high 3/4
         CAM_B_EYE = [-1.1, 1.0, 0.85]     # -X +Y high 3/4
@@ -1742,7 +1823,11 @@ def main():
     # byproduct and does not need constraining.
     L = 0.0
     cube_p0 = cube_pose()[0]
-    target_xyz = np.array([cube_p0[0], cube_p0[1], cube_rest_z])  # cube CENTER, world
+    # For the tall prism, target the fixed reachable pad plane (grip NEAR THE TOP),
+    # NOT the object center (which is ~H/2 down and would drive the pad into the
+    # ground). For the cube, target its center as before.
+    _servo_target_z = PRISM_GRIP_Z if TALL_PRISM else cube_rest_z
+    target_xyz = np.array([cube_p0[0], cube_p0[1], _servo_target_z])  # grip point, world
     q_arm_cur = np.array(GRASP_Q, dtype=float)
     drive(q_arm_cur.tolist(), GRIP_OPEN, 45, render=(not args_cli.no_video))
     # ---- build a TRUE-VERTICAL gripper orientation target ----------------

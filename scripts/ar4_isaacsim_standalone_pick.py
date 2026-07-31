@@ -198,6 +198,13 @@ parser.add_argument("--side_grasp", action="store_true",
                          "Uses a NARROW pedestal (narrow in Y) so the pads clear it at the cube faces. "
                          "All poses (PREGRASP/GRASP/LIFT) are FK/IK-derived with joint-limit margin "
                          "(tightest joint_5 ~12.6deg at grasp) -- see scripts/_design_ar4_side_grasp.py.")
+parser.add_argument("--dump_gripper_aabb", action="store_true",
+                    help="DIAGNOSTIC (2026-07-31, side-grasp): drive to GRASP_Q, settle, and dump the "
+                         "WORLD-frame collision-mesh AABB (min/max xyz) of gripper_base_link + both jaw "
+                         "links + link_6, plus the pad midpoint -- to measure exactly how far the gripper "
+                         "BODY hangs below the pad plane in the grasp orientation (the suspected support-"
+                         "collision cause: FK origins clear the support but the mesh body does not). Use "
+                         "with --empty_scene so the arm reaches the true pose unobstructed. Exits after.")
 args_cli = parser.parse_args()
 
 # enable_cameras (and thus the RTX render pipeline) ONLY when capturing video.
@@ -1544,6 +1551,45 @@ def main():
         _R.close()
         simulation_app.close()
         return
+
+    # ======================================================================
+    # GRIPPER-AABB DUMP (2026-07-31, side-grasp support-collision diagnostic)
+    # ======================================================================
+    if args_cli.dump_gripper_aabb:
+        log("\n" + "#" * 70)
+        log("# GRIPPER COLLISION-MESH WORLD AABB @ GRASP_Q (measure body hang below pads)")
+        log("#" * 70)
+        drive(HOME_Q, GRIP_OPEN, 40, render=False)
+        traj(HOME_Q, PREGRASP_Q, GRIP_OPEN, 80, "AABB HOME->PREGRASP", render=False)
+        traj(PREGRASP_Q, GRASP_Q, GRIP_OPEN, 60, "AABB PREGRASP->GRASP", render=False)
+        drive(GRASP_Q, GRIP_OPEN, 300, render=False)  # settle
+        pad = _pad_mid_xyz()
+        log(f"[AABB] pad_mid world = {['%.4f'%v for v in pad]}")
+        bbc = UsdGeom.BBoxCache(Usd.TimeCode.Default(),
+                               [UsdGeom.Tokens.default_, UsdGeom.Tokens.render, UsdGeom.Tokens.proxy])
+        for _lp in ("/World/AR4/root_joint/gripper_base_link", GRIP1_PATH, GRIP2_PATH, LINK6_PATH):
+            _pr = stage.GetPrimAtPath(_lp)
+            if not _pr.IsValid():
+                # gripper_base_link path may differ; find by name
+                _pr2 = find_prim_by_name(stage, AR4_ROOT, _lp.split("/")[-1])
+                _pr = _pr2 if (_pr2 is not None and _pr2.IsValid()) else _pr
+            if not _pr.IsValid():
+                log(f"[AABB] {_lp}: prim not found")
+                continue
+            try:
+                rng = bbc.ComputeWorldBound(_pr).ComputeAlignedRange()
+                mn, mx = rng.GetMin(), rng.GetMax()
+                log(f"[AABB] {_pr.GetName():20s} world min=({mn[0]:.4f},{mn[1]:.4f},{mn[2]:.4f}) "
+                    f"max=({mx[0]:.4f},{mx[1]:.4f},{mx[2]:.4f}) | "
+                    f"z_below_pad_mm={(pad[2]-mn[2])*1000:.1f} z_above_pad_mm={(mx[2]-pad[2])*1000:.1f} "
+                    f"x_min_mm={mn[0]*1000:.1f} x_max_mm={mx[0]*1000:.1f}")
+            except Exception as _e:
+                log(f"[AABB] {_pr.GetName()}: bbox failed: {_e}")
+        # combined gripper-assembly lowest point vs the cube-mid-height support plane
+        log(f"[AABB] SUPPORT-CLEARANCE: cube center z=0.09, cube bottom (support top)=0.0825. "
+            f"Any gripper AABB z_min BELOW 0.0825 while over the support XY footprint => collision.")
+        log("\n[AABB] DUMP COMPLETE (VERDICT: AABB_DUMP_DONE)")
+        _R.close(); simulation_app.close(); return
 
     # ---- execute the pick -------------------------------------------------
     drive(HOME_Q, GRIP_OPEN, 40, render=False)

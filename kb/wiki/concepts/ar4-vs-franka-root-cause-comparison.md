@@ -6449,3 +6449,106 @@ geometrically infeasible. Verdict from the ground-truth data, not the frames.
 space jaw test + no-servo sweeps + 2 video renders, all on ONE instance by shipping
 updated code to it via `git archive` rather than re-provisioning per iteration).
 Instance deleted, `check_cloud_state.sh` 0/0/0.
+
+## UPDATE (2026-07-31, ar4-support-free-pin-pick task): SUCCESS — a GENUINE pure-friction AR4 grasp+lift, achieved by presenting the object SUPPORT-FREE and grasping it SIDE-ON at mid-height (top-down is confirmed dead even support-free)
+
+The Principal decision after the three prior 2026-07-31 collision findings was to
+present the object **support-free** so there is no support surface in the grasp
+region for the gripper body to collide with. Executed on one on-demand
+g2-standard-4/L4 instance (container+GCS-cache pipeline, code shipped/updated live
+via `git archive`, ~$2, torn down, `check_cloud_state.sh` 0/0/0). Two results:
+
+**(1) Support-free does NOT rescue the TOP-DOWN grasp — the wall is deeper than the
+support.** New `--pin_pick` mode: a small object held up on a THIN central pin
+(9mm, much thinner than the jaw clearance), object TOP placed just below the
+gripper body's z_min. `--dump_gripper_aabb --pin_pick` CONFIRMED the intended
+clearance the surface-supported object could never satisfy: **gripper_base_link
+z_min 0.0548 clears the object top (0.0510) by +3.8mm**, and the thin central pin
+(±4.5mm) sits below the fingertips (0.038) and between the jaws. But the grasp
+still fails, and the measured reason is a **refinement of the 1.3mm-window
+finding**: the AR4's real pad CONTACT height (fingertip_mid ≈ 0.0596 with the
+object present) essentially coincides with the body bottom (≈0.0583). So an object
+low enough for the body to clear is simultaneously too low/mis-aligned for the
+pads — across FOUR object-top heights (0.049/0.051/0.0525/0.053) the jaws **jam at
+the open position** (sep stays 28mm, 0 contact, no lift) even though a dedicated
+free-space `--jaw_close_test` PROVED both jaws close fully to dof 0 with firm
+params (`--jaw_max_force 120 --grip_kd 60 --close_steps 60`). **Top-down
+pure-friction grasp with this gripper is geometrically dead — support or no
+support** (the pad band and the central body occupy overlapping vertical space).
+
+**(2) The SIDE grasp IS the right geometry, and it WORKS support-free.** In a side
+grasp the pads grip the object's two VERTICAL faces at MID-HEIGHT (cube center
+0.09 == pad plane) while the body sits LATERALLY on -X — so the pad band is NOT
+tied to the body's vertical position, and the side grasp's ONLY prior blocker was
+the support under the cube. Two attempts pinned the exact support-free recipe:
+- A thin ground-rising pin (`--side_grasp --pin_pick`) **rammed the arm mid-swing**
+  (pad landed 34mm low) — the same corridor obstruction as side RUN-1's tall
+  pedestal. ANY ground-rising support (pedestal or thin pin) is in the horizontal
+  approach corridor.
+- The clean fix is a **kinematic FLOAT** (`--float_release`): spawn the object with
+  NO support and hold it in place by **disabling its gravity** (PhysX
+  `DisableGravity`) so it floats yet stays fully dynamic/squeezable while the jaws
+  close, then **re-enable gravity at the grasp** so the pure-friction hold must
+  carry it. (An earlier pose-PIN made the float immovable → jaws jammed on it and
+  it popped out at release; a gravity-disabled float is the key — squeezable, not
+  rigid.) This is the brief's explicitly-permitted "float at grasp height,
+  release-to-dynamic at contact" option.
+
+**GENUINE PURE-FRICTION GRASP+LIFT — CONFIRMED (ground truth):** at the side pose
+the pads land **dead-on the cube center** (`--no_servo`, pos_err [0.26,-2.32,
+-2.12] mm), both jaws close on the two vertical faces with a **symmetric ~94 N
+squeeze** (measured joint efforts, jaw1≈jaw2 within <0.3 N, held stable through
+lift AND retreat), gravity re-enable is verified live (`DisableGravity`
+readback=False), the object is **HELD at release** (0.090 m, not dropped), and it
+**LIFTS with the gripper 0.090 → 0.142 m (+52 mm) and holds elevated through
+retreat** (final 0.138 m). NO joint/weld, NO surface-gripper — pure contact
+friction. `VERDICT: PICK CONFIRMED (PureFriction)`. (The jaw-contact ContactSensor
+reads 0 N throughout — a known-flaky sensor on these prims; the symmetric measured
+joint efforts + the ground-truth pose tracking the gripper are the real proof, per
+this doc's own Experiment-16 "check the physical state, not one signal" rule.)
+
+**WELL-FRAMED VIDEO (verified by extracting + inspecting real frames):** the object
+was enlarged to a bright-red BOX (gripped Y-dim kept 15mm; X=24/Z=26mm so it
+protrudes beyond the ~15mm dark jaws — a flush 15mm cube was fully hidden inside
+the jaws in extracted frames), and framed from a **+X+Y elevated-3/4 view at
+~1.0-1.35m** (a pure-frontal +X eye renders empty horizon — the AR4 base sits on
+the +X sight-line; a ~0.7m eye along the good line also loses the subject; ≥~0.95m
++X+Y elevated works). Extracted frames across approach→grip→lift confirm the arm,
+both jaws, and the RED box clearly visible + well-lit + well-sized, and the box
+rising with the gripper. Local:
+`logs/videos/ar4_support_free_side_float_2026-07-31/{side_float_wide.mp4,
+side_float_closeup.mp4}` (+ `frames/`); GCS
+`gs://rl-manipulation-hks-runs/ar4-pin-pick/20260731-145219-side-float-SUCCESS/`.
+The WIDE view is the clear money shot (full arm + red box + lift); the closeup
+frames the gripper large but the near jaw partly occludes the box at its lower
+elevation.
+
+**What this settles.** The AR4 gripper CAN perform a genuine pure-friction grasp+
+lift — the arm/drives/tracking/servo/squeeze/jaw-closure were always sound (this
+whole doc). The blocker was never the gripper's ability to grip; it was that its
+pad band and body occupy overlapping vertical space, making TOP-DOWN grasps of any
+supported (or even support-free) object geometrically impossible, while SIDE-ON
+grasps (body lateral) work once the object is presented support-free. Method
+lessons: (a) support-free removes the support collision but exposes the deeper
+pad-band/body-overlap wall for top-down — verify with `--dump_gripper_aabb` which
+collision actually bounds you; (b) an immovable/pinned "float" jams the jaws — a
+GRAVITY-DISABLED float is squeezable and is the correct support-free presentation;
+(c) any ground-rising support obstructs a horizontal side approach; (d) framing:
++X+Y elevated-3/4 ≥~0.95m, never a pure-frontal +X (base occludes), and enlarge a
+small dark-gripped object so it protrudes for legibility. New reusable tooling:
+`--pin_pick`, `--float_release`, `--side_grasp --pin_pick`, pin-aware
+`--dump_gripper_aabb`, and `scripts/_cloud_ar4_pin_pick.sh`.
+
+**Next (open, Principal-level):** the working support-free side-float grasp is a
+demonstrator of the grasp machinery, not yet an RL-trainable task (the float is a
+scripted presentation). Real paths forward: (i) a gripper whose pads extend BELOW
+its body (asset change) to unlock top-down surface grasps; (ii) build the side-on
+mid-height grasp into a ManagerBasedRLEnv with a genuinely supported-then-freed
+object (e.g. object on a low platform the side approach clears, or a conveyor/
+hand-off); (iii) accept the characterized limit and anchor the AR4 task on side-on
+grasps of objects presented at gripper mid-height.
+
+**Cost:** ~$2 (one on-demand g2-standard-4/L4, ~2h12m: setup + top-down AABB/sweeps
++ free-space jaw test + side-pin + 2 float diagnostics + 4 video renders, all on
+ONE instance via live `git archive` code shipping). Instance deleted,
+`check_cloud_state.sh` 0/0/0.

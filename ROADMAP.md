@@ -27,6 +27,27 @@ direction, not a scoped backlog.
 
 Roughly in the order they'd likely be picked up:
 
+0aaaa. **AR4 SUPPORT-FREE grasp — SUCCESS: a GENUINE pure-friction grasp+lift landed,
+   SIDE-ON at mid-height with a kinematic-float presentation (2026-07-31,
+   ar4-support-free-pin-pick task).** Support-free presentation was the Principal fix
+   for the three prior collision findings. Result, two parts (kb
+   `ar4-vs-franka-root-cause-comparison.md` 2026-07-31 SUCCESS UPDATE): (1) support-
+   free does NOT rescue the TOP-DOWN grasp — `--dump_gripper_aabb` confirms the body
+   clears the object top by +3.8mm, but the pads' real contact height (~0.0596)
+   coincides with the body bottom (~0.0583), so the jaws jam at open across 4 heights
+   (free-space jaw closure separately proven fine) → top-down is geometrically dead,
+   support or not; (2) the SIDE grasp (pads on vertical faces at mid-height, body
+   lateral) WORKS support-free via a kinematic FLOAT (`--float_release`: disable the
+   object's gravity so it floats yet stays squeezable during close, re-enable at
+   grasp). Ground truth: pads dead-on (2mm), symmetric ~94N squeeze both jaws, HELD at
+   release, lift 0.090→0.142m (+52mm), held elevated through retreat, NO weld —
+   `PICK CONFIRMED`. Well-framed video (extracted-frame verified) at
+   `logs/videos/ar4_support_free_side_float_2026-07-31/`. NEXT (Principal-level): a
+   deeper-fingered gripper for top-down, OR build the side-on mid-height grasp into an
+   RL task with a genuinely-supported-then-freed object, OR anchor the AR4 task on
+   side-on grasps. New tooling: `--pin_pick`, `--float_release`, `--side_grasp
+   --pin_pick`, `scripts/_cloud_ar4_pin_pick.sh`. ~$2, instance torn down, 0/0/0.
+
 0aaa. **AR4 tall-prism (PROPERLY-SIZED object) ALSO fails — top-down pure-friction
    grasp is geometrically infeasible for ANY surface-supported object; the gripper's
    central body bottoms 1.3mm BELOW the pad plane (2026-07-31, ar4-tall-prism-pick

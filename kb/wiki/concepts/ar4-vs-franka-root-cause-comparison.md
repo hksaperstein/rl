@@ -6552,3 +6552,109 @@ grasps of objects presented at gripper mid-height.
 + free-space jaw test + side-pin + 2 float diagnostics + 4 video renders, all on
 ONE instance via live `git archive` code shipping). Instance deleted,
 `check_cloud_state.sh` 0/0/0.
+
+---
+
+## 2026-08-03 — Is the top-down wall a convex-HULL collision artifact? NO (tested, corrected)
+
+**Prompt (direct user observation).** Watching the 2026-07-31 success video the
+user noticed the collision box and the gripper/cube meshes are visibly NOT the
+same size — i.e. the collision geometry is bigger than the visual mesh. This is a
+real, concrete lead: all three gripper links carry
+`UsdPhysics.MeshCollisionAPI.approximation == "convexHull"`, and the fingers have a
+concave gripping notch a single convex hull fills solid. If the "gripper too big to
+straddle a surface cube / pad-band-body vertical overlap" wall (all of 2026-07-31,
+above) were actually a **convex-hull approximation artifact**, fixing the collision
+to preserve the notch would unblock the top-down table pick.
+
+**Quantified the inflation first (Pi-local, no GPU — `scripts/_analyze_gripper_collision_hull_vs_mesh.py`, commit 22babe5).**
+Downloaded the vendor gripper STLs and compared each link's raw triangle-mesh solid
+volume to its convex-hull volume (the geometry PhysX's `convexHull` approximation
+actually uses). Hull/mesh **volume** ratios: **jaw1 2.38×, jaw2 2.30×, base 1.54×**
+— the collision gripper is ~2.3× fatter by volume than the real fingers, the excess
+concentrated in the concave inner notch the hull fills solid. So the user's
+observation is factually correct: the collision hull IS substantially inflated vs
+the visual mesh.
+
+**The fix (`scripts/build_asset.py::_set_gripper_collision_convex_decomposition`,
+commit 3ede45d).** Switched the three gripper collision meshes'
+`MeshCollisionAPI.approximation` from `convexHull` → **`convexDecomposition`**
+(voxelRes 500k, maxHulls 64, shrinkWrap on), which splits the concave mesh into
+convex pieces and PRESERVES the notch/gap between the fingers. Instanceable-proxy
+handling mirrors `_fix_jaw2_collision_mesh_asymmetry` (disable `instanceable` on the
+instance-root ancestor, do NOT restore — the e6c3012 lesson). Fix **confirmed
+authored in the rebuilt asset** via `strings` on the crate root layer
+(`instanceable` + `PhysxConvexDecomposition…` tokens present; the fix authors an
+override to the root layer). Asset rebuilt on cloud (container + `build_asset.py`),
+uploaded to GCS under the new `build_asset.py` sha.
+
+**Test = the genuine top-down pedestal pick, re-run with the fixed asset**
+(`scripts/ar4_pedestal_grasp_confirm.py`, cube on the 40mm pedestal, top-down
+straddle, close, lift/hold/retreat, pure friction, ground-truth cube-z + contact
+tracking, all 3 validation points Q0/Q1/Q2).
+
+**RESULT — the wall is NOT a convex-hull artifact. The top-down pick STILL FAILS,
+identically.**
+
+| point | pre-fix `open_gripper_max_force` (convexHull) | post-fix (convexDecomposition) | lift |
+|---|---|---|---|
+| Q0_bearing95 | 51.71 N | **48.29 N** | 0.00 mm |
+| Q1_bearing108 | 60.40 / 66.65 N | **60.50 N** | 0.00 mm |
+| Q2_bearing80 | (same regime) | **55.65 N** | 0.00 mm |
+
+All three: `GRASP+LIFT NOT CONFIRMED`. The cube never leaves its 0.0475 m resting
+height in ANY phase (GRASP-CLOSE/LIFT/HOLD/RETREAT) — 0.00 mm gain. The
+**open-gripper collision force (48–60 N while the gripper is nominally OPEN, before
+CLOSE is even issued) is essentially unchanged from the convexHull baseline.** So
+switching to notch-preserving collision changed the binding behavior by ~0.
+
+**Why this is the expected result (and why the fix, though correct, can't help
+here).** The 48–60 N contact appears during the top-down DESCENT/approach
+(PHASE0–2, pre-close) — it is the gripper's **outer envelope** (jaw tips / body)
+contacting the pedestal/cube from above, NOT the inner jaw faces straddling the
+cube. `convexHull` and `convexDecomposition` of the same mesh have **nearly
+identical outer envelopes** (both bound the same extreme points); the 2.3× volume
+inflation is entirely INTERIOR (the filled notch), which does not participate in
+the descent collision. So the hull inflation is real but is **not the binding
+constraint** for a top-down surface straddle — exactly the "pad-band and body
+occupy overlapping vertical space" wall this doc already characterized on
+2026-07-31, now independently confirmed to survive a correct, notch-preserving
+collision mesh.
+
+**Verdict (honest correction of the lead, not of the 2026-07-31 conclusion).** The
+user's eye was right — the convexHull collision IS 2.3× inflated vs the visual mesh,
+and it was worth fixing (the fix is committed and now standard in `build_asset.py`,
+benefiting every future run's contact fidelity). But it does **not** rescue the
+top-down table pick: AR4 still cannot pick the 15mm cube off a surface top-down with
+the corrected collision geometry. The prior conclusion stands and is strengthened —
+the top-down limit is a real gripper-geometry constraint (pad band / body vertical
+overlap → outer envelope collides with the support/object during descent), not a
+collision-approximation artifact. The viable paths remain those listed 2026-07-31:
+side-on mid-height grasps (which DO work support-free), or a gripper whose pads
+extend below its body.
+
+**Method notes / loose ends.** (a) `build_asset.py`'s Python `print()` output was
+lost to block-buffering when piped in the container (only C++ carb logs showed) —
+the fix's `[gripper-collision-approx]` markers weren't visible in the build log, so
+applied-ness was confirmed via `strings` on the asset instead; payload now sets
+`PYTHONUNBUFFERED=1` for future runs. (b) The intended demo video did not render:
+`isaacsim.sensors.camera` is not importable in the `isaac-lab:2.3.1` container the
+way the standalone pick script imports it (`No module named 'isaacsim.sensors'`) so
+camera init failed gracefully to numeric-only — acceptable here since there is no
+successful lift to film (the failure mode is already extensively documented). (c)
+Two live cloud-infra failure modes hit and fixed in the payload: a fresh GCP DLVM's
+`needrestart` prompt SIGTTIN-stops apt (state `T`) in a no-TTY tmux, freezing the
+dpkg lock (fixed by writing `/etc/apt/apt.conf.d/99noninteractive` +
+`/etc/needrestart/conf.d/99auto.conf`); and Isaac Sim hung in `simulation_app.close()`
+teardown after the numeric work was done (GPU 2% idle, all verdicts already
+computed) — `kill -TERM` the hung GPU pid released it and let the payload sync +
+self-halt, per this repo's documented teardown-hang playbook.
+
+**Cost:** ~$1 (one on-demand g2-standard-4/L4, ~1h incl. a teardown-hang; rebuild +
+upload + top-down pick at 3 points on ONE instance). Instance deleted,
+`check_cloud_state.sh` 0/0/0. New/changed tooling:
+`build_asset.py::_set_gripper_collision_convex_decomposition`,
+`scripts/_verify_gripper_collision_approx.py`,
+`scripts/ar4_pedestal_grasp_confirm.py --video`,
+`scripts/_cloud_ar4_collision_fix_pick.sh`,
+`scripts/_analyze_gripper_collision_hull_vs_mesh.py`.

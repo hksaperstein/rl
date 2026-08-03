@@ -27,6 +27,30 @@ direction, not a scoped backlog.
 
 Roughly in the order they'd likely be picked up:
 
+0aaaaa. **AR4 top-down wall is NOT a convex-hull collision artifact — tested and
+   corrected (2026-08-03, ar4-gripper-collision-approximation-fix task).** The user
+   noticed (in the 2026-07-31 success video) the collision box is bigger than the
+   visual mesh; a Pi-local diagnostic confirmed the gripper's `convexHull` collision
+   is 2.3× fatter by VOLUME than the real fingers (jaw1 2.38× / jaw2 2.30× / base
+   1.54×), the excess filling the concave finger notch solid. Fixed it: switched the
+   three gripper collision meshes to `convexDecomposition` (notch-preserving) in
+   `build_asset.py`, rebuilt the asset (fix confirmed authored via `strings`), and
+   re-ran the genuine top-down pedestal pick of the 15mm cube. **Result: STILL FAILS,
+   identically** — open-gripper collision force 48–60 N (vs 51–67 N pre-fix, i.e.
+   unchanged) and 0.00 mm lift at all 3 points. The 48–60 N is the gripper's OUTER
+   envelope hitting the support/object during top-down DESCENT; convexHull and
+   convexDecomposition share nearly the same outer envelope, and the 2.3× inflation
+   is all INTERIOR (the notch), which the descent collision never touches. So the
+   hull inflation is real and worth fixing (the fix is now standard in
+   `build_asset.py`), but it is NOT the binding constraint — the 2026-07-31 "pad-band/
+   body vertical overlap → top-down geometrically dead" conclusion stands and is
+   strengthened. Viable paths unchanged: side-on mid-height grasp (works), or a
+   deeper-fingered gripper. Full writeup: kb `ar4-vs-franka-root-cause-comparison.md`
+   2026-08-03 section. Cost ~$1, cloud clean. New tooling:
+   `_set_gripper_collision_convex_decomposition`, `_verify_gripper_collision_approx.py`,
+   `ar4_pedestal_grasp_confirm.py --video`, `_cloud_ar4_collision_fix_pick.sh`,
+   `_analyze_gripper_collision_hull_vs_mesh.py`.
+
 0aaaa. **AR4 SUPPORT-FREE grasp — SUCCESS: a GENUINE pure-friction grasp+lift landed,
    SIDE-ON at mid-height with a kinematic-float presentation (2026-07-31,
    ar4-support-free-pin-pick task).** Support-free presentation was the Principal fix

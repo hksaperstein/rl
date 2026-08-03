@@ -656,6 +656,103 @@ def _add_substitute_link_collision(output_usd: str, link_name: str) -> None:
     )
 
 
+def _set_gripper_collision_convex_decomposition(output_usd: str) -> None:
+    """Switch the three gripper links' collision-mesh approximation from
+    ``convexHull`` to ``convexDecomposition`` so PhysX preserves the fingers'
+    concave gripping notch instead of filling it solid.
+
+    Root cause (found 2026-08-03, prompted by a direct user observation that
+    the collision box and the visual mesh in the success video are different
+    sizes; quantified by scripts/_analyze_gripper_collision_hull_vs_mesh.py):
+    all three gripper links
+    (gripper_jaw1_link/gripper_jaw2_link/gripper_base_link) carry
+    ``UsdPhysics.MeshCollisionAPI.approximation == "convexHull"``. The fingers
+    have a concave gripping notch; a single convex hull fills that concavity
+    solid, so the COLLISION gripper is ~2.3x fatter by volume than the visual
+    mesh (hull/mesh volume ratios: jaw1 2.38x, jaw2 2.30x, base 1.54x) with a
+    bulged inner jaw face and a narrower effective aperture. That is strong
+    evidence the standing "gripper too big to straddle a surface cube"
+    conclusion (all of 2026-07-31) is at least partly a convex-hull
+    APPROXIMATION ARTIFACT rather than a property of the real gripper.
+
+    Fix: set the approximation to ``convexDecomposition``, which splits the
+    concave mesh into multiple convex pieces and preserves the notch/gap
+    between the fingers. Also author a ``PhysxConvexDecompositionCollisionAPI``
+    with a high voxel resolution and shrink-wrap enabled so the decomposition
+    actually captures the thin fingertip concavity rather than a coarse
+    approximation of it. If convexDecomposition's contact is still too coarse
+    for the jaw notch, "sdf" (a signed-distance-field mesh collider, NVIDIA's
+    recommended approach for grippers grasping concave objects) is the
+    documented alternative -- switch APPROX below to "sdf".
+
+    Instance-proxy handling mirrors _fix_jaw2_collision_mesh_asymmetry: the
+    URDF importer marks each collision-mesh's ancestor instanceable, and USD
+    forbids authoring onto an instance proxy. Walk up to the instance-root
+    ancestor, disable instancing there, and deliberately do NOT restore it
+    (restoring it silently undoes the override -- the e6c3012 / jaw2-collision
+    lesson).
+    """
+    from pxr import PhysxSchema, Usd, UsdPhysics
+
+    APPROX = "convexDecomposition"  # alternative: "sdf" if the notch is still too coarse
+
+    mesh_paths = [
+        "/mk5/root_joint/gripper_jaw1_link/collisions/gripper_jaw1_link/node_STL_BINARY_/mesh",
+        "/mk5/root_joint/gripper_jaw2_link/collisions/gripper_jaw2_link/node_STL_BINARY_/mesh",
+        "/mk5/root_joint/gripper_base_link/collisions/gripper_base_link/node_STL_BINARY_/mesh",
+    ]
+
+    stage = Usd.Stage.Open(output_usd)
+    fixed = 0
+    for mesh_path in mesh_paths:
+        mesh_prim = stage.GetPrimAtPath(mesh_path)
+        if not mesh_prim.IsValid():
+            print(f"[gripper-collision-approx] WARNING: collision mesh prim not found, skipping: {mesh_path}")
+            continue
+
+        # Disable instancing on the instance-root ancestor so the collision
+        # prim is directly editable on this stage (see docstring).
+        instance_root = mesh_prim
+        while instance_root and instance_root.IsValid() and not instance_root.IsInstance():
+            instance_root = instance_root.GetParent()
+        if instance_root and instance_root.IsValid() and instance_root.IsInstance():
+            print(
+                f"[gripper-collision-approx] disabling instanceable at {instance_root.GetPath()} "
+                f"(permanently) to author approximation on {mesh_path.split('/')[-4]}"
+            )
+            instance_root.SetInstanceable(False)
+            mesh_prim = stage.GetPrimAtPath(mesh_path)
+
+        mesh_coll = UsdPhysics.MeshCollisionAPI(mesh_prim)
+        if not mesh_coll:
+            mesh_coll = UsdPhysics.MeshCollisionAPI.Apply(mesh_prim)
+        old_approx = mesh_coll.GetApproximationAttr().Get()
+        mesh_coll.CreateApproximationAttr().Set(APPROX)
+
+        if APPROX == "convexDecomposition":
+            decomp = PhysxSchema.PhysxConvexDecompositionCollisionAPI.Apply(mesh_prim)
+            # High voxel resolution + shrink-wrap so the thin concave notch
+            # between the fingers is actually captured, not smoothed over.
+            decomp.CreateVoxelResolutionAttr().Set(500000)
+            decomp.CreateMaxConvexHullsAttr().Set(64)
+            decomp.CreateHullVertexLimitAttr().Set(64)
+            decomp.CreateErrorPercentageAttr().Set(0.5)
+            decomp.CreateShrinkWrapAttr().Set(True)
+        elif APPROX == "sdf":
+            sdf = PhysxSchema.PhysxSDFMeshCollisionAPI.Apply(mesh_prim)
+            sdf.CreateSdfResolutionAttr().Set(256)
+
+        link = mesh_path.split("/")[3]
+        print(f"[gripper-collision-approx] {link}: approximation {old_approx!r} -> {APPROX!r}")
+        fixed += 1
+
+    stage.GetRootLayer().Save()
+    print(
+        f"[gripper-collision-approx] set {fixed}/{len(mesh_paths)} gripper collision meshes to "
+        f"{APPROX!r} -- the concave fingertip notch is now preserved instead of hull-filled solid."
+    )
+
+
 def _locate_base_layer(usd_out_dir: str) -> str:
     """Return the configuration sub-layer that defines the imported geometry
     and materials (``*_base.usd``; falls back to the largest .usd)."""
@@ -733,6 +830,7 @@ def main() -> None:
         _remove_gripper_jaw2_mimic_constraint(output_usd)
         _add_gripper_jaw2_drive(output_usd)
         _fix_jaw2_collision_mesh_asymmetry(output_usd)
+        _set_gripper_collision_convex_decomposition(output_usd)
         _add_substitute_link_collision(output_usd, "link_5")
         _add_substitute_link_collision(output_usd, "link_6")
 

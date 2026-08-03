@@ -146,7 +146,7 @@ def get_package_share_directory(package_name):
     return path
 PYEOF
 sudo docker run --rm --gpus all --network host --entrypoint bash \
-  -e ACCEPT_EULA=Y -e OMNI_KIT_ACCEPT_EULA=YES -e PRIVACY_CONSENT=Y \
+  -e PYTHONUNBUFFERED=1 -e ACCEPT_EULA=Y -e OMNI_KIT_ACCEPT_EULA=YES -e PRIVACY_CONSENT=Y \
   -v "$HOME/rl:/workspace/rl" \
   -v "$HOME/ar4_ros_driver:/opt/ar4_ros_driver:ro" \
   -v "$HOME/ament_shim:/opt/ament_shim:ro" \
@@ -172,7 +172,7 @@ BUILD_ASSET_SHA="$BUILD_ASSET_SHA" bash scripts/upload_ar4_asset_to_gcs.sh 2>&1 
 # --- [4/6] VERIFY: collision approximation now convexDecomposition ----------
 step "[4/6] verify gripper collision approximation (pure USD, no RTX)"
 sudo docker run --rm --gpus all --network host --entrypoint bash \
-  -e ACCEPT_EULA=Y -e OMNI_KIT_ACCEPT_EULA=YES -e PRIVACY_CONSENT=Y \
+  -e PYTHONUNBUFFERED=1 -e ACCEPT_EULA=Y -e OMNI_KIT_ACCEPT_EULA=YES -e PRIVACY_CONSENT=Y \
   -v "$HOME/rl:/workspace/rl" -w /workspace/rl "$IMAGE" \
   -c "/isaac-sim/python.sh scripts/_verify_gripper_collision_approx.py /workspace/rl/assets/ar4_mk5/ar4_mk5.usd" \
   2>&1 | tee "$HOME/verify_approx.log"
@@ -181,7 +181,7 @@ check "${PIPESTATUS[0]}" "collision approximation verify"
 # --- [5/6] THE PICK: genuine top-down table (pedestal) pick + video --------
 step "[5/6] top-down table pick of the 15mm cube (--video, 3 validation points)"
 sudo docker run --rm --gpus all --network host --entrypoint bash \
-  -e ACCEPT_EULA=Y -e OMNI_KIT_ACCEPT_EULA=YES -e PRIVACY_CONSENT=Y \
+  -e PYTHONUNBUFFERED=1 -e ACCEPT_EULA=Y -e OMNI_KIT_ACCEPT_EULA=YES -e PRIVACY_CONSENT=Y \
   -v "$HOME/rl:/workspace/rl" -w /workspace/rl "$IMAGE" \
   -c "/workspace/isaaclab/isaaclab.sh -p scripts/ar4_pedestal_grasp_confirm.py --video --headless" \
   2>&1 | tee "$HOME/pick_video.log"

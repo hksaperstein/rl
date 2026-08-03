@@ -77,6 +77,19 @@ trap finish EXIT TERM INT
 
 # --- [1/6] Docker + NVIDIA Container Toolkit + GL libs (video needs GL) -----
 step "[1/6] Docker + NVIDIA Container Toolkit + GL libs"
+# Make apt fully non-interactive up front: a fresh GCP DLVM's needrestart
+# kernel-restart prompt otherwise STOPS apt (SIGTTIN, state 'T') inside a
+# no-TTY tmux session, holding the dpkg lock forever (hit live 2026-08-03).
+# sudo env-reset ignores DEBIAN_FRONTEND, so write /etc config files that
+# apt/needrestart read regardless of environment.
+export DEBIAN_FRONTEND=noninteractive
+sudo tee /etc/apt/apt.conf.d/99noninteractive >/dev/null <<'AEOF'
+APT::Get::Assume-Yes "true";
+Dpkg::Options { "--force-confdef"; "--force-confold"; };
+DPkg::Lock::Timeout "300";
+AEOF
+sudo mkdir -p /etc/needrestart/conf.d
+echo '$nrconf{restart} = "a";' | sudo tee /etc/needrestart/conf.d/99auto.conf >/dev/null
 if command -v docker >/dev/null 2>&1; then echo "docker present"; else sudo apt-get update -y; sudo apt-get install -y docker.io; check $? "docker"; fi
 sudo systemctl enable --now docker; check $? "docker daemon"
 if dpkg -l 2>/dev/null | grep -q nvidia-container-toolkit; then echo "toolkit present"; else
@@ -86,13 +99,26 @@ if dpkg -l 2>/dev/null | grep -q nvidia-container-toolkit; then echo "toolkit pr
     sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list >/dev/null
   sudo apt-get update -y; sudo apt-get install -y nvidia-container-toolkit; check $? "toolkit"; fi
 sudo nvidia-ctk runtime configure --runtime=docker; sudo systemctl restart docker; check $? "docker+toolkit"
-# NVIDIA OpenGL/Vulkan userspace libs -- REQUIRED for camera RTX render (video).
+# NVIDIA OpenGL/Vulkan userspace libs -- needed for camera RTX render (video).
 # Pin to the EXACT running driver version to avoid a point-release mismatch.
+# NON-FATAL by design: video is a bonus; the numeric grasp+lift verdict (the
+# core deliverable) needs no GL. If the exact pinned version is unavailable we
+# SKIP GL entirely rather than risk an unpinned newer point-release breaking
+# the driver (nvidia-smi mismatch) -- the pick script's camera init fails
+# gracefully to numeric-only when GL is absent.
 if ! find /usr/lib/x86_64-linux-gnu -iname 'libGLX_nvidia*' 2>/dev/null | grep -q .; then
   DF="$(nvidia-smi --query-gpu=driver_version --format=csv,noheader)"; DM="$(echo "$DF" | cut -d. -f1)"
   AV="$(apt-cache madison "libnvidia-gl-${DM}-server" 2>/dev/null | awk -F'|' -v v="$DF" '{gsub(/^[ \t]+|[ \t]+$/,"",$2); if (index($2, v) == 1) {print $2; exit}}')"
-  if [ -n "$AV" ]; then sudo apt-get install -y "libnvidia-gl-${DM}-server=${AV}"; else sudo apt-get install -y "libnvidia-gl-${DM}-server"; fi
-  check $? "gl libs"; nvidia-smi >/dev/null 2>&1 || { echo "FATAL nvidia-smi broke after GL install" >&2; exit 1; }
+  if [ -n "$AV" ]; then
+    sudo apt-get install -y "libnvidia-gl-${DM}-server=${AV}"; check $? "gl libs (pinned ${AV})"
+    if ! nvidia-smi >/dev/null 2>&1; then
+      echo "WARNING: nvidia-smi broke after GL install -- attempting to purge GL to restore the driver (video will be skipped)." >&2
+      sudo apt-get purge -y "libnvidia-gl-${DM}-server" 2>&1 | tail -2
+      nvidia-smi >/dev/null 2>&1 && echo "[OK] driver restored after GL purge" || echo "WARNING: nvidia-smi still broken" >&2
+    fi
+  else
+    echo "WARNING: exact-version libnvidia-gl-${DM}-server=${DF} not in apt -- SKIPPING GL install (video off, numeric verdict unaffected)."
+  fi
 fi
 
 step "[1b/6] GPU passthrough sanity check"

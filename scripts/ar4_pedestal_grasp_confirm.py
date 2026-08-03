@@ -50,11 +50,23 @@ from isaaclab.app import AppLauncher
 import argparse
 
 parser = argparse.ArgumentParser(description="Confirm AR4 grasp+lift now that the cube rests on a raised pedestal.")
+parser.add_argument("--video", action="store_true",
+                    help="Enable cameras + render + write one mp4 per validation point (elevated-3/4 ~0.8m "
+                         "aimed at each point's grip location). Numeric ground-truth verdict is still printed.")
+parser.add_argument("--points", type=str, default="all",
+                    help="Comma-separated subset of Q0_bearing95,Q1_bearing108,Q2_bearing80, or 'all'.")
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
+if args_cli.video:
+    # Camera-sensor rendering requires the RTX pipeline (enable_cameras) and
+    # actually stepping the sim with render=True (see RENDER below).
+    args_cli.enable_cameras = True
+
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
+
+RENDER = bool(args_cli.video)
 
 """Rest everything follows."""
 
@@ -127,6 +139,37 @@ STIFFNESS = 4000.0
 DAMPING = 200.0
 EFFORT_LIMIT = 20.0
 
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+VIDEO_DIR = os.path.join(REPO_ROOT, "logs", "videos", "ar4_pedestal_grasp_confirm")
+VIDEO_FPS = 20
+# Capture one frame every CAPTURE_EVERY rendered sim steps (physics_dt~0.005s
+# => 200Hz; every 5th step ~= 40 captured fps, played back at VIDEO_FPS).
+CAPTURE_EVERY = 5
+
+
+def _set_cam_lookat(stage, prim_path, eye, target):
+    """Orient a camera prim via an explicit USD lookat matrix (camera looks
+    down -Z, +Y up) -- copied from scripts/ar4_isaacsim_standalone_pick.py's
+    own proven _set_cam_lookat, the one that produced extracted-frame-verified
+    non-black elevated-3/4 shots."""
+    import numpy as np
+    from pxr import Gf, UsdGeom
+    eye = np.asarray(eye, float); target = np.asarray(target, float)
+    fwd = target - eye; fwd /= (np.linalg.norm(fwd) + 1e-9)
+    up_w = np.array([0.0, 0.0, 1.0])
+    right = np.cross(fwd, up_w); right /= (np.linalg.norm(right) + 1e-9)
+    up = np.cross(right, fwd)
+    m = Gf.Matrix4d(
+        float(right[0]), float(right[1]), float(right[2]), 0.0,
+        float(up[0]), float(up[1]), float(up[2]), 0.0,
+        float(-fwd[0]), float(-fwd[1]), float(-fwd[2]), 0.0,
+        float(eye[0]), float(eye[1]), float(eye[2]), 1.0,
+    )
+    prim = stage.GetPrimAtPath(prim_path)
+    xf = UsdGeom.Xformable(prim)
+    xf.ClearXformOpOrder()
+    xf.AddTransformOp().Set(m)
+
 
 def base_to_world(p_base):
     import numpy as np
@@ -168,7 +211,8 @@ def _achieved_pinch_world(robot, link6_body_id):
     return (link6_pos_w + rot_w @ offset_t).tolist()
 
 
-def run_grasp_point(env, robot, arm_cfg, gripper_cfg, contact_sensors, cube, point_label, point):
+def run_grasp_point(env, robot, arm_cfg, gripper_cfg, contact_sensors, cube, point_label, point,
+                    cam=None, writer=None):
     print("\n" + "#" * 70)
     print(f"# GRASP+LIFT ATTEMPT (pedestal): {point_label}")
     print("#" * 70)
@@ -176,6 +220,32 @@ def run_grasp_point(env, robot, arm_cfg, gripper_cfg, contact_sensors, cube, poi
     grasp_q = [math.radians(d) for d in point["grasp_q_deg"]]
     pregrasp_q = [math.radians(d) for d in point["pregrasp_q_deg"]]
     cube_xy = point["cube_xy"]
+
+    # Aim an elevated-3/4 camera (~0.8m) at THIS point's grip location, on the
+    # +X+Y side BEYOND the cube so the arm body (between base@origin and the
+    # +Y cube) does not occlude -- the framing lesson from
+    # ar4_isaacsim_standalone_pick.py's pin_pick/side_grasp shots.
+    cap_state = {"n": 0}
+    if cam is not None and writer is not None:
+        import omni.usd
+        stage = omni.usd.get_context().get_stage()
+        cam_target = [cube_xy[0], cube_xy[1], 0.10]
+        cam_eye = [cube_xy[0] + 0.50, cube_xy[1] + 0.45, 0.55]
+        _set_cam_lookat(stage, "/World/pedestal_grasp_cam", cam_eye, cam_target)
+        print(f"[video] camera for {point_label}: eye={cam_eye} target={cam_target}")
+
+    def _capture():
+        if cam is None or writer is None:
+            return
+        cap_state["n"] += 1
+        if cap_state["n"] % CAPTURE_EVERY != 0:
+            return
+        try:
+            rgba = cam.get_rgba()
+            if rgba is not None and rgba.size > 0:
+                writer.append_data(rgba[..., :3].astype("uint8"))
+        except Exception:
+            pass
 
     joint_values_commanded = {name: grasp_q[i] for i, name in enumerate(ARM_JOINT_NAMES)}
     fk_pred_pinch_w = fk_predicted_pinch_point_world(joint_values_commanded).tolist()
@@ -234,8 +304,9 @@ def run_grasp_point(env, robot, arm_cfg, gripper_cfg, contact_sensors, cube, poi
             robot.set_joint_position_target(target_t, joint_ids=arm_cfg.joint_ids)
             robot.set_joint_position_target(g_t, joint_ids=gripper_cfg.joint_ids)
             robot.write_data_to_sim()
-            env.sim.step(render=False)
+            env.sim.step(render=RENDER)
             robot.update(env.physics_dt)
+            _capture()
             j1, j2 = _track_forces(is_pre_close=False)
             if i % 20 == 0 or i == duration - 1:
                 cube_z = cube.data.root_pos_w[0, 2].item()
@@ -244,6 +315,7 @@ def run_grasp_point(env, robot, arm_cfg, gripper_cfg, contact_sensors, cube, poi
 
     def _settle_tracked(desired_q, gripper_expr, label):
         def on_step(outer, i):
+            _capture()
             j1, j2 = _track_forces(is_pre_close=True)
             step_counter["n"] += 1
             if step_counter["n"] % 30 == 0:
@@ -256,7 +328,7 @@ def run_grasp_point(env, robot, arm_cfg, gripper_cfg, contact_sensors, cube, poi
             tol_rad=math.radians(0.15), max_outer_iters=8, inner_settle_steps=150,
             integral_gain=1.0, integral_clamp=0.5,
             gripper_joint_ids=gripper_cfg.joint_ids, gripper_target=gripper_target,
-            on_step=on_step, label=label,
+            on_step=on_step, label=label, render=RENDER,
         )
         return result
 
@@ -336,10 +408,47 @@ def main() -> None:
     link6_body_ids, link6_names_found = robot.find_bodies(["link_6"])
     print(f"[INFO] link_6 body id: {link6_names_found} -> {link6_body_ids}")
 
+    # Select the validation points to run.
+    if args_cli.points.strip().lower() == "all":
+        selected = list(VALIDATION_POINTS.items())
+    else:
+        wanted = [p.strip() for p in args_cli.points.split(",") if p.strip()]
+        selected = [(k, VALIDATION_POINTS[k]) for k in wanted if k in VALIDATION_POINTS]
+        if not selected:
+            print(f"[WARN] --points={args_cli.points!r} matched nothing; falling back to all")
+            selected = list(VALIDATION_POINTS.items())
+
+    # Set up the camera (video mode only). One Camera prim, repositioned per
+    # point; one mp4 per point.
+    cam = None
+    if RENDER:
+        try:
+            os.makedirs(VIDEO_DIR, exist_ok=True)
+            from isaacsim.sensors.camera import Camera
+            cam = Camera(prim_path="/World/pedestal_grasp_cam", resolution=(960, 720))
+            cam.initialize()
+            # Warm up the RTX render/annotator pipeline before real capture.
+            for _ in range(10):
+                env.sim.step(render=True)
+            print(f"[video] camera initialized; writing mp4s to {VIDEO_DIR}")
+        except Exception as e:
+            print(f"[video] camera init FAILED (continuing numeric-only): {e}")
+            cam = None
+
     with torch.inference_mode():
         results = {}
-        for point_label, point in VALIDATION_POINTS.items():
-            results[point_label] = run_grasp_point(env, robot, arm_cfg, gripper_cfg, contact_sensors, cube, point_label, point)
+        for point_label, point in selected:
+            writer = None
+            if cam is not None:
+                import imageio
+                writer = imageio.get_writer(
+                    os.path.join(VIDEO_DIR, f"{point_label}.mp4"), fps=VIDEO_FPS, codec="libx264")
+            results[point_label] = run_grasp_point(
+                env, robot, arm_cfg, gripper_cfg, contact_sensors, cube, point_label, point,
+                cam=cam, writer=writer)
+            if writer is not None:
+                writer.close()
+                print(f"[video] wrote {os.path.join(VIDEO_DIR, f'{point_label}.mp4')}")
 
         print("\n" + "%" * 70)
         print("FINAL MULTI-POINT SUMMARY (pedestal grasp confirm)")

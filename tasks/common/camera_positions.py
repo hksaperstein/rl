@@ -148,6 +148,16 @@ CAMERA_POSITIONS: dict[str, dict[str, Any]] = {
         'recorded_date': '2026-07-23',
         'verified_subject': "AR4 gripper + wrist/forearm context during OPEN->CLOSE->OPEN cycle (logs/videos/ar4_gripper_jaw_open_close_cycle_fixed_zoomedout.mp4) — confirmed via extracted non-black frames, user-reviewed and judged reasonable framing (though the user separately described its viewing DIRECTION as 'oriented from the elbow down to the wrist,' which prompted the reversed-view revision — see this module's own docstring / the skill's reference.md for why that revision's exact eye/target are NOT seeded here as a fixed entry: they are computed dynamically at runtime from a live elbow/gripper measurement each run, not a persisted constant). Source: scripts/_record_jaw_fix_open_close_cycle.py's own commented-out 'superseded by REVERSED-VIEW REVISION' block, committed at 63cd0cc (2026-07-23).",
     },
+    'ar4_gripper_front_view': {
+        'eye': (0.0, 0.56409, 0.53478),
+        'target': (0.0, 0.36409, 0.47478),
+        'focal_length': 60.0,
+        'clipping_range': (0.02, 3.0),
+        'description': "Genuine FRONT view of the AR4 gripper jaws: eye on the +Y open-workspace side of the gripper (0.20m in front of the jaw midpoint), at the jaws' own height plus a 0.06m lift, looking back along -Y at the live-measured jaw midpoint. The jaws slide open/closed along world-X, so from this -Y sight-line the open/close GAP is seen at full lateral width with the two jaws left/right and nothing occluding them — the head-on front view the user asked for after rejecting every prior along-the-forearm (world-Y axis) view as 'the wrong view'. Eye sits in open space beyond the fingertips so it cannot land inside geometry (no black frames — contrast the base-side level eye that rendered solid black). Derived analytically (vendor-URDF FK, tasks/ar4/fk_verification.py) + confirmed against the live jaw body_pos_w; recorder: scripts/_record_gripper_front_view_open_close.py (computes eye/target from the live jaw midpoint at runtime).",
+        'recorded_by': 'derived',
+        'recorded_date': '2026-08-04',
+        'verified_subject': "AR4 gripper OPEN->CLOSE->OPEN cycle (logs/videos/ar4_gripper_open_close_front_view.mp4), rendered on a GCP L4 via the container+GCS-cache path. Verified by extracting frames at t=0.3/2.8/4.5/5.8/7.0/8.8s: all non-black and well-lit (mean L~178), the gripper framed front-on and legibly sized, and the two jaws clearly separated left/right in the OPEN frames (serrated inner faces + visible gap) vs. met at a central seam in the CLOSED frame — gap widens/narrows symmetrically. Physics logs confirm 28.0mm (open) -> 0.0mm (closed) -> 28.0mm (reopen).",
+    },
 }
 # === END GENERATED REGISTRY ===
 

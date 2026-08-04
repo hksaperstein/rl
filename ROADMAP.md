@@ -915,6 +915,25 @@ See `BACKLOG.md` for further-out candidates not yet on this list.
 
 ## Recently landed
 
+- **Top-down approach video captured (top-down JAM, as expected)** (2026-08-04,
+  ar4-topdown-approach-video task). Per direct user request, captured a clear,
+  well-framed video of the AR4 approaching a cube on the pedestal FROM THE TOP,
+  using the proven standalone-pick camera path (raw SimulationApp +
+  `isaacsim.sensors.camera`, NOT the pedestal_grasp_confirm.py AppLauncher path
+  that failed to init a camera). New `--topdown_video` mode on
+  `scripts/ar4_isaacsim_standalone_pick.py` (enlarged 20mm bright-red cube, key
+  light, cameras aimed at the grip point). The run confirms the known top-down
+  jam numerically: jaws stay at 27.96mm separation (never close onto the cube —
+  the gripper body/jaws hit the cube top ~9mm early), cube gain 4.2mm, no lift
+  (`PICK NOT CONFIRMED`). Deliverable at `logs/videos/ar4_topdown_approach/`
+  (`topdown_wide.mp4` = the clear hero shot: arm+gripper+cube+pedestal all
+  front-lit and visible, descent→jam→retreat legible; `topdown_closeup.mp4` = a
+  tighter, backlit view of the jam). Camera finding recorded in the script:
+  moving the closeup eye IN to ~0.8m along the wide's direction rendered an empty
+  horizon — a longer focal length at the proven eye is the safe path to a
+  brighter closeup, not a closer eye. Cloud payload
+  `scripts/_cloud_ar4_topdown_video.sh` runs autonomously (GCS sync + self-halt)
+  so the video survives a dispatching-Pi-session death.
 - **Native Isaac Sim AR4 pick — trajectory execution WORKS, native
   grasp-assist BLOCKED in `ManagerBasedRLEnv`** (2026-07-29,
   ar4-isaacsim-curobo-pick task). Replicated the MoveIt/Gazebo recipe

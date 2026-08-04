@@ -87,6 +87,19 @@ parser.add_argument("--mechanism", choices=["surface_gripper", "fixed_joint", "f
                          "kind -- per direct user directive (2026-07-30). surface_gripper/fixed_joint "
                          "are retained only as historical diagnostics, NOT to be used for the deliverable.")
 parser.add_argument("--no_video", action="store_true")
+parser.add_argument("--topdown_video", action="store_true",
+                    help="TOP-DOWN APPROACH VIDEO mode (2026-08-04, per direct user request). Runs the "
+                         "DEFAULT near-vertical top-down grasp of a cube on the pedestal -- which is PROVEN "
+                         "to JAM (the gripper body/palm hits the cube top ~9mm before the shallow jaws can "
+                         "straddle a 15mm cube from directly above; kb 2026-07-31 UPDATEs) -- purely to "
+                         "CAPTURE a clear, well-framed video of that top-down descent + jam (NOT a "
+                         "successful pick; a successful top-down pick is geometrically infeasible for a "
+                         "surface-supported cube). Enlarges + brightens the cube (a flush dark-red 15mm cube "
+                         "is too small/hidden), aims the two cameras' proven elevated-3/4 geometry (the "
+                         "extracted-frame-verified side-float success framing, retargeted to the top-down "
+                         "grip point) DEAD AT the grip point rather than a nonexistent lift arc, and adds a "
+                         "key light so the dark gripper isn't a black blob. Recommended with --no_servo so "
+                         "the descent reads as a clean straight top-down approach (no Jacobian-probe jitter).")
 parser.add_argument("--max_grip_distance", type=float, default=0.10)
 parser.add_argument("--cpu", action="store_true", help="run PhysX on CPU (avoids first-time GPU-pipeline init stall)")
 parser.add_argument("--stage", choices=["ground", "scene", "robot_noxform", "full"], default="full",
@@ -833,8 +846,8 @@ def main():
     # gripper is dark, so a small low-lit scene reads as a black blob without it)
     from pxr import UsdLux
     light = UsdLux.DomeLight.Define(stage, Sdf.Path("/World/DomeLight"))
-    light.CreateIntensityAttr(3000.0 if (SIDE_GRASP or PIN_PICK) else 2000.0)
-    if PIN_PICK:
+    light.CreateIntensityAttr(3000.0 if (SIDE_GRASP or PIN_PICK or args_cli.topdown_video) else 2000.0)
+    if PIN_PICK or args_cli.topdown_video:
         # add a bright distal key light angled down onto the grasp point so the
         # dark gripper + object are lit from a 3/4 angle, not a flat dome wash --
         # avoids the "black blob against a dark background" the user complained of.
@@ -966,6 +979,26 @@ def main():
             )
             log("[SIDE_FLOAT] bright-red box 24(X)x15(Y,gripped)x26(Z)mm, center z=0.09 "
                 "(protrudes beyond the jaws for video legibility)")
+        elif args_cli.topdown_video:
+            # TOP-DOWN VIDEO: an ENLARGED, BRIGHT-red cube resting on the pedestal.
+            # A flush dark-red 15mm cube reads as a tiny speck / hides inside the dark
+            # jaws in extracted frames (the exact legibility failure the side-float run
+            # fixed with a bigger brighter box). 20mm bright red on the big brown
+            # pedestal is clearly visible from the elevated-3/4 camera while STILL
+            # jamming the descending gripper body (body z_min ~0.0548 < cube top
+            # ~0.0687) -- the top-down jam is unchanged, only its legibility improves.
+            _td_size = 0.020
+            _td_z = PEDESTAL_HEIGHT + _td_size / 2.0
+            cube = DynamicCuboid(
+                prim_path=CUBE_PATH,
+                position=np.array([CUBE_XY[0] + _obs_dx, CUBE_XY[1], _td_z]),
+                scale=np.array([_td_size, _td_size, _td_size]),
+                color=np.array([0.95, 0.05, 0.05]),
+                mass=0.012,
+            )
+            log(f"[TOPDOWN_VIDEO] enlarged bright-red cube {_td_size*1000:.0f}mm on pedestal; "
+                f"rest_z={_td_z:.4f} top_z={_td_z + _td_size/2.0:.4f} "
+                f"(gripper body z_min ~0.0548 -> jams above the cube, no straddle -- expected)")
         else:
             # cube (dynamic, 15mm)
             cube = DynamicCuboid(
@@ -1430,6 +1463,22 @@ def main():
         CAM_A_EYE = [0.30, 0.62, 0.34]    # +X +Y elevated 3/4, ~0.55m closeup on the grip
         CAM_B_EYE = [-0.55, 0.90, 0.58]   # -X +Y elevated 3/4, ~0.90m wide context
         CAM_TGT = [-0.1224, 0.3724, 0.075]  # aim at the grip point (a touch up to keep early lift in frame)
+    elif args_cli.topdown_video:
+        # TOP-DOWN APPROACH VIDEO (2026-08-04). The generic default framing below
+        # aims at z=0.20 (a mid-LIFT arc) and sits ~1.6m out -- both wrong here: the
+        # top-down grasp JAMS, so there is NO lift; the whole action stays down at the
+        # pedestal (grip point z~0.06, gripper descending onto it). Reuse the ONLY
+        # extracted-frame-VERIFIED elevated-3/4 geometry this project has for this
+        # gripper (the side-float SUCCESS cameras: +X+Y elevated 3/4, closeup ~0.99m /
+        # wide ~1.37m, which framed the dark gripper large + legible), RETARGETED to
+        # the top-down grip point (-0.122, 0.372, ~0.075). Both eyes on the +X+Y side
+        # so the AR4 base (at the origin, between base and the +Y cube) does not sit on
+        # the sight-line (a pure-frontal +X eye renders empty horizon -- proven). Aim a
+        # touch ABOVE the cube center (0.075 vs 0.06) to keep the descending gripper
+        # body in frame as it comes down onto the cube and jams.
+        CAM_TGT = [-0.122, 0.372, 0.075]
+        CAM_A_EYE = [0.748, 0.712, 0.385]   # +X+Y elevated 3/4 ~0.99m closeup (proven geometry, retargeted)
+        CAM_B_EYE = [1.018, 0.972, 0.605]   # +X+Y elevated 3/4 ~1.37m wide context (proven geometry, retargeted)
     else:
         CAM_A_EYE = [0.9, 1.0, 0.85]      # +X +Y high 3/4
         CAM_B_EYE = [-1.1, 1.0, 0.85]     # -X +Y high 3/4

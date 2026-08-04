@@ -1476,9 +1476,18 @@ def main():
         # the sight-line (a pure-frontal +X eye renders empty horizon -- proven). Aim a
         # touch ABOVE the cube center (0.075 vs 0.06) to keep the descending gripper
         # body in frame as it comes down onto the cube and jams.
+        # RUN-1 (2026-08-04) extracted-frame result: the WIDE eye below framed the
+        # scene beautifully -- cyan arm, WHITE-lit gripper, RED cube, cream pedestal
+        # all clearly visible, cube on the pedestal top NOT occluded. But the RUN-1
+        # closeup eye ([0.748,0.712,0.385]) sat at a LOWER elevation angle, which (a)
+        # silhouetted the gripper dark against the bright dome and (b) let the
+        # pedestal's near TOP EDGE occlude the small cube. Fix: put the closeup on the
+        # SAME viewing DIRECTION as the proven wide eye (same higher elevation ->
+        # front-lit gripper + cube visible over the edge), just pulled CLOSER (~0.8m)
+        # so the gripper+cube+pedestal-top fill the frame. Wide eye unchanged (proven).
         CAM_TGT = [-0.122, 0.372, 0.075]
-        CAM_A_EYE = [0.748, 0.712, 0.385]   # +X+Y elevated 3/4 ~0.99m closeup (proven geometry, retargeted)
-        CAM_B_EYE = [1.018, 0.972, 0.605]   # +X+Y elevated 3/4 ~1.37m wide context (proven geometry, retargeted)
+        CAM_A_EYE = [0.533, 0.717, 0.379]   # closeup: wide's proven DIRECTION, pulled to ~0.8m (front-lit, cube visible)
+        CAM_B_EYE = [1.018, 0.972, 0.605]   # +X+Y elevated 3/4 ~1.37m wide context (RUN-1 extracted-frame VERIFIED)
     else:
         CAM_A_EYE = [0.9, 1.0, 0.85]      # +X +Y high 3/4
         CAM_B_EYE = [-1.1, 1.0, 0.85]     # -X +Y high 3/4
